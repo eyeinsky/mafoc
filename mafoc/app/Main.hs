@@ -15,16 +15,19 @@ import Mafoc.Maps.MintBurn qualified as MintBurn
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
-main = do
+main = parseAndPrintCli >>= \case
+  Speed what -> case what of
+    Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
+    Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
+    Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
+  TxCount socketPath dbPath nodeConfig cpFromCli maybeEnd networkId -> Maps.indexer socketPath dbPath nodeConfig cpFromCli maybeEnd networkId
+  MintBurn socketPath networkId dbPath start end kOrNodeConfig -> MintBurn.indexer socketPath networkId dbPath start end kOrNodeConfig
+
+parseAndPrintCli :: IO Command
+parseAndPrintCli = do
   cmd <- Opt.execParser cmdParserInfo
   print cmd
-  case cmd of
-    Speed what -> case what of
-      Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
-      Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
-      Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
-    TxCount socketPath dbPath nodeConfig cpFromCli maybeEnd networkId -> Maps.indexer socketPath dbPath nodeConfig cpFromCli maybeEnd networkId
-    MintBurn socketPath networkId dbPath start end kOrNodeConfig -> MintBurn.indexer socketPath networkId dbPath start end kOrNodeConfig
+  return cmd
 
 -- * Arguments
 

@@ -23,7 +23,7 @@ commonUntilSlot :: O.Parser C.SlotNo
 commonUntilSlot = parseSlotNo 'u' "until-slot" "Slot number until"
 
 commonMaybeUntilSlot :: O.Parser (Maybe C.SlotNo)
-commonMaybeUntilSlot = Just <$> parseSlotNo 'u' "until-slot" "Slot number until" O.<|> pure Nothing
+commonMaybeUntilSlot = Just <$> commonUntilSlot <|> pure Nothing
 
 commonMaybeChainPointStart :: O.Parser (Maybe C.ChainPoint)
 commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
@@ -34,7 +34,7 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
       <*> O.option hashReader (opt 'b' "block-hash" "Hash of block header" <> O.metavar "BLOCK-HASH")
 
     hashReader :: O.ReadM (C.Hash C.BlockHeader)
-    hashReader = O.maybeReader maybeParseHashBlockHeader O.<|> O.readerError "Malformed block hash"
+    hashReader = O.maybeReader maybeParseHashBlockHeader <|> O.readerError "Malformed block hash"
 
     maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
     maybeParseHashBlockHeader =
