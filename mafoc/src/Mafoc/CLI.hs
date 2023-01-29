@@ -71,5 +71,8 @@ simpleCmd str a = O.command str $ O.info (pure a) mempty
 opt :: Char -> String -> String -> O.Mod O.OptionFields a
 opt short long help = O.long long <> O.short short <> O.help help
 
+longOpt :: String -> String -> O.Mod O.OptionFields a
+longOpt long help = O.long long <> O.help help
+
 parseSlotNo :: Char -> String -> String -> O.Parser C.SlotNo
 parseSlotNo short long help = O.option (C.SlotNo <$> O.auto) (opt short long help)

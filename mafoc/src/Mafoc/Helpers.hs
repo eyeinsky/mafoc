@@ -4,6 +4,7 @@
 module Mafoc.Helpers where
 
 import Control.Monad.Trans.Class (MonadTrans, lift)
+import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
@@ -40,6 +41,21 @@ instance Ord C.ChainTip where
 -- | Create a ChainPoint from BlockInMode
 blockChainPoint :: C.BlockInMode mode -> C.ChainPoint
 blockChainPoint (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = C.ChainPoint slotNo hash
+
+-- * Sqlite
+
+sqliteCreateBookmarsks :: SQL.Connection -> IO ()
+sqliteCreateBookmarsks c = do
+  SQL.execute_ c "CREATE TABLE IF NOT EXISTS bookmarks (indexer TEXT NOT NULL, slot_no INT NOT NULL, block_header_hash BLOB NOT NULL)"
+
+-- | Get bookmark (the place where we left off) for an indexer with @name@
+getIndexerBookmarkSqlite :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
+getIndexerBookmarkSqlite c name = do
+  list <- SQL.query c "SELECT indexer, slot_no, block_header_hash FROM bookmarks WHERE indexer = ?" (SQL.Only name)
+  case list of
+    [(slotNo, blockHeaderHash)] -> return $ Just $ C.ChainPoint slotNo blockHeaderHash
+    []                          -> return Nothing
+    _                           -> error "getIndexerBookmark: this should never happen!!"
 
 -- * Streaming
 

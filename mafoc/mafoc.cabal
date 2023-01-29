@@ -48,7 +48,8 @@ library
   exposed-modules:
     Mafoc.CLI
     Mafoc.Helpers
-    Mafoc.Maps.BlockTxCount
+    Mafoc.Indexer.Class
+    Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
@@ -98,7 +99,6 @@ executable mafoc
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies
