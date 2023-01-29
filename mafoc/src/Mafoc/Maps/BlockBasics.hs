@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -21,7 +22,7 @@ import Cardano.Streaming.Helpers qualified as CS
 import Cardano.Streaming qualified as CS
 import Mafoc.Helpers (fromChainSyncEvent, getIndexerBookmarkSqlite, getSecurityParam, sqliteCreateBookmarsks)
 import Mafoc.Indexer.Class (Indexer (Runtime, initialize, run))
-import Mafoc.RollbackRingBuffer (rollbackRingBuffer)
+import Mafoc.RollbackRingBuffer (Event (RollBackward), rollbackRingBuffer)
 
 -- * Block transaction count indexer
 
@@ -82,6 +83,7 @@ streamer
 streamer sqlCon lnCon startingPoint k chunkSize = do
   CS.blocks lnCon startingPoint
     & fromChainSyncEvent
+    & skipFirstGenesis startingPoint
     & rollbackRingBuffer k
     & S.chunksOf chunkSize
     & S.mapped (\chunk -> do
@@ -96,6 +98,19 @@ streamer sqlCon lnCon startingPoint k chunkSize = do
 
     sqliteInsert :: [Row] -> IO ()
     sqliteInsert rows = SQL.executeMany sqlCon "INSERT INTO block_basics (slot_no, block_header_hash, tx_count) VALUES (?, ?, ?)" rows
+
+skipFirstGenesis
+  :: Monad m
+  => C.ChainPoint
+  -> S.Stream (S.Of (Event a (C.ChainPoint, b))) m r
+  -> S.Stream (S.Of (Event a (C.ChainPoint, b))) m r
+skipFirstGenesis cp source = case cp of
+  C.ChainPointAtGenesis -> S.lift (S.next source) >>= \case
+    Left r -> pure r
+    Right (event, source') -> case event of
+      RollBackward (C.ChainPointAtGenesis, _) -> source'
+      e                                       -> S.yield e >> source'
+  _ -> source
 
 sqliteInit :: SQL.Connection -> IO ()
 sqliteInit sqlCon = SQL.execute_ sqlCon
