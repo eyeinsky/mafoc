@@ -4,7 +4,6 @@
 
 module Mafoc.Maps.BlockBasics where
 
-import Cardano.Api qualified as C
 import Data.Coerce (coerce)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
@@ -13,10 +12,11 @@ import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Numeric.Natural (Natural)
 import Options.Applicative qualified as Opt
-
-import Cardano.Streaming.Helpers qualified as CS
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
+
+import Cardano.Api qualified as C
+import Cardano.Streaming.Helpers qualified as CS
 
 import Cardano.Streaming qualified as CS
 import Mafoc.Helpers (fromChainSyncEvent, getIndexerBookmarkSqlite, getSecurityParam, sqliteCreateBookmarsks)

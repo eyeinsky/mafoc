@@ -7,6 +7,7 @@ module RollbackRingBuffer where
 import Control.Exception qualified as IO
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
+import Data.String (fromString)
 import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
@@ -66,14 +67,14 @@ rollbackRingBufferComprehensiveTest = H.property $ do
         S.yield $ RollBackward $ fromEnum rollbackPoint
 
   liftIO (IO.try $ S.toList_ $ intRollbackRingBuffer source) >>= \case
-    Left RollbackLocationNotFound -> if
+    Left (RollbackLocationNotFound (p :: Int)) -> if
       | rollbackPoint >= nEvents -> do
-          H.label "Rollback point not in generated events"
+          H.label $ "Rollback point '" <> fromString (show p) <> "' not in generated events"
           H.success
       | rollbackPoint < nEvents - bufferSize -> do
-          H.label "Rollback point not in buffer anymore"
+          H.label $ "Rollback point '" <> fromString (show p) <> "' not in buffer anymore"
           H.success
-      | otherwise -> fail "Rollback was not found, but none of the valid conditions for it matched !!"
+      | otherwise -> fail $ "Rollback point '" <> fromString (show p) <> "' was not found, but none of the valid conditions for it matched !!"
 
     Right overflow -> if nEvents <= bufferSize
       then do

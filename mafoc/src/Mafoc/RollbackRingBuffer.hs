@@ -6,6 +6,7 @@ module Mafoc.RollbackRingBuffer where
 import Control.Exception qualified as IO
 import Control.Monad.Primitive (PrimState)
 import Control.Monad.Trans.Class (lift)
+import Data.Typeable (Typeable)
 import Data.Vector qualified as V
 import Data.Vector.Generic qualified as VG
 import Data.Vector.Generic.Mutable qualified as VGM
@@ -17,12 +18,13 @@ data Event a p
   = RollForward a p
   | RollBackward p
 
-data RollbackException
-  = RollbackLocationNotFound
-  deriving Show
-instance IO.Exception RollbackException
+data RollbackException e
+  = RollbackLocationNotFound e
 
-rollbackRingBuffer :: (Ord p) => Natural -> S.Stream (S.Of (Event a p)) IO r -> S.Stream (S.Of a) IO r
+instance (Show e, Typeable e) => IO.Exception (RollbackException e)
+deriving instance Show e => Show (RollbackException e)
+
+rollbackRingBuffer :: (Ord p, Show p, Typeable p) => Natural -> S.Stream (S.Of (Event a p)) IO r -> S.Stream (S.Of a) IO r
 rollbackRingBuffer bufferSizeNat eventStream = let
   bufferSize = fromEnum bufferSizeNat :: Int
   in do
@@ -32,14 +34,14 @@ rollbackRingBuffer bufferSizeNat eventStream = let
     else let loop source = lift (S.next source) >>= \case
                Left r -> pure r
                Right (event, source') -> case event of
-                 RollBackward _  -> lift $ IO.throwIO RollbackLocationNotFound
+                 RollBackward cp -> lift $ IO.throwIO $ RollbackLocationNotFound cp
                  RollForward a _ -> S.yield a >> loop source'
       in loop eventStream
 
 -- | Fill phase, don't yield anything. Consume ChainSyncEvents and
 -- roll back to an earlier location in the vector in case of rollback.
 fill
-  :: Eq p
+  :: (Eq p, Show p, Typeable p)
   => Int -> Int
   -> S.Stream (S.Of (Event a p)) IO r
   -> Int
@@ -60,7 +62,7 @@ fill i j source bufferSize vector = lift (S.next source) >>= \case
 
 -- | Fill & yield phase. Buffer is full in the beginning, but will
 -- need to be refilled when a rollback occurs.
-fillYield :: Eq p => Int -> S.Stream (S.Of (Event a p)) IO r -> Int -> VG.Mutable V.Vector (PrimState IO) (a, p) -> S.Stream (S.Of a) IO r
+fillYield :: (Eq p, Show p, Typeable p) => Int -> S.Stream (S.Of (Event a p)) IO r -> Int -> VG.Mutable V.Vector (PrimState IO) (a, p) -> S.Stream (S.Of a) IO r
 fillYield i source bufferSize vector = lift (S.next source) >>= \case
   Left r -> pure r
   Right (event, source') -> case event of
@@ -71,7 +73,7 @@ fillYield i source bufferSize vector = lift (S.next source) >>= \case
       fillYield i' source' bufferSize vector
     RollBackward p -> rewind p i bufferSize source' bufferSize vector
 
-rewind :: Eq p => p -> Int -> Int -> S.Stream (S.Of (Event a p)) IO r -> Int -> VG.Mutable V.Vector (PrimState IO) (a, p) -> S.Stream (S.Of a) IO r
+rewind :: (Eq p, Show p, Typeable p) => p -> Int -> Int -> S.Stream (S.Of (Event a p)) IO r -> Int -> VG.Mutable V.Vector (PrimState IO) (a, p) -> S.Stream (S.Of a) IO r
 rewind p i j source' bufferSize vector = do
   frozen :: V.Vector (a, b) <- lift $ VG.unsafeFreeze vector
   let maybeFound = findRollbackIndex p i j frozen bufferSize
@@ -79,7 +81,7 @@ rewind p i j source' bufferSize vector = do
     Just foundAtIndex -> let
       (i', j') = calculateRewind foundAtIndex bufferSize i j
       in fill i' j' source' bufferSize vector
-    _ -> lift $ IO.throwIO RollbackLocationNotFound
+    _ -> lift $ IO.throwIO $ RollbackLocationNotFound p
 
 -- | Find index for the rollback point.
 findRollbackIndex :: Eq p => p -> Int -> Int -> V.Vector (a, p) -> Int -> Maybe Int

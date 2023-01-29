@@ -65,9 +65,7 @@ library
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:
-    , cardano-api
-    , iohk-monitoring
+  build-depends:   cardano-api
 
   ------------------------
   -- Non-IOG dependencies
@@ -99,6 +97,7 @@ executable mafoc
   --------------------------
   -- Other IOG dependencies
   --------------------------
+  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies

@@ -3,24 +3,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import Control.Exception qualified as IO
 import Options.Applicative qualified as Opt
 
+import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Indexer.Class (Indexer (initialize, run))
 import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
+import Mafoc.RollbackRingBuffer (RollbackException)
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
-main = parseAndPrintCli >>= \case
+main = printRollbackException $ parseAndPrintCli >>= \case
   Speed what -> case what of
     Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
     Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
     Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
   BlockBasics configFromCli -> run =<< initialize configFromCli
   MintBurn configFromCli -> run =<< initialize configFromCli
+
+printRollbackException :: IO () -> IO ()
+printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
 
 parseAndPrintCli :: IO Command
 parseAndPrintCli = do
