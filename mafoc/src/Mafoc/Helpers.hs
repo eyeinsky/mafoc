@@ -42,6 +42,9 @@ instance Ord C.ChainTip where
 blockChainPoint :: C.BlockInMode mode -> C.ChainPoint
 blockChainPoint (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = C.ChainPoint slotNo hash
 
+blockSlotNo :: C.BlockInMode mode -> C.SlotNo
+blockSlotNo (C.BlockInMode (C.Block (C.BlockHeader slotNo _ _) _) _) = slotNo
+
 -- * Sqlite
 
 sqliteCreateBookmarsks :: SQL.Connection -> IO ()
