@@ -39,6 +39,7 @@ data BlockSource
       { rewindableIndexOptionsSocketPath :: String
       , rewindableIndexOptionsStart      :: Maybe C.ChainPoint
       , rewindableIndexOptionsEnd        :: Maybe C.SlotNo
+      , rewindableIndexNetworkId         :: C.NetworkId
       }
   deriving Show
 
@@ -80,8 +81,8 @@ instance RI.Rewindable NoopHandler where
   rewindStorage _ h = pure $ Just h
 type NoopIndexer = RI.State NoopHandler
 
-rewindableIndex :: FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> IO ()
-rewindableIndex socketPath cpFromCli maybeEnd = do
+rewindableIndex :: FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
+rewindableIndex socketPath cpFromCli maybeEnd networkId = do
   coordinator <- Marconi.initialCoordinator 1
   workerChannel <- atomically . dupTChan $ Marconi._channel coordinator
   indexer :: NoopIndexer <- RI.emptyState 10 NoopHandler
@@ -103,7 +104,7 @@ rewindableIndex socketPath cpFromCli maybeEnd = do
 
       void $ IO.withAsync (loop mIndexer) $ \a -> do
         IO.link a
-        CS.withChainSyncEventStream socketPath C.Mainnet [fromMaybe C.ChainPointAtGenesis cpFromCli]
+        CS.withChainSyncEventStream socketPath networkId [fromMaybe C.ChainPointAtGenesis cpFromCli]
           (Marconi.mkIndexerStream coordinator)
 
     _ -> putStrLn "Must specify final slot!"

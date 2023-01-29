@@ -4,6 +4,8 @@ import Cardano.Api qualified as C
 import Data.ByteString.Char8 qualified as C8
 import Data.Proxy (Proxy (Proxy))
 import Data.Word (Word32)
+import Numeric.Natural (Natural)
+import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 
 -- * Options
@@ -24,7 +26,7 @@ commonMaybeUntilSlot :: O.Parser (Maybe C.SlotNo)
 commonMaybeUntilSlot = Just <$> parseSlotNo 'u' "until-slot" "Slot number until" O.<|> pure Nothing
 
 commonMaybeChainPointStart :: O.Parser (Maybe C.ChainPoint)
-commonMaybeChainPointStart = (Just <$> cp) O.<|> pure Nothing
+commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
   where
     cp :: O.Parser C.ChainPoint
     cp = C.ChainPoint

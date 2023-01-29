@@ -20,8 +20,8 @@ main = do
     Speed what -> case what of
       Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
       Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
-      Speed.RewindableIndex socketPath start end -> Speed.rewindableIndex socketPath start end
-    TxCount socketPath dbPath nodeConfig cpFromCli maybeEnd -> Maps.indexer socketPath dbPath nodeConfig cpFromCli maybeEnd
+      Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
+    TxCount socketPath dbPath nodeConfig cpFromCli maybeEnd networkId -> Maps.indexer socketPath dbPath nodeConfig cpFromCli maybeEnd networkId
 
 -- * Arguments
 
@@ -33,6 +33,7 @@ data Command
       , txCountNodeConfigPath :: String
       , txCountStart          :: Maybe C.ChainPoint
       , txCountEnd            :: Maybe C.SlotNo
+      , txCountNetworkId      :: C.NetworkId
       }
   deriving Show
 
@@ -72,6 +73,7 @@ speedParserInfo = Opt.info parser help
           <$> Opt.commonSocketPath
           <*> Opt.commonMaybeChainPointStart
           <*> Opt.commonMaybeUntilSlot
+          <*> Opt.commonNetworkId
 
 txCountParserInfo :: Opt.ParserInfo Command
 txCountParserInfo = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
@@ -85,3 +87,4 @@ txCountParserInfo = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonNodeConfig
       <*> Opt.commonMaybeChainPointStart
       <*> Opt.commonMaybeUntilSlot
+      <*> Opt.commonNetworkId

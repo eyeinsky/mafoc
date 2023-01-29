@@ -64,8 +64,8 @@ lastCp sqlCon = do
     ((slotNo, hash,_,_) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
     _                        -> Nothing
 
-indexer :: FilePath -> String -> FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> IO ()
-indexer socketPath dbPath nodeConfig cpFromCli maybeEnd = do
+indexer :: FilePath -> String -> FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
+indexer socketPath dbPath nodeConfig cpFromCli maybeEnd networkId = do
   sqlCon <- SQL.open dbPath
   (env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
   let localNodeConnectInfo = CS.mkConnectInfo env socketPath
@@ -90,5 +90,3 @@ indexer socketPath dbPath nodeConfig cpFromCli maybeEnd = do
     in S.effects $ case maybeEnd of
       Just endSlotNo -> S.takeWhile ((<= endSlotNo) . CS.bimSlotNo) stream
       _              -> stream
-  where
-    networkId = C.Mainnet
