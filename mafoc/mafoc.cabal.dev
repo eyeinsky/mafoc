@@ -49,6 +49,7 @@ library
     Mafoc.CLI
     Mafoc.Helpers
     Mafoc.Maps.BlockTxCount
+    Mafoc.Maps.MintBurn
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
 
