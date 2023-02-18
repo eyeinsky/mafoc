@@ -1,12 +1,16 @@
 module Mafoc.CLI where
 
-import Cardano.Api qualified as C
 import Data.ByteString.Char8 qualified as C8
+import Data.List qualified as L
 import Data.Proxy (Proxy (Proxy))
 import Data.Word (Word32)
 import Numeric.Natural (Natural)
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
+import Text.Read qualified as Read
+
+import Cardano.Api qualified as C
+import Mafoc.Helpers (Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
 
 -- * Options
 
@@ -36,12 +40,6 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
     hashReader :: O.ReadM (C.Hash C.BlockHeader)
     hashReader = O.maybeReader maybeParseHashBlockHeader <|> O.readerError "Malformed block hash"
 
-    maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
-    maybeParseHashBlockHeader =
-      either (const Nothing) Just
-      . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
-      . C8.pack
-
 commonPipelineSize :: O.Parser Word32
 commonPipelineSize = O.option O.auto (opt 'p' "pipeline-size" "Size of piplined requests.")
 
@@ -62,6 +60,48 @@ commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parame
 
 commonSecurityParamEither :: O.Parser (Either Natural FilePath)
 commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNodeConfig
+
+commonInterval :: O.Parser Interval
+commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interval" "Chain interval to index")
+
+-- * Parse interval
+
+parseIntervalEither :: String -> Either String Interval
+parseIntervalEither str = Interval <$> parseFrom from <*> parseUpTo upTo
+  where (from, upTo) = L.span (/= '-') str
+
+parseFrom :: String -> Either String C.ChainPoint
+parseFrom str = case str of
+  "" -> Right C.ChainPointAtGenesis
+  "0" -> Right C.ChainPointAtGenesis
+  _ -> do
+    let (fromSlotNo, bhh) = L.span (/= ':') str
+    slotNo <- parseSlotNo_ fromSlotNo
+    blockHeaderHash <- case bhh of
+      ':' : str' -> maybe (leftError "Can't read block header hash" bhh) Right $ maybeParseHashBlockHeader str'
+      _          -> leftError "No block header hash" ""
+    return $ C.ChainPoint slotNo blockHeaderHash
+
+parseUpTo :: String -> Either String UpTo
+parseUpTo str = case str of
+  '-' : rest -> case rest of
+    "@" -> Right CurrentTip
+    ""  -> Right Infinity
+    _   -> SlotNo <$> parseSlotNo_ rest
+  "" -> Right Infinity
+  _ -> leftError "Can't read slot interval end" str
+
+parseSlotNo_ :: String -> Either String C.SlotNo
+parseSlotNo_ str = maybe (leftError "Can't read SlotNo" str) (Right . C.SlotNo) $ Read.readMaybe str
+
+leftError :: String -> String -> Either String a
+leftError label str = Left $ label <> ": '" <> str <> "'"
+
+maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
+maybeParseHashBlockHeader =
+  either (const Nothing) Just
+  . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
+  . C8.pack
 
 -- * Helpers
 

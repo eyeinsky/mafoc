@@ -14,6 +14,34 @@ import Cardano.Streaming qualified as CS
 import Mafoc.RollbackRingBuffer (Event (RollBackward, RollForward))
 import Marconi.ChainIndex.Indexers.MintBurn ()
 
+-- * Interval
+
+data UpTo
+  = SlotNo C.SlotNo
+  | Infinity
+  | CurrentTip
+  deriving (Show)
+
+data Interval = Interval
+  { from :: C.ChainPoint
+  , upTo :: UpTo
+  } deriving (Show)
+
+chainPointLaterThanFrom :: C.ChainPoint -> Interval -> Bool
+chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
+
+takeUpTo :: UpTo -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO () -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+takeUpTo upTo' source = case upTo' of
+  SlotNo slotNo -> S.takeWhile (\blk -> blockSlotNo blk < slotNo) source
+  Infinity -> source
+  CurrentTip -> S.lift (S.next source) >>= \case
+    Left r -> return r
+    Right (event, source') -> let
+      slotNo = blockSlotNo event
+      in do
+      S.yield event
+      S.takeWhile (\blk -> blockSlotNo blk < slotNo) source'
+
 -- * Additions to cardano-api
 
 getSecurityParam :: FilePath -> IO Natural
@@ -59,6 +87,16 @@ getIndexerBookmarkSqlite c name = do
     [(slotNo, blockHeaderHash)] -> return $ Just $ C.ChainPoint slotNo blockHeaderHash
     []                          -> return Nothing
     _                           -> error "getIndexerBookmark: this should never happen!!"
+
+
+findIntervalToBeIndexed :: Interval -> SQL.Connection -> String -> IO Interval
+findIntervalToBeIndexed cliInterval sqlCon name = do
+  maybe notFound found <$> getIndexerBookmarkSqlite sqlCon name
+  where
+    notFound = cliInterval
+    found bookmark = if chainPointLaterThanFrom bookmark cliInterval
+      then cliInterval { from = bookmark }
+      else cliInterval
 
 -- * Streaming
 
