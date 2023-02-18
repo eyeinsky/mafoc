@@ -45,6 +45,7 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.String (IsString (fromString))
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import Database.SQLite.Simple (NamedParam ((:=)))
@@ -174,11 +175,12 @@ instance ToJSON TxMintRow where
     , "redeemerData" .= redData
     ]
 
-sqliteInit :: SQL.Connection -> IO ()
-sqliteInit c = liftIO $ do
-  SQL.execute_ c
+sqliteInit :: SQL.Connection -> String -> IO ()
+sqliteInit c tableName = liftIO $ do
+  let tableName' = fromString tableName
+  SQL.execute_ c $
     " CREATE TABLE IF NOT EXISTS        \
-    \   minting_policy_events           \
+    \ " <> tableName' <> "              \
     \   ( slotNo          INT NOT NULL  \
     \   , blockHeaderHash INT NOT NULL  \
     \   , txId            BLOB NOT NULL \
@@ -187,16 +189,16 @@ sqliteInit c = liftIO $ do
     \   , quantity        INT NOT NULL  \
     \   , redeemerIx      INT NOT NULL  \
     \   , redeemerData    BLOB NOT NULL)"
-  SQL.execute_ c
+  SQL.execute_ c $
     " CREATE INDEX IF NOT EXISTS               \
     \    minting_policy_events__txId_policyId  \
-    \ ON minting_policy_events (txId, policyId)"
+    \ ON " <> tableName' <> " (txId, policyId)"
 
-sqliteInsert :: SQL.Connection -> [TxMintEvent] -> IO ()
-sqliteInsert c es = SQL.executeMany c template $ toRows =<< toList es
+sqliteInsert :: SQL.Connection -> String -> [TxMintEvent] -> IO ()
+sqliteInsert c tableName es = SQL.executeMany c template $ toRows =<< toList es
   where
     template =
-      "INSERT INTO minting_policy_events \
+      "INSERT INTO " <> fromString tableName <> " \
       \ ( slotNo, blockHeaderHash, txId  \
       \ , policyId, assetName, quantity  \
       \ , redeemerIx, redeemerData )     \
@@ -351,7 +353,7 @@ instance RI.HasPoint (RI.StorableEvent MintBurnHandle) C.ChainPoint where
 
 instance RI.Buffered MintBurnHandle where
   persistToStorage events h@(MintBurnHandle sqlCon _k) = do
-    sqliteInsert sqlCon (map coerce $ toList events)
+    sqliteInsert sqlCon defaultTableName (map coerce $ toList events)
     pure h
 
   getStoredEvents (MintBurnHandle sqlCon k) = do
@@ -376,13 +378,16 @@ instance RI.Rewindable MintBurnHandle where
     where
       doRewind = case cp of
         C.ChainPoint slotNo _ ->
-          SQL.execute  sqlCon "DELETE FROM minting_policy_events WHERE slotNo > ?" (SQL.Only slotNo)
+          SQL.execute  sqlCon ("DELETE FROM " <> fromString defaultTableName <> " WHERE slotNo > ?") (SQL.Only slotNo)
         C.ChainPointAtGenesis ->
-          SQL.execute_ sqlCon "DELETE FROM minting_policy_events"
+          SQL.execute_ sqlCon $ "DELETE FROM " <> fromString defaultTableName
+
+defaultTableName :: String
+defaultTableName = "minting_policy_events"
 
 open :: FilePath -> SecurityParam -> IO MintBurnIndexer
 open dbPath bufferSize = do
   c <- SQL.open dbPath
   SQL.execute_ c "PRAGMA journal_mode=WAL"
-  sqliteInit c
+  sqliteInit c defaultTableName
   RI.emptyState (fromEnum bufferSize) (MintBurnHandle c bufferSize)
