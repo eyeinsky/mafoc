@@ -10,7 +10,7 @@ import Options.Applicative qualified as O
 import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
-import Mafoc.Helpers (Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
+import Mafoc.Helpers (DbPathAndTableName (DbPathAndTableName), Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
 
 -- * Options
 
@@ -19,6 +19,17 @@ commonSocketPath = O.strOption (opt 's' "socket-path" "Path to node socket.")
 
 commonDbPath :: O.Parser FilePath
 commonDbPath = O.strOption (opt 'd' "db-path" "Path to sqlite database.")
+
+commonDbPathAndTableName :: O.Parser DbPathAndTableName
+commonDbPathAndTableName = O.option (O.eitherReader parse) (opt 'd' "db-path" "Path to sqlite database and optionally table name.")
+  where
+    parse :: String -> Either String DbPathAndTableName
+    parse str = let (dbPath, tableName) = L.span (/= ':') str
+      in do
+      dbPath' <- if L.null dbPath then Left "Can't parse empty database path" else Right dbPath
+      DbPathAndTableName dbPath' <$> case tableName of
+        ':' : rest@(_:_) -> Right $ Just rest
+        _                -> Right Nothing
 
 commonNodeConfig :: O.Parser FilePath
 commonNodeConfig = O.strOption (opt 'c' "node-config" "Path to node configuration.")

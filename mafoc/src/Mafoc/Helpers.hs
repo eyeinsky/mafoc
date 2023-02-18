@@ -4,6 +4,7 @@
 module Mafoc.Helpers where
 
 import Control.Monad.Trans.Class (MonadTrans, lift)
+import Data.Maybe (fromMaybe)
 import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
 import Streaming qualified as S
@@ -97,6 +98,14 @@ findIntervalToBeIndexed cliInterval sqlCon name = do
     found bookmark = if chainPointLaterThanFrom bookmark cliInterval
       then cliInterval { from = bookmark }
       else cliInterval
+
+-- ** Database path and table(s)
+
+data DbPathAndTableName = DbPathAndTableName FilePath (Maybe String)
+  deriving (Show)
+
+defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
+defaultTableName defaultName (DbPathAndTableName dbPath maybeName) = (dbPath, fromMaybe defaultName maybeName)
 
 -- * Streaming
 
