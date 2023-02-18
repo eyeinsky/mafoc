@@ -15,7 +15,6 @@ module Mafoc.Maps.MintBurn where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
-import Data.Maybe (fromMaybe)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Numeric.Natural (Natural)
@@ -27,14 +26,16 @@ import Cardano.Streaming qualified as C
 import Cardano.Streaming.Helpers qualified as CS
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
-import Mafoc.Helpers (fromChainSyncEvent, getIndexerBookmarkSqlite, getSecurityParam, loopM)
+import Mafoc.Helpers (Interval (Interval), findIntervalToBeIndexed, fromChainSyncEvent, getSecurityParam, loopM,
+                      takeUpTo)
 import Mafoc.Indexer.Class (Indexer (Runtime, initialize, run))
 import Mafoc.RollbackRingBuffer (rollbackRingBuffer)
 
-streamer :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint -> Natural -> S.Stream (S.Of Marconi.MintBurn.TxMintEvent) IO r
-streamer sqlCon lnCon chainPoint k = C.blocks lnCon chainPoint
+streamer :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> S.Stream (S.Of Marconi.MintBurn.TxMintEvent) IO ()
+streamer sqlCon lnCon (Interval from upTo) k = C.blocks lnCon from
   & fromChainSyncEvent
   & rollbackRingBuffer k
+  & takeUpTo upTo
   & S.mapMaybe Marconi.MintBurn.toUpdate
   & \source -> do
       liftIO (Marconi.MintBurn.sqliteInit sqlCon)
@@ -48,8 +49,7 @@ data MintBurn = MintBurn
   { dbPath                    :: FilePath
   , socketPath                :: String
   , networkId                 :: C.NetworkId
-  , startingPointOverride     :: Maybe C.ChainPoint
-  , maybeEnd                  :: Maybe C.SlotNo
+  , interval                  :: Interval
   , securityParamOrNodeConfig :: Either Natural FilePath
   } deriving (Show)
 
@@ -63,15 +63,14 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <$> Opt.commonDbPath
       <*> Opt.commonSocketPath
       <*> Opt.commonNetworkId
-      <*> Opt.commonMaybeChainPointStart
-      <*> Opt.commonMaybeUntilSlot
+      <*> Opt.commonInterval
       <*> Opt.commonSecurityParamEither
 
 instance Indexer MintBurn where
 
   data Runtime MintBurn = Runtime
     { sqlConnection       :: SQL.Connection
-    , startingPoint       :: C.ChainPoint
+    , interval_           :: Interval
     , localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
     , securityParam       :: Natural
     , cliConfig           :: MintBurn
@@ -80,12 +79,10 @@ instance Indexer MintBurn where
   initialize config = do
     c <- SQL.open $ dbPath config
     Marconi.MintBurn.sqliteInit c
-    startingPoint <- case startingPointOverride config of
-      Just cp -> return cp
-      _       -> return . fromMaybe C.ChainPointAtGenesis =<< getIndexerBookmarkSqlite c "mintburn"
+    interval' <- findIntervalToBeIndexed (interval config) c "mintburn"
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (Runtime c startingPoint localNodeCon k config)
+    return (Runtime c interval' localNodeCon k config)
 
-  run (Runtime{sqlConnection, localNodeConnection, startingPoint, securityParam}) =
-    S.effects $ streamer sqlConnection localNodeConnection startingPoint securityParam
+  run (Runtime{sqlConnection, localNodeConnection, interval_, securityParam}) =
+    S.effects $ streamer sqlConnection localNodeConnection interval_ securityParam

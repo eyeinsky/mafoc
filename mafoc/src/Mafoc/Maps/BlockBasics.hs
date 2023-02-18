@@ -20,8 +20,9 @@ import Cardano.Api qualified as C
 import Cardano.Streaming.Helpers qualified as CS
 
 import Cardano.Streaming qualified as CS
-import Mafoc.Helpers (blockSlotNo, fromChainSyncEvent, getIndexerBookmarkSqlite, getSecurityParam,
-                      sqliteCreateBookmarsks)
+import Mafoc.Helpers (Interval (Interval, from, upTo), UpTo (CurrentTip, Infinity, SlotNo), blockSlotNo,
+                      chainPointLaterThanFrom, findIntervalToBeIndexed, fromChainSyncEvent, getSecurityParam,
+                      sqliteCreateBookmarsks, takeUpTo)
 import Mafoc.Indexer.Class (Indexer (Runtime, initialize, run))
 import Mafoc.RollbackRingBuffer (Event (RollBackward), rollbackRingBuffer)
 
@@ -32,8 +33,7 @@ data BlockBasics = BlockBasics
   , socketPath                :: String
   , dbPath                    :: String
   , securityParamOrNodeConfig :: Either Natural FilePath
-  , startingPointOverride     :: Maybe C.ChainPoint
-  , untilSlot                 :: Maybe C.SlotNo
+  , interval                  :: Interval
   , networkId                 :: C.NetworkId
   } deriving (Show)
 
@@ -48,15 +48,13 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonSocketPath
       <*> Opt.commonDbPath
       <*> Opt.commonSecurityParamEither
-      <*> Opt.commonMaybeChainPointStart
-      <*> Opt.commonMaybeUntilSlot
+      <*> Opt.commonInterval
       <*> Opt.commonNetworkId
 
 instance Indexer BlockBasics where
   data Runtime BlockBasics = Runtime
     { sqlConnection       :: SQL.Connection
-    , startingPoint       :: C.ChainPoint
-    , maybeEndingPoint    :: Maybe C.SlotNo
+    , interval_           :: Interval
     , localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
     , securityParam       :: Natural
     , cliConfig           :: BlockBasics
@@ -66,28 +64,26 @@ instance Indexer BlockBasics where
     c <- SQL.open $ dbPath config
     sqliteInit c
     sqliteCreateBookmarsks c
-    startingPoint <- case startingPointOverride config of
-      Just cp -> return cp
-      _       -> return . fromMaybe C.ChainPointAtGenesis =<< getIndexerBookmarkSqlite c "blockbasics"
+    interval' <- findIntervalToBeIndexed (interval config) c "blockbasics"
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (Runtime c startingPoint (untilSlot config) localNodeCon k config)
+    return (Runtime c interval' localNodeCon k config)
 
-  run (Runtime{sqlConnection, localNodeConnection, startingPoint, maybeEndingPoint, securityParam, cliConfig}) =
-    S.effects $ streamer sqlConnection localNodeConnection startingPoint maybeEndingPoint securityParam (chunkSize cliConfig)
+  run (Runtime{sqlConnection, localNodeConnection, interval_, securityParam, cliConfig}) =
+    S.effects $ streamer sqlConnection localNodeConnection interval_ securityParam (chunkSize cliConfig)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 
 -- | Count transactions for every block.
 streamer
-  :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint -> Maybe C.SlotNo -> Natural -> Int
+  :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> Int
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-streamer sqlCon lnCon startingPoint maybeUntil k chunkSize = do
-  CS.blocks lnCon startingPoint
+streamer sqlCon lnCon (Interval from upTo) k chunkSize = do
+  CS.blocks lnCon from
     & fromChainSyncEvent
-    & skipFirstGenesis startingPoint
+    & skipFirstGenesis from
     & rollbackRingBuffer k
-    & maybe id (\slotNo -> S.takeWhile (\blk -> blockSlotNo blk < slotNo)) maybeUntil
+    & takeUpTo upTo
     & case chunkSize of
         1 -> S.chain (\e -> sqliteInsert [blockToRow e])
         _ -> \source -> source
