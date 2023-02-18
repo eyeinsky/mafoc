@@ -26,27 +26,27 @@ import Cardano.Streaming qualified as C
 import Cardano.Streaming.Helpers qualified as CS
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
-import Mafoc.Helpers (Interval (Interval), findIntervalToBeIndexed, fromChainSyncEvent, getSecurityParam, loopM,
-                      takeUpTo)
+import Mafoc.Helpers (DbPathAndTableName, Interval (Interval), defaultTableName, findIntervalToBeIndexed,
+                      fromChainSyncEvent, getSecurityParam, loopM, takeUpTo)
 import Mafoc.Indexer.Class (Indexer (Runtime, initialize, run))
 import Mafoc.RollbackRingBuffer (rollbackRingBuffer)
 
-streamer :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> S.Stream (S.Of Marconi.MintBurn.TxMintEvent) IO ()
-streamer sqlCon lnCon (Interval from upTo) k = C.blocks lnCon from
+streamer :: SQL.Connection -> String -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> S.Stream (S.Of Marconi.MintBurn.TxMintEvent) IO ()
+streamer sqlCon tableName lnCon (Interval from upTo) k = C.blocks lnCon from
   & fromChainSyncEvent
   & rollbackRingBuffer k
   & takeUpTo upTo
   & S.mapMaybe Marconi.MintBurn.toUpdate
   & \source -> do
-      liftIO (Marconi.MintBurn.sqliteInit sqlCon)
+      liftIO (Marconi.MintBurn.sqliteInit sqlCon tableName)
       loopM source $ \event -> do
-        liftIO $ Marconi.MintBurn.sqliteInsert sqlCon [event]
+        liftIO $ Marconi.MintBurn.sqliteInsert sqlCon tableName [event]
         S.yield event
 
 -- | Configuration data type which does double-duty as the tag for the
 -- indexer.
 data MintBurn = MintBurn
-  { dbPath                    :: FilePath
+  { dbPathAndTableName        :: DbPathAndTableName
   , socketPath                :: String
   , networkId                 :: C.NetworkId
   , interval                  :: Interval
@@ -60,7 +60,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser MintBurn
     cli = MintBurn
-      <$> Opt.commonDbPath
+      <$> Opt.commonDbPathAndTableName
       <*> Opt.commonSocketPath
       <*> Opt.commonNetworkId
       <*> Opt.commonInterval
@@ -70,6 +70,7 @@ instance Indexer MintBurn where
 
   data Runtime MintBurn = Runtime
     { sqlConnection       :: SQL.Connection
+    , tableName           :: String
     , interval_           :: Interval
     , localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
     , securityParam       :: Natural
@@ -77,12 +78,13 @@ instance Indexer MintBurn where
     }
 
   initialize config = do
-    c <- SQL.open $ dbPath config
-    Marconi.MintBurn.sqliteInit c
-    interval' <- findIntervalToBeIndexed (interval config) c "mintburn"
+    let (dbPath, tableName) = defaultTableName "mintburn" $ dbPathAndTableName config
+    c <- SQL.open dbPath
+    Marconi.MintBurn.sqliteInit c tableName
+    interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (Runtime c interval' localNodeCon k config)
+    return (Runtime c tableName interval' localNodeCon k config)
 
-  run (Runtime{sqlConnection, localNodeConnection, interval_, securityParam}) =
-    S.effects $ streamer sqlConnection localNodeConnection interval_ securityParam
+  run (Runtime{sqlConnection, tableName, localNodeConnection, interval_, securityParam}) =
+    S.effects $ streamer sqlConnection tableName localNodeConnection interval_ securityParam

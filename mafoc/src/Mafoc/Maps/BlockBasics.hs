@@ -7,7 +7,8 @@ module Mafoc.Maps.BlockBasics where
 
 import Data.Coerce (coerce)
 import Data.Function ((&))
-import Data.Maybe (fromMaybe)
+import Data.String (IsString (fromString))
+
 import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
@@ -20,9 +21,8 @@ import Cardano.Api qualified as C
 import Cardano.Streaming.Helpers qualified as CS
 
 import Cardano.Streaming qualified as CS
-import Mafoc.Helpers (Interval (Interval, from, upTo), UpTo (CurrentTip, Infinity, SlotNo), blockSlotNo,
-                      chainPointLaterThanFrom, findIntervalToBeIndexed, fromChainSyncEvent, getSecurityParam,
-                      sqliteCreateBookmarsks, takeUpTo)
+import Mafoc.Helpers (DbPathAndTableName, Interval (Interval), defaultTableName, findIntervalToBeIndexed,
+                      fromChainSyncEvent, getSecurityParam, sqliteCreateBookmarsks, takeUpTo)
 import Mafoc.Indexer.Class (Indexer (Runtime, initialize, run))
 import Mafoc.RollbackRingBuffer (Event (RollBackward), rollbackRingBuffer)
 
@@ -31,7 +31,7 @@ import Mafoc.RollbackRingBuffer (Event (RollBackward), rollbackRingBuffer)
 data BlockBasics = BlockBasics
   { chunkSize                 :: Int
   , socketPath                :: String
-  , dbPath                    :: String
+  , dbPathAndTableName        :: DbPathAndTableName
   , securityParamOrNodeConfig :: Either Natural FilePath
   , interval                  :: Interval
   , networkId                 :: C.NetworkId
@@ -46,7 +46,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
     cli = BlockBasics
       <$> Opt.option Opt.auto (Opt.longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> Opt.internal)
       <*> Opt.commonSocketPath
-      <*> Opt.commonDbPath
+      <*> Opt.commonDbPathAndTableName
       <*> Opt.commonSecurityParamEither
       <*> Opt.commonInterval
       <*> Opt.commonNetworkId
@@ -54,6 +54,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
 instance Indexer BlockBasics where
   data Runtime BlockBasics = Runtime
     { sqlConnection       :: SQL.Connection
+    , tableName           :: String
     , interval_           :: Interval
     , localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
     , securityParam       :: Natural
@@ -61,24 +62,25 @@ instance Indexer BlockBasics where
     }
 
   initialize config = do
-    c <- SQL.open $ dbPath config
-    sqliteInit c
+    let (dbPath, tableName) = defaultTableName "blockbasics" $ dbPathAndTableName config
+    c <- SQL.open dbPath
+    sqliteInit c tableName
     sqliteCreateBookmarsks c
-    interval' <- findIntervalToBeIndexed (interval config) c "blockbasics"
+    interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (Runtime c interval' localNodeCon k config)
+    return (Runtime c tableName interval' localNodeCon k config)
 
-  run (Runtime{sqlConnection, localNodeConnection, interval_, securityParam, cliConfig}) =
-    S.effects $ streamer sqlConnection localNodeConnection interval_ securityParam (chunkSize cliConfig)
+  run (Runtime{sqlConnection, tableName, localNodeConnection, interval_, securityParam, cliConfig}) =
+    S.effects $ streamer sqlConnection tableName localNodeConnection interval_ securityParam (chunkSize cliConfig)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 
 -- | Count transactions for every block.
 streamer
-  :: SQL.Connection -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> Int
+  :: SQL.Connection -> String -> C.LocalNodeConnectInfo C.CardanoMode -> Interval -> Natural -> Int
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-streamer sqlCon lnCon (Interval from upTo) k chunkSize = do
+streamer sqlCon tableName lnCon (Interval from upTo) k chunkSize = do
   CS.blocks lnCon from
     & fromChainSyncEvent
     & skipFirstGenesis from
@@ -99,7 +101,9 @@ streamer sqlCon lnCon (Interval from upTo) k chunkSize = do
     blockToRow (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (coerce slotNo, hash, length txs)
 
     sqliteInsert :: [Row] -> IO ()
-    sqliteInsert rows = SQL.executeMany sqlCon "INSERT INTO block_basics (slot_no, block_header_hash, tx_count) VALUES (?, ?, ?)" rows
+    sqliteInsert rows = SQL.executeMany sqlCon template rows
+      where
+        template = "INSERT INTO " <> fromString tableName <> " (slot_no, block_header_hash, tx_count) VALUES (?, ?, ?)"
 
 skipFirstGenesis
   :: Monad m
@@ -114,9 +118,9 @@ skipFirstGenesis cp source = case cp of
       e                                       -> S.yield e >> source'
   _ -> source
 
-sqliteInit :: SQL.Connection -> IO ()
-sqliteInit sqlCon = SQL.execute_ sqlCon
-  "CREATE TABLE IF NOT EXISTS block_basics (slot_no INT NOT NULL, block_header_hash BLOB NOT NULL, tx_count INT NOT NULL)"
+sqliteInit :: SQL.Connection -> String -> IO ()
+sqliteInit sqlCon tableName = SQL.execute_ sqlCon $
+  "CREATE TABLE IF NOT EXISTS " <> fromString tableName <> " (slot_no INT NOT NULL, block_header_hash BLOB NOT NULL, tx_count INT NOT NULL)"
 
 lastCp :: SQL.Connection -> IO (Maybe C.ChainPoint)
 lastCp sqlCon = do
