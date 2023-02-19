@@ -51,22 +51,20 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonSecurityParamEither
       <*> Opt.commonQuiet
 
-data Runtime_ = Runtime_
-  { sqlConnection :: SQL.Connection
-  , tableName     :: String
-  }
-
 instance Indexer MintBurn where
 
-  type Runtime MintBurn = Runtime_
+  data Runtime MintBurn = Runtime
+    { sqlConnection :: SQL.Connection
+    , tableName     :: String
+    }
 
   type Event MintBurn = Marconi.MintBurn.TxMintEvent
 
   data State MintBurn = EmptyState
 
-  toEvent _ a = maybe Nothing (\e -> Just (EmptyState,e)) $ Marconi.MintBurn.toUpdate a
+  toEvent a _ = maybe Nothing (\e -> Just (EmptyState,e)) $ Marconi.MintBurn.toUpdate a
 
-  persist Runtime_{sqlConnection, tableName} event = do
+  persist Runtime{sqlConnection, tableName} event = do
     Marconi.MintBurn.sqliteInsert sqlConnection tableName [event]
 
   initialize config = do
@@ -77,4 +75,4 @@ instance Indexer MintBurn where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime_ c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime c tableName)

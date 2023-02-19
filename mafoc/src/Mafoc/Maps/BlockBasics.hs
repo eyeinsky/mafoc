@@ -48,20 +48,20 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonNetworkId
       <*> Opt.commonQuiet
 
+instance Indexer BlockBasics where
 
-data Runtime_ = Runtime_
+  type Event BlockBasics = Row
+
+  data State BlockBasics = EmptyState
+
+  data Runtime BlockBasics = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
 
-instance Indexer BlockBasics where
-  type Runtime BlockBasics = Runtime_
-  type Event BlockBasics = Row
-  data State BlockBasics = EmptyState
+  toEvent a _ = Just (EmptyState, blockToRow a)
 
-  toEvent _ a = Just (EmptyState, blockToRow a)
-
-  persist Runtime_{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
+  persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
 
   initialize config = do
     let (dbPath, tableName) = defaultTableName "blockbasics" $ dbPathAndTableName config
@@ -71,7 +71,7 @@ instance Indexer BlockBasics where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime_ c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime c tableName)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 

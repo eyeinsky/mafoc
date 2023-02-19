@@ -160,22 +160,25 @@ class Indexer a where
   -- type Config a = r | r -> a
 
   -- | Runtime configuration.
-  type Runtime a = r | r -> a
+  data Runtime a
 
   -- | Event type.
   type Event a
 
-  -- | The Fold state, carried over from event to event. For map type
-  -- indexers the state is ().
+  -- | The fold state. For map type indexers where no fold state needs
+  -- to be maintained, the state is some form of empty (i.e defined to
+  -- a data type with no fields).
   data State a
 
-  toEvent :: State a -> C.BlockInMode C.CardanoMode -> Maybe (State a, Event a)
-
-  persist :: Runtime a -> Event a -> IO ()
+  -- | Fold a block into an event and produce a new state.
+  toEvent :: C.BlockInMode C.CardanoMode -> State a -> Maybe (State a, Event a)
 
   -- | Initialize an indexer and return its runtime configuration. E.g
   -- open the destination to where data is persisted, etc.
   initialize :: a -> IO (State a, BlockSourceConfig, Runtime a)
+
+  -- | Write event to persistent storage.
+  persist :: Runtime a -> Event a -> IO ()
 
 -- | Static configuration for block source
 data BlockSourceConfig = BlockSourceConfig
@@ -202,7 +205,7 @@ runIndexer cli = do
   (initialState, cc, runtimeConfig) <- initialize cli
   let
     f :: C.BlockInMode C.CardanoMode -> State a -> IO (State a, Maybe (Event a))
-    f blk s = return $ maybe (s, Nothing) (\(s', e') -> (s', Just e')) $ toEvent s blk
+    f blk s = return $ maybe (s, Nothing) (\(s', e') -> (s', Just e')) $ toEvent blk s
 
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
