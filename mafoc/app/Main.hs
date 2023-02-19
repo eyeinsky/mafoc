@@ -11,6 +11,7 @@ import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (runIndexer)
+import Mafoc.Folds.EpochStakepoolSize qualified as EpochStakepoolSize
 import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
 import Mafoc.Maps.NoOp qualified as NoOp
@@ -26,6 +27,7 @@ main = printRollbackException $ parseAndPrintCli >>= \case
   BlockBasics configFromCli -> runIndexer configFromCli
   MintBurn configFromCli -> runIndexer configFromCli
   NoOp configFromCli -> runIndexer configFromCli
+  EpochStakepoolSize configFromCli -> runIndexer configFromCli
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
@@ -43,6 +45,7 @@ data Command
   | BlockBasics BlockBasics.BlockBasics
   | MintBurn MintBurn.MintBurn
   | NoOp NoOp.NoOp
+  | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command

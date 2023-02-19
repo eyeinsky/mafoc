@@ -48,6 +48,7 @@ library
   exposed-modules:
     Mafoc.CLI
     Mafoc.Core
+    Mafoc.Folds.EpochStakepoolSize
     Mafoc.Indexer.Class
     Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn

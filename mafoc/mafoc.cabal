@@ -48,6 +48,7 @@ library
   exposed-modules:
     Mafoc.CLI
     Mafoc.Core
+    Mafoc.Folds.EpochStakepoolSize
     Mafoc.Indexer.Class
     Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn
@@ -69,6 +70,8 @@ library
   build-depends:
     , cardano-api
     , iohk-monitoring
+    , ouroboros-consensus
+    , ouroboros-consensus-cardano
 
   ------------------------
   -- Non-IOG dependencies
@@ -77,6 +80,7 @@ library
     , async
     , base                  >=4.9 && <5
     , bytestring
+    , containers
     , optparse-applicative
     , primitive
     , sqlite-simple
