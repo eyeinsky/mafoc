@@ -13,6 +13,7 @@ This just provides the CLI interface and a streaming runtime.
 
 module Mafoc.Maps.MintBurn where
 
+import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Numeric.Natural (Natural)
@@ -35,6 +36,7 @@ data MintBurn = MintBurn
   , interval                  :: Interval
   , securityParamOrNodeConfig :: Either Natural FilePath
   , logging                   :: Bool
+  , pipelineSize              :: Word32
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo MintBurn
@@ -50,6 +52,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonInterval
       <*> Opt.commonSecurityParamEither
       <*> Opt.commonQuiet
+      <*> Opt.commonPipelineSize
 
 instance Indexer MintBurn where
 
@@ -75,4 +78,4 @@ instance Indexer MintBurn where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config) (pipelineSize config), Runtime c tableName)

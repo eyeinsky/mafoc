@@ -9,6 +9,7 @@ import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as TS
+import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
 import Streaming qualified as S
@@ -156,7 +157,7 @@ streamFold f acc_ source_ = loop acc_ source_
 class Indexer a where
 
   -- | The a itself doubles as configuration and often also as the cli
-  -- config.
+  -- configuration.
   -- type Config a = r | r -> a
 
   -- | Runtime configuration.
@@ -186,10 +187,11 @@ data BlockSourceConfig = BlockSourceConfig
   , interval            :: Interval
   , securityParam       :: Natural
   , logging             :: Bool
+  , pipelineSize        :: Word32
   }
 
 blockSource :: BlockSourceConfig -> Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource cc trace = CS.blocks (localNodeConnection cc) from'
+blockSource cc trace = blocks' (localNodeConnection cc) from'
   & (if logging cc then Marconi.logging trace else id)
   & fromChainSyncEvent
   & takeUpTo upTo'
@@ -199,6 +201,15 @@ blockSource cc trace = CS.blocks (localNodeConnection cc) from'
   & RB.rollbackRingBuffer (securityParam cc)
   where
     Interval from' upTo' = interval cc
+    blocks'
+      :: C.LocalNodeConnectInfo C.CardanoMode
+      -> C.ChainPoint
+      -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+    blocks' = let
+      pipelineSize' = pipelineSize cc
+      in if pipelineSize' > 1
+      then CS.blocks
+      else CS.blocksPipelined pipelineSize'
 
 runIndexer :: forall a . Indexer a => a -> IO ()
 runIndexer cli = do

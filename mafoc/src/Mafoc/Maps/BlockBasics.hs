@@ -7,6 +7,7 @@ module Mafoc.Maps.BlockBasics where
 
 import Data.Coerce (coerce)
 import Data.String (IsString (fromString))
+import Data.Word (Word32)
 
 import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
@@ -31,6 +32,7 @@ data BlockBasics = BlockBasics
   , interval                  :: Interval
   , networkId                 :: C.NetworkId
   , logging                   :: Bool
+  , pipelineSize              :: Word32
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo BlockBasics
@@ -47,6 +49,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonInterval
       <*> Opt.commonNetworkId
       <*> Opt.commonQuiet
+      <*> Opt.commonPipelineSize
 
 instance Indexer BlockBasics where
 
@@ -71,7 +74,7 @@ instance Indexer BlockBasics where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config) (pipelineSize config), Runtime c tableName)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 
