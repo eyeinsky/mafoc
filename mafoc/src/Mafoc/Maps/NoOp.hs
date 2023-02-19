@@ -1,13 +1,11 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Mafoc.Maps.NoOp where
 
-import Database.SQLite.Simple qualified as SQL
 import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks,
-                   updateIntervalFromBookmarks)
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig
@@ -32,8 +30,6 @@ instance Indexer NoOp where
   initialize NoOp{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
-    sqlCon <- SQL.open dbPath
-    sqliteInitBookmarks sqlCon
-    chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+    (_sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime
     return (EmptyState, chainsyncRuntime', Runtime)
   persist _runtime _event = return ()

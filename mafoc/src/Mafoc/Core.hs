@@ -208,6 +208,19 @@ initializeLocalChainsync config = do
   k <- either pure getSecurityParam $ securityParamOrNodeConfig config
   return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
 
+-- | Initialize sqlite: create connection, run init (e.g create
+-- destination table), create bookmarks database if doesn't exist,
+-- update interval in runtime config by whether there is anywhere to
+-- resume from.
+initializeSqlite
+  :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
+initializeSqlite dbPath tableName sqliteInit chainsyncRuntime = do
+  sqlCon <- SQL.open dbPath
+  sqliteInit sqlCon tableName
+  sqliteInitBookmarks sqlCon
+  chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+  return (sqlCon, chainsyncRuntime')
+
 -- | Static configuration for block source
 data LocalChainsyncRuntime = LocalChainsyncRuntime
   { localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
