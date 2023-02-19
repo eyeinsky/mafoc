@@ -18,7 +18,8 @@ import Mafoc.CLI qualified as Opt
 import Options.Applicative qualified as Opt
 
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks)
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks,
+                   updateIntervalFromBookmarks)
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
 -- | Configuration data type which does double-duty as the tag for the
@@ -62,5 +63,5 @@ instance Indexer MintBurn where
     sqlCon <- SQL.open dbPath
     Marconi.MintBurn.sqliteInit sqlCon tableName
     sqliteInitBookmarks sqlCon
-    -- interval' <- findIntervalToBeIndexed (interval config) c tableName
-    return (EmptyState, chainsyncRuntime, Runtime sqlCon tableName)
+    chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)

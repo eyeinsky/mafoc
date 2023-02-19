@@ -113,13 +113,18 @@ getIndexerBookmarkSqlite c name = do
 
 
 findIntervalToBeIndexed :: Interval -> SQL.Connection -> String -> IO Interval
-findIntervalToBeIndexed cliInterval sqlCon name = do
-  maybe notFound found <$> getIndexerBookmarkSqlite sqlCon name
+findIntervalToBeIndexed cliInterval sqlCon tableName = do
+  maybe notFound found <$> getIndexerBookmarkSqlite sqlCon tableName
   where
     notFound = cliInterval
     found bookmark = if chainPointLaterThanFrom bookmark cliInterval
       then cliInterval { from = bookmark }
       else cliInterval
+
+updateIntervalFromBookmarks :: LocalChainsyncRuntime -> String -> SQL.Connection -> IO LocalChainsyncRuntime
+updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon = do
+  interval' <- findIntervalToBeIndexed (interval chainsyncRuntime) sqlCon tableName
+  return $ chainsyncRuntime {interval = interval'}
 
 -- ** Database path and table(s)
 

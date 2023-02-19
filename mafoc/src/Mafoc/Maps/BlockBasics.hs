@@ -16,7 +16,8 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks)
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks,
+                   updateIntervalFromBookmarks)
 
 -- * Block transaction count indexer
 
@@ -58,7 +59,8 @@ instance Indexer BlockBasics where
     sqlCon <- SQL.open dbPath
     sqliteInit sqlCon tableName
     sqliteInitBookmarks sqlCon
-    return (EmptyState, chainsyncRuntime, Runtime sqlCon tableName)
+    chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 

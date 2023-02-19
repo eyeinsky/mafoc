@@ -6,7 +6,8 @@ import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks)
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks,
+                   updateIntervalFromBookmarks)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig
@@ -16,7 +17,7 @@ data NoOp = NoOp
 parseCli :: Opt.ParserInfo NoOp
 parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   <> Opt.progDesc "noop"
-  <> Opt.header "noop - Index nothing, just drain blocks over local chainsync protocol"
+  <> Opt.header "noop - drain blocks over local chainsync protocol"
   where
     cli :: Opt.Parser NoOp
     cli = NoOp
@@ -30,9 +31,9 @@ instance Indexer NoOp where
   toEvent _blk _state = Just (EmptyState, ())
   initialize NoOp{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
-    let (dbPath, _tableName) = defaultTableName "noop" dbPathAndTableName
+    let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
     sqlCon <- SQL.open dbPath
     sqliteInitBookmarks sqlCon
-    -- interval' <- findIntervalToBeIndexed (interval config) c tableName
-    return (EmptyState, chainsyncRuntime, Runtime)
+    chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+    return (EmptyState, chainsyncRuntime', Runtime)
   persist _runtime _event = return ()
