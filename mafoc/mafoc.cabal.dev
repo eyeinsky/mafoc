@@ -76,6 +76,7 @@ library
     , streaming
     , transformers
     , vector
+    , text
 
 -- executable mafoc
 --   import:         lang

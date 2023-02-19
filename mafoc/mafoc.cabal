@@ -65,7 +65,9 @@ library
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:   cardano-api
+  build-depends:
+    , cardano-api
+    , iohk-monitoring
 
   ------------------------
   -- Non-IOG dependencies
@@ -79,6 +81,7 @@ library
     , sqlite-simple
     , stm
     , streaming
+    , text
     , transformers
     , vector
 

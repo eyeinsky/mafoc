@@ -8,15 +8,20 @@ module Mafoc.Helpers where
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
+import Data.Text qualified as TS
 import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
+import Cardano.BM.Data.Trace (Trace)
+import Cardano.BM.Setup (withTrace)
+import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
+import Marconi.ChainIndex.Logging qualified as Marconi
 
 -- * Interval
 
@@ -177,10 +182,12 @@ data BlockSourceConfig = BlockSourceConfig
   { localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
   , interval            :: Interval
   , securityParam       :: Natural
+  , logging             :: Bool
   }
 
-blockSource :: BlockSourceConfig -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource cc = CS.blocks (localNodeConnection cc) from'
+blockSource :: BlockSourceConfig -> Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+blockSource cc trace = CS.blocks (localNodeConnection cc) from'
+  & (if logging cc then Marconi.logging trace else id)
   & fromChainSyncEvent
   & takeUpTo upTo'
   & S.drop 1 -- The very first event from local chainsync is always a
@@ -196,8 +203,11 @@ runIndexer cli = do
   let
     f :: C.BlockInMode C.CardanoMode -> State a -> IO (State a, Maybe (Event a))
     f blk s = return $ maybe (s, Nothing) (\(s', e') -> (s', Just e')) $ toEvent s blk
-  S.effects
-    $ (blockSource cc :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
-    & streamFold f initialState
-    & S.mapMaybe id
-    & S.chain (persist runtimeConfig)
+
+  c <- defaultConfigStdout
+  withTrace c "mafoc" $ \trace -> do
+    S.effects
+      $ (blockSource cc trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
+      & streamFold f initialState
+      & S.mapMaybe id
+      & S.chain (persist runtimeConfig)

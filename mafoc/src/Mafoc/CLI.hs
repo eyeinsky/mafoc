@@ -75,6 +75,9 @@ commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNod
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interval" "Chain interval to index")
 
+commonQuiet :: O.Parser Bool
+commonQuiet = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
+
 -- * Parse interval
 
 parseIntervalEither :: String -> Either String Interval

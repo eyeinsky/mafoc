@@ -34,6 +34,7 @@ data MintBurn = MintBurn
   , networkId                 :: C.NetworkId
   , interval                  :: Interval
   , securityParamOrNodeConfig :: Either Natural FilePath
+  , logging                   :: Bool
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo MintBurn
@@ -48,6 +49,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonNetworkId
       <*> Opt.commonInterval
       <*> Opt.commonSecurityParamEither
+      <*> Opt.commonQuiet
 
 data Runtime_ = Runtime_
   { sqlConnection :: SQL.Connection
@@ -75,4 +77,4 @@ instance Indexer MintBurn where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k, Runtime_ c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime_ c tableName)

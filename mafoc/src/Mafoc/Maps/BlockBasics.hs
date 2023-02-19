@@ -30,6 +30,7 @@ data BlockBasics = BlockBasics
   , securityParamOrNodeConfig :: Either Natural FilePath
   , interval                  :: Interval
   , networkId                 :: C.NetworkId
+  , logging                   :: Bool
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo BlockBasics
@@ -45,6 +46,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonSecurityParamEither
       <*> Opt.commonInterval
       <*> Opt.commonNetworkId
+      <*> Opt.commonQuiet
 
 
 data Runtime_ = Runtime_
@@ -69,7 +71,7 @@ instance Indexer BlockBasics where
     interval' <- findIntervalToBeIndexed (interval config) c tableName
     let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
     k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k, Runtime_ c tableName)
+    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config), Runtime_ c tableName)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 
