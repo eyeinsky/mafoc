@@ -7,32 +7,23 @@ module Mafoc.Maps.BlockBasics where
 
 import Data.Coerce (coerce)
 import Data.String (IsString (fromString))
-import Data.Word (Word32)
 
 import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
-import Numeric.Natural (Natural)
 import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 
-import Cardano.Streaming qualified as CS
-import Mafoc.Core (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
-                   Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
-                   findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks)
 
 -- * Block transaction count indexer
 
 data BlockBasics = BlockBasics
-  { chunkSize                 :: Int
-  , socketPath                :: String
-  , dbPathAndTableName        :: DbPathAndTableName
-  , securityParamOrNodeConfig :: Either Natural FilePath
-  , interval                  :: Interval
-  , networkId                 :: C.NetworkId
-  , logging                   :: Bool
-  , pipelineSize              :: Word32
+  { chainsync          :: LocalChainsyncConfig
+  , dbPathAndTableName :: DbPathAndTableName
+  , chunkSize          :: Int
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo BlockBasics
@@ -42,14 +33,9 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser BlockBasics
     cli = BlockBasics
-      <$> Opt.commonChunkSize
-      <*> Opt.commonSocketPath
+      <$> Opt.commonLocalChainsyncConfig
       <*> Opt.commonDbPathAndTableName
-      <*> Opt.commonSecurityParamEither
-      <*> Opt.commonInterval
-      <*> Opt.commonNetworkId
-      <*> Opt.commonQuiet
-      <*> Opt.commonPipelineSize
+      <*> Opt.commonChunkSize
 
 instance Indexer BlockBasics where
 
@@ -66,15 +52,13 @@ instance Indexer BlockBasics where
 
   persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
 
-  initialize config = do
-    let (dbPath, tableName) = defaultTableName "blockbasics" $ dbPathAndTableName config
-    c <- SQL.open dbPath
-    sqliteInit c tableName
-    sqliteInitBookmarks c
-    interval' <- findIntervalToBeIndexed (interval config) c tableName
-    let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
-    k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config) (pipelineSize config), Runtime c tableName)
+  initialize BlockBasics{chainsync, dbPathAndTableName} = do
+    chainsyncRuntime <- initializeLocalChainsync chainsync
+    let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
+    sqlCon <- SQL.open dbPath
+    sqliteInit sqlCon tableName
+    sqliteInitBookmarks sqlCon
+    return (EmptyState, chainsyncRuntime, Runtime sqlCon tableName)
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 

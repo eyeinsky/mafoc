@@ -10,7 +10,8 @@ import Options.Applicative qualified as O
 import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
-import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
+import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval),
+                   LocalChainsyncConfig (LocalChainsyncConfig), UpTo (CurrentTip, Infinity, SlotNo))
 
 -- * Options
 
@@ -75,11 +76,20 @@ commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNod
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interval" "Chain interval to index")
 
-commonQuiet :: O.Parser Bool
-commonQuiet = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
+commonLogging :: O.Parser Bool
+commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
 commonChunkSize :: O.Parser Int
 commonChunkSize = O.option O.auto (longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> O.internal)
+
+commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
+commonLocalChainsyncConfig = LocalChainsyncConfig
+  <$> commonSocketPath
+  <*> commonSecurityParamEither
+  <*> commonInterval
+  <*> commonNetworkId
+  <*> commonLogging
+  <*> commonPipelineSize
 
 -- * Parse interval
 

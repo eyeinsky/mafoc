@@ -175,13 +175,30 @@ class Indexer a where
 
   -- | Initialize an indexer and return its runtime configuration. E.g
   -- open the destination to where data is persisted, etc.
-  initialize :: a -> IO (State a, BlockSourceConfig, Runtime a)
+  initialize :: a -> IO (State a, LocalChainsyncRuntime, Runtime a)
 
   -- | Write event to persistent storage.
   persist :: Runtime a -> Event a -> IO ()
 
+-- | Configuration for local chainsync streaming setup.
+data LocalChainsyncConfig = LocalChainsyncConfig
+  { socketPath                :: String
+  , securityParamOrNodeConfig :: Either Natural FilePath
+  , interval_                 :: Interval
+  , networkId                 :: C.NetworkId
+  , logging_                  :: Bool
+  , pipelineSize_             :: Word32
+  } deriving Show
+
+initializeLocalChainsync :: LocalChainsyncConfig -> IO LocalChainsyncRuntime
+initializeLocalChainsync config = do
+  let interval' = interval_ config
+  let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
+  k <- either pure getSecurityParam $ securityParamOrNodeConfig config
+  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config)
+
 -- | Static configuration for block source
-data BlockSourceConfig = BlockSourceConfig
+data LocalChainsyncRuntime = LocalChainsyncRuntime
   { localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
   , interval            :: Interval
   , securityParam       :: Natural
@@ -189,7 +206,7 @@ data BlockSourceConfig = BlockSourceConfig
   , pipelineSize        :: Word32
   }
 
-blockSource :: BlockSourceConfig -> Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+blockSource :: LocalChainsyncRuntime -> Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
 blockSource cc trace = blocks' (localNodeConnection cc) from'
   & (if logging cc then Marconi.logging trace else id)
   & fromChainSyncEvent

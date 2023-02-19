@@ -13,31 +13,20 @@ This just provides the CLI interface and a streaming runtime.
 
 module Mafoc.Maps.MintBurn where
 
-import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
-import Numeric.Natural (Natural)
 import Options.Applicative qualified as Opt
 
-import Cardano.Api qualified as C
-import Cardano.Streaming.Helpers qualified as CS
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks)
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
-
-import Mafoc.Core (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
-                   Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
-                   findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
 
 -- | Configuration data type which does double-duty as the tag for the
 -- indexer.
 data MintBurn = MintBurn
-  { chunkSize                 :: Int
-  , dbPathAndTableName        :: DbPathAndTableName
-  , socketPath                :: String
-  , networkId                 :: C.NetworkId
-  , interval                  :: Interval
-  , securityParamOrNodeConfig :: Either Natural FilePath
-  , logging                   :: Bool
-  , pipelineSize              :: Word32
+  { chainsync          :: LocalChainsyncConfig
+  , dbPathAndTableName :: DbPathAndTableName
+  , chunkSize          :: Int
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo MintBurn
@@ -47,14 +36,9 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser MintBurn
     cli = MintBurn
-      <$> Opt.commonChunkSize
+      <$> Opt.commonLocalChainsyncConfig
       <*> Opt.commonDbPathAndTableName
-      <*> Opt.commonSocketPath
-      <*> Opt.commonNetworkId
-      <*> Opt.commonInterval
-      <*> Opt.commonSecurityParamEither
-      <*> Opt.commonQuiet
-      <*> Opt.commonPipelineSize
+      <*> Opt.commonChunkSize
 
 instance Indexer MintBurn where
 
@@ -72,12 +56,11 @@ instance Indexer MintBurn where
   persist Runtime{sqlConnection, tableName} event = do
     Marconi.MintBurn.sqliteInsert sqlConnection tableName [event]
 
-  initialize config = do
-    let (dbPath, tableName) = defaultTableName "mintburn" $ dbPathAndTableName config
-    c <- SQL.open dbPath
-    Marconi.MintBurn.sqliteInit c tableName
-    sqliteInitBookmarks c
-    interval' <- findIntervalToBeIndexed (interval config) c tableName
-    let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
-    k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-    return (EmptyState, BlockSourceConfig localNodeCon interval' k (logging config) (pipelineSize config), Runtime c tableName)
+  initialize MintBurn{chainsync, dbPathAndTableName} = do
+    chainsyncRuntime <- initializeLocalChainsync chainsync
+    let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
+    sqlCon <- SQL.open dbPath
+    Marconi.MintBurn.sqliteInit sqlCon tableName
+    sqliteInitBookmarks sqlCon
+    -- interval' <- findIntervalToBeIndexed (interval config) c tableName
+    return (EmptyState, chainsyncRuntime, Runtime sqlCon tableName)
