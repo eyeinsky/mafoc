@@ -42,7 +42,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser BlockBasics
     cli = BlockBasics
-      <$> Opt.option Opt.auto (Opt.longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> Opt.internal)
+      <$> Opt.commonChunkSize
       <*> Opt.commonSocketPath
       <*> Opt.commonDbPathAndTableName
       <*> Opt.commonSecurityParamEither

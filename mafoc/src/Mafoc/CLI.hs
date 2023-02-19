@@ -78,6 +78,9 @@ commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interva
 commonQuiet :: O.Parser Bool
 commonQuiet = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
+commonChunkSize :: O.Parser Int
+commonChunkSize = O.option O.auto (longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> O.internal)
+
 -- * Parse interval
 
 parseIntervalEither :: String -> Either String Interval

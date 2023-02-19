@@ -30,7 +30,8 @@ import Mafoc.Core (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
 -- | Configuration data type which does double-duty as the tag for the
 -- indexer.
 data MintBurn = MintBurn
-  { dbPathAndTableName        :: DbPathAndTableName
+  { chunkSize                 :: Int
+  , dbPathAndTableName        :: DbPathAndTableName
   , socketPath                :: String
   , networkId                 :: C.NetworkId
   , interval                  :: Interval
@@ -46,7 +47,8 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser MintBurn
     cli = MintBurn
-      <$> Opt.commonDbPathAndTableName
+      <$> Opt.commonChunkSize
+      <*> Opt.commonDbPathAndTableName
       <*> Opt.commonSocketPath
       <*> Opt.commonNetworkId
       <*> Opt.commonInterval
