@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
-module Mafoc.Helpers where
+module Mafoc.Core where
 
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Function ((&))
@@ -156,8 +156,7 @@ streamFold f acc_ source_ = loop acc_ source_
 
 class Indexer a where
 
-  -- | The a itself doubles as configuration and often also as the cli
-  -- configuration.
+  -- | The @a@ itself doubles as cli configuration, no need for the following:
   -- type Config a = r | r -> a
 
   -- | Runtime configuration.

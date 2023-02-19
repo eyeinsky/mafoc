@@ -18,9 +18,9 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 
 import Cardano.Streaming qualified as CS
-import Mafoc.Helpers (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
-                      Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
-                      findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
+import Mafoc.Core (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
+                   Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
+                   findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
 
 -- * Block transaction count indexer
 

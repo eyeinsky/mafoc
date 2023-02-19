@@ -23,9 +23,9 @@ import Cardano.Api qualified as C
 import Cardano.Streaming.Helpers qualified as CS
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
-import Mafoc.Helpers (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
-                      Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
-                      findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
+import Mafoc.Core (BlockSourceConfig (BlockSourceConfig), DbPathAndTableName,
+                   Indexer (Event, Runtime, State, initialize, persist, toEvent), Interval, defaultTableName,
+                   findIntervalToBeIndexed, getSecurityParam, sqliteInitBookmarks)
 
 -- | Configuration data type which does double-duty as the tag for the
 -- indexer.

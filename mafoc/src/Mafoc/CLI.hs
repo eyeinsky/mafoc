@@ -10,7 +10,7 @@ import Options.Applicative qualified as O
 import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
-import Mafoc.Helpers (DbPathAndTableName (DbPathAndTableName), Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
+import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval), UpTo (CurrentTip, Infinity, SlotNo))
 
 -- * Options
 

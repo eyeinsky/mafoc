@@ -10,7 +10,7 @@ import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Helpers (runIndexer)
+import Mafoc.Core (runIndexer)
 import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
 import Mafoc.RollbackRingBuffer (RollbackException)

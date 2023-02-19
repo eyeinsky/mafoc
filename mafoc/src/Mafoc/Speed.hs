@@ -14,7 +14,7 @@ import Data.Word (Word32, Word64)
 import Cardano.Api qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
-import Mafoc.Helpers qualified as Mafoc
+import Mafoc.Core qualified as Mafoc
 import Marconi.ChainIndex.Indexers qualified as Marconi
 import Marconi.Core.Storable qualified as RI
 

@@ -47,7 +47,7 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
-    Mafoc.Helpers
+    Mafoc.Core
     Mafoc.Indexer.Class
     Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn
