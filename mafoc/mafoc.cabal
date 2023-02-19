@@ -51,6 +51,7 @@ library
     Mafoc.Indexer.Class
     Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn
+    Mafoc.Maps.NoOp
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
 

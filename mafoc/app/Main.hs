@@ -13,6 +13,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (runIndexer)
 import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
+import Mafoc.Maps.NoOp qualified as NoOp
 import Mafoc.RollbackRingBuffer (RollbackException)
 import Mafoc.Speed qualified as Speed
 
@@ -24,6 +25,7 @@ main = printRollbackException $ parseAndPrintCli >>= \case
     Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
   BlockBasics configFromCli -> runIndexer configFromCli
   MintBurn configFromCli -> runIndexer configFromCli
+  NoOp configFromCli -> runIndexer configFromCli
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
@@ -40,6 +42,7 @@ data Command
   = Speed Speed.BlockSource
   | BlockBasics BlockBasics.BlockBasics
   | MintBurn MintBurn.MintBurn
+  | NoOp NoOp.NoOp
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -52,6 +55,7 @@ cmdParser = Opt.subparser
   $ Opt.command "speed" speedParserInfo
  <> Opt.command "blockbasics" (BlockBasics <$> BlockBasics.parseCli)
  <> Opt.command "mintburn" (MintBurn <$> MintBurn.parseCli)
+ <> Opt.command "noop" (NoOp <$> NoOp.parseCli)
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help
