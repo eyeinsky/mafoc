@@ -24,7 +24,6 @@ import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initializ
 data BlockBasics = BlockBasics
   { chainsync          :: LocalChainsyncConfig
   , dbPathAndTableName :: DbPathAndTableName
-  , chunkSize          :: Int
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo BlockBasics
@@ -36,7 +35,6 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
     cli = BlockBasics
       <$> Opt.commonLocalChainsyncConfig
       <*> Opt.commonDbPathAndTableName
-      <*> Opt.commonChunkSize
 
 instance Indexer BlockBasics where
 

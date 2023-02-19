@@ -79,7 +79,7 @@ commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interva
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
-commonChunkSize :: O.Parser Int
+commonChunkSize :: O.Parser Natural
 commonChunkSize = O.option O.auto (longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> O.internal)
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
@@ -90,6 +90,7 @@ commonLocalChainsyncConfig = LocalChainsyncConfig
   <*> commonNetworkId
   <*> commonLogging
   <*> commonPipelineSize
+  <*> commonChunkSize
 
 -- * Parse interval
 

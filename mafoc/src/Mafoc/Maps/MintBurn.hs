@@ -17,7 +17,7 @@ import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Options.Applicative qualified as Opt
 
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, persistMany, toEvent),
                    LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteInitBookmarks,
                    updateIntervalFromBookmarks)
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
@@ -27,7 +27,6 @@ import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 data MintBurn = MintBurn
   { chainsync          :: LocalChainsyncConfig
   , dbPathAndTableName :: DbPathAndTableName
-  , chunkSize          :: Int
   } deriving (Show)
 
 parseCli :: Opt.ParserInfo MintBurn
@@ -39,7 +38,6 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
     cli = MintBurn
       <$> Opt.commonLocalChainsyncConfig
       <*> Opt.commonDbPathAndTableName
-      <*> Opt.commonChunkSize
 
 instance Indexer MintBurn where
 
@@ -54,9 +52,6 @@ instance Indexer MintBurn where
 
   toEvent a _ = maybe Nothing (\e -> Just (EmptyState,e)) $ Marconi.MintBurn.toUpdate a
 
-  persist Runtime{sqlConnection, tableName} event = do
-    Marconi.MintBurn.sqliteInsert sqlConnection tableName [event]
-
   initialize MintBurn{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
@@ -65,3 +60,9 @@ instance Indexer MintBurn where
     sqliteInitBookmarks sqlCon
     chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
+
+  persist Runtime{sqlConnection, tableName} event = do
+    Marconi.MintBurn.sqliteInsert sqlConnection tableName [event]
+
+  persistMany Runtime{sqlConnection, tableName} events = do
+    Marconi.MintBurn.sqliteInsert sqlConnection tableName events

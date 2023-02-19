@@ -184,6 +184,11 @@ class Indexer a where
 
   -- | Write event to persistent storage.
   persist :: Runtime a -> Event a -> IO ()
+  persist runtime event = persistMany runtime [event]
+
+  -- | Persist many events at a time, defaults to mapping over events with persist.
+  persistMany :: Runtime a -> [Event a] -> IO ()
+  persistMany runtime events = mapM_ (persist runtime) events
 
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig = LocalChainsyncConfig
@@ -193,6 +198,7 @@ data LocalChainsyncConfig = LocalChainsyncConfig
   , networkId                 :: C.NetworkId
   , logging_                  :: Bool
   , pipelineSize_             :: Word32
+  , chunkSize_                :: Natural
   } deriving Show
 
 initializeLocalChainsync :: LocalChainsyncConfig -> IO LocalChainsyncRuntime
@@ -200,7 +206,7 @@ initializeLocalChainsync config = do
   let interval' = interval_ config
   let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
   k <- either pure getSecurityParam $ securityParamOrNodeConfig config
-  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config)
+  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
 
 -- | Static configuration for block source
 data LocalChainsyncRuntime = LocalChainsyncRuntime
@@ -209,6 +215,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , securityParam       :: Natural
   , logging             :: Bool
   , pipelineSize        :: Word32
+  , chunkSize           :: Natural
   }
 
 blockSource :: LocalChainsyncRuntime -> Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
@@ -234,15 +241,24 @@ blockSource cc trace = blocks' (localNodeConnection cc) from'
 
 runIndexer :: forall a . Indexer a => a -> IO ()
 runIndexer cli = do
-  (initialState, cc, runtimeConfig) <- initialize cli
-  let
-    f :: C.BlockInMode C.CardanoMode -> State a -> IO (State a, Maybe (Event a))
-    f blk s = return $ maybe (s, Nothing) (\(s', e') -> (s', Just e')) $ toEvent blk s
-
+  (initialState, localChainsyncRuntime, indexerRuntime) <- initialize cli
   c <- defaultConfigStdout
-  withTrace c "mafoc" $ \trace -> do
-    S.effects
-      $ (blockSource cc trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
-      & streamFold f initialState
-      & S.mapMaybe id
-      & S.chain (persist runtimeConfig)
+  withTrace c "mafoc" $ \trace -> S.effects
+    -- Start streaming blocks over local chainsync
+    $ (blockSource localChainsyncRuntime trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
+    -- Fold over stream with state, emit events as `Maybe event`
+    & streamFold (\blk s -> return $ maybe (s, Nothing) (\(s', e') -> (s', Just e')) $ toEvent blk s) initialState
+    -- Filter out `Nothing`s
+    & S.concat
+    -- Persist events with `persist` or `persistMany` (buffering writes by
+    -- chunkSize in the latter case)
+    & let chunkSize' = fromEnum $ chunkSize localChainsyncRuntime
+      in if chunkSize localChainsyncRuntime > 1
+          then \source -> source
+            & S.chunksOf chunkSize'
+            & S.mapped (\chunk -> do
+                           persistMany indexerRuntime =<< S.toList_ chunk
+                           pure chunk
+                       )
+            & S.concats
+          else S.chain (persist indexerRuntime)
