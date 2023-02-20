@@ -28,7 +28,6 @@ import Control.Exception (catch)
 import Control.Lens (view)
 import Control.Lens.Operators ((^.))
 import Control.Monad (forever, void)
-import Control.Monad.Trans.Except (runExceptT)
 import Data.List (findIndex, foldl1', intersect)
 import Data.Map (Map)
 import Data.Map qualified as Map
@@ -45,16 +44,11 @@ import Marconi.ChainIndex.Indexers.MintBurn qualified as MintBurn
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as ScriptTx
 import Marconi.ChainIndex.Indexers.Utxo qualified as Utxo
 import Marconi.ChainIndex.Logging (logging)
-import Marconi.ChainIndex.Node.Client.GenesisConfig (NetworkConfigFile (NetworkConfigFile), initExtLedgerStateVar,
-                                                     mkProtocolInfoCardano, readCardanoGenesisConfig, readNetworkConfig,
-                                                     renderGenesisConfigError)
 import Marconi.ChainIndex.Types (SecurityParam, TargetAddresses)
 import Marconi.ChainIndex.Utils qualified as Utils
 import Marconi.Core.Index.VSplit qualified as Ix
 import Marconi.Core.Storable qualified as Storable
-import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
-import Ouroboros.Consensus.Node qualified as O
 import Prettyprinter (defaultLayoutOptions, layoutPretty, pretty, (<+>))
 import Prettyprinter.Render.Text (renderStrict)
 import Streaming.Prelude qualified as S
@@ -277,14 +271,7 @@ epochStateWorker_
         Coordinator{_barrier}
         ch
         dbPath = do
-    nodeConfigE <- runExceptT $ readNetworkConfig (NetworkConfigFile nodeConfigPath)
-    nodeConfig <- either (error . show) pure nodeConfigE
-    genesisConfigE <- runExceptT $ readCardanoGenesisConfig nodeConfig
-    genesisConfig <- either (error . show . renderGenesisConfigError) pure genesisConfigE
-
-    let initialLedgerState = initExtLedgerStateVar genesisConfig
-        topLevelConfig = O.pInfoConfig (mkProtocolInfoCardano genesisConfig)
-        hfLedgerConfig = O.ExtLedgerCfg topLevelConfig
+    (hfLedgerConfig@(O.ExtLedgerCfg topLevelConfig), initialLedgerState) <- EpochState.getInitialExtLedgerState nodeConfigPath
 
     let ledgerStateDir = takeDirectory dbPath </> "ledgerStates"
     createDirectoryIfMissing False ledgerStateDir
@@ -314,11 +301,7 @@ epochStateWorker_
                   onInsert (newIndexer, storableEvent)
 
                   -- Compute new LedgerState given block and old LedgerState
-                  pure $ O.lrResult
-                       $ O.tickThenReapplyLedgerResult
-                            hfLedgerConfig
-                            (C.toConsensusBlock blockInMode)
-                            currentLedgerState
+                  pure $ EpochState.applyBlock hfLedgerConfig currentLedgerState blockInMode
 
               RollBackward C.ChainPointAtGenesis _ct -> do
                   modifyMVar_ indexerMVar $ \ix -> fromMaybe ix <$> Storable.rewind C.ChainPointAtGenesis ix

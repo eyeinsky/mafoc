@@ -71,6 +71,16 @@ module Marconi.ChainIndex.Indexers.EpochState
   , toStorableEvent
   , open
   , getEpochNo
+  , getStakeMap
+  , getEpochNonce
+  , getInitialExtLedgerState
+  , applyBlock
+  , writeExtLedgerState
+  , parseBlockHeaderHashString
+  , getLedgerConfig
+  , loadExtLedgerState
+  , ExtLedgerState_
+  , ExtLedgerCfg_
   ) where
 
 import Cardano.Api qualified as C
@@ -85,6 +95,7 @@ import Cardano.Slotting.Slot (EpochNo)
 import Codec.CBOR.Read qualified as CBOR
 import Codec.CBOR.Write qualified as CBOR
 import Control.Monad (filterM, forM_, when)
+import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.=))
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as BS
@@ -104,6 +115,10 @@ import Data.Tuple (swap)
 import Data.VMap qualified as VMap
 import Database.SQLite.Simple qualified as SQL
 import GHC.Generics (Generic)
+import Marconi.ChainIndex.Node.Client.GenesisConfig (GenesisConfig, NetworkConfigFile (NetworkConfigFile),
+                                                     initExtLedgerStateVar, mkProtocolInfoCardano,
+                                                     readCardanoGenesisConfig, readNetworkConfig,
+                                                     renderGenesisConfigError)
 import Marconi.ChainIndex.Orphans ()
 import Marconi.ChainIndex.Types (SecurityParam)
 import Marconi.ChainIndex.Utils (isBlockRollbackable)
@@ -114,7 +129,9 @@ import Marconi.Core.Storable qualified as Storable
 import Ouroboros.Consensus.Cardano.Block qualified as O
 import Ouroboros.Consensus.Config qualified as O
 import Ouroboros.Consensus.HeaderValidation qualified as O
+import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
+import Ouroboros.Consensus.Node qualified as O
 import Ouroboros.Consensus.Protocol.Praos qualified as O
 import Ouroboros.Consensus.Protocol.TPraos qualified as O
 import Ouroboros.Consensus.Shelley.Ledger qualified as O
@@ -135,7 +152,7 @@ type instance StorableMonad EpochStateHandle = IO
 
 data instance StorableEvent EpochStateHandle =
     EpochStateEvent
-        { epochStateEventLedgerState :: Maybe (O.ExtLedgerState (O.HardForkBlock (O.CardanoEras O.StandardCrypto)))
+        { epochStateEventLedgerState :: Maybe ExtLedgerState_
         , epochStateEventEpochNo :: Maybe C.EpochNo
         , epochStateEventNonce :: Ledger.Nonce
         , epochStateEventSDD :: Map C.PoolId C.Lovelace
@@ -160,13 +177,13 @@ data instance StorableQuery EpochStateHandle =
 data instance StorableResult EpochStateHandle =
     SDDByEpochNoResult [EpochSDDRow]
   | NonceByEpochNoResult (Maybe EpochNonceRow)
-  | LedgerStateAtPointResult (Maybe (O.ExtLedgerState (O.CardanoBlock O.StandardCrypto)))
+  | LedgerStateAtPointResult (Maybe ExtLedgerState_)
     deriving (Eq, Show)
 
 type EpochStateIndex = State EpochStateHandle
 
 toStorableEvent
-    :: O.ExtLedgerState (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
+    :: ExtLedgerState_
     -> C.SlotNo
     -> C.Hash C.BlockHeader
     -> C.BlockNo
@@ -190,9 +207,7 @@ toStorableEvent extLedgerState slotNo bhh bn chainTip securityParam isFirstEvent
 -- | From LedgerState, get epoch stake pool delegation: a mapping of pool ID to amount staked in
 -- lovelace. We do this by getting the '_pstakeSet' stake snapshot and then use '_delegations' and
 -- '_stake' to resolve it into the desired mapping.
-getStakeMap
-    :: O.ExtLedgerState (O.CardanoBlock O.StandardCrypto)
-    -> Map C.PoolId C.Lovelace
+getStakeMap :: ExtLedgerState_ -> Map C.PoolId C.Lovelace
 getStakeMap extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateByron _    -> mempty
   O.LedgerStateShelley st -> getStakeMapFromShelleyBlock st
@@ -232,9 +247,7 @@ getStakeMap extLedgerState = case O.ledgerState extLedgerState of
                     <$> VMap.lookup cred stakes)
                 delegations
 
-getEpochNo
-    :: O.ExtLedgerState (O.CardanoBlock O.StandardCrypto)
-    -> Maybe EpochNo
+getEpochNo :: ExtLedgerState_ -> Maybe EpochNo
 getEpochNo extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateByron _st  -> Nothing
   O.LedgerStateShelley st -> getEpochNoFromShelleyBlock st
@@ -283,7 +296,7 @@ instance ToJSON EpochSDDRow where
 
 -- | Get Nonce per epoch given an extended ledger state. The Nonce is only available starting at
 -- Shelley era. Byron era has the neutral nonce.
-getEpochNonce :: O.ExtLedgerState (O.CardanoBlock O.StandardCrypto) -> Ledger.Nonce
+getEpochNonce :: ExtLedgerState_ -> Ledger.Nonce
 getEpochNonce extLedgerState =
     case O.headerStateChainDep (O.headerState extLedgerState) of
       O.ChainDepStateByron _    -> Ledger.NeutralNonce
@@ -386,14 +399,7 @@ instance Buffered EpochStateHandle where
                 -- user. Tried using something like `onException`, but it doesn't run the cleanup
                 -- function. Not sure how to do the cleanup here without restoring doing it outside
                 -- the thread where this indexer is running.
-                let codecConfig = O.configCodec topLevelConfig
-                BS.writeFile fname
-                    $ CBOR.toLazyByteString
-                    $ O.encodeExtLedgerState
-                        (O.encodeDisk codecConfig)
-                        (O.encodeDisk codecConfig)
-                        (O.encodeDisk codecConfig)
-                        ledgerState
+                writeExtLedgerState fname (O.configCodec topLevelConfig) ledgerState
         forM_ eventsList
               $ \(EpochStateEvent
                     maybeLedgerState
@@ -547,19 +553,7 @@ instance Queryable EpochStateHandle where
                             ledgerStateFilePaths
                 case ledgerStateFilePath of
                   Nothing -> pure $ LedgerStateAtPointResult Nothing
-                  Just fp -> do
-                      ledgerStateBs <- BS.readFile $ ledgerStateDirPath </> fp
-                      let codecConfig = O.configCodec topLevelConfig
-                          ledgerState =
-                              either
-                                (const Nothing)
-                                (Just . snd)
-                                $ CBOR.deserialiseFromBytes
-                                    ( O.decodeExtLedgerState (O.decodeDisk codecConfig)
-                                                             (O.decodeDisk codecConfig)
-                                                             (O.decodeDisk codecConfig)
-                                    ) ledgerStateBs
-                      pure $ LedgerStateAtPointResult ledgerState
+                  Just fp -> LedgerStateAtPointResult . either (const Nothing) (Just . snd) <$> loadExtLedgerState (O.configCodec topLevelConfig) (ledgerStateDirPath </> fp)
             Just event -> pure $ LedgerStateAtPointResult $ epochStateEventLedgerState event
 
 instance Rewindable EpochStateHandle where
@@ -668,3 +662,50 @@ open topLevelConfig dbPath ledgerStateDirPath securityParam = do
             , blockNo INT NOT NULL
             )|]
     emptyState 1 (EpochStateHandle topLevelConfig c ledgerStateDirPath securityParam)
+
+-- * ExtLedgerState
+
+getInitialExtLedgerState :: FilePath -> IO (ExtLedgerCfg_, ExtLedgerState_)
+getInitialExtLedgerState nodeConfigPath = do
+  genesisConfig <- getGenesisConfig nodeConfigPath
+  let initialExtLedgerState = initExtLedgerStateVar genesisConfig
+      ledgerCfg = O.ExtLedgerCfg $ O.pInfoConfig $ mkProtocolInfoCardano genesisConfig
+  return (ledgerCfg, initialExtLedgerState)
+
+getLedgerConfig :: FilePath -> IO ExtLedgerCfg_
+getLedgerConfig nodeConfigPath = O.ExtLedgerCfg . O.pInfoConfig . mkProtocolInfoCardano <$> getGenesisConfig nodeConfigPath
+
+getGenesisConfig :: FilePath -> IO GenesisConfig
+getGenesisConfig nodeConfigPath = do
+  nodeConfigE <- runExceptT $ readNetworkConfig (NetworkConfigFile nodeConfigPath)
+  nodeConfig <- either (error . show) pure nodeConfigE
+  genesisConfigE <- runExceptT $ readCardanoGenesisConfig nodeConfig
+  either (error . show . renderGenesisConfigError) pure genesisConfigE
+
+applyBlock :: ExtLedgerCfg_ -> ExtLedgerState_ -> C.BlockInMode C.CardanoMode -> ExtLedgerState_
+applyBlock hfLedgerConfig extLedgerState blockInMode =
+  O.lrResult $ O.tickThenReapplyLedgerResult hfLedgerConfig (C.toConsensusBlock blockInMode) extLedgerState
+
+writeExtLedgerState :: FilePath -> O.CodecConfig (O.CardanoBlock O.StandardCrypto) -> ExtLedgerState_ -> IO ()
+writeExtLedgerState fname codecConfig extLedgerState = BS.writeFile fname $ CBOR.toLazyByteString encoded
+  where
+    encoded = O.encodeExtLedgerState (O.encodeDisk codecConfig) (O.encodeDisk codecConfig) (O.encodeDisk codecConfig) extLedgerState
+
+parseBlockHeaderHash :: Text.Text -> Maybe (C.Hash C.BlockHeader)
+parseBlockHeaderHash bhhStr = do
+  bhhBs <- either (const Nothing) Just $ Base16.decode $ Text.encodeUtf8 bhhStr
+  C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bhhBs
+
+parseBlockHeaderHashString :: String -> Maybe (C.Hash C.BlockHeader)
+parseBlockHeaderHashString = parseBlockHeaderHash . Text.pack
+
+loadExtLedgerState
+  :: O.CodecConfig (O.CardanoBlock O.StandardCrypto)
+  -> FilePath
+  -> IO (Either CBOR.DeserialiseFailure (BS.ByteString, ExtLedgerState_))
+loadExtLedgerState codecConfig fp = do
+  ledgerStateBs <- BS.readFile fp
+  return $ CBOR.deserialiseFromBytes (O.decodeExtLedgerState (O.decodeDisk codecConfig) (O.decodeDisk codecConfig) (O.decodeDisk codecConfig)) ledgerStateBs
+
+type ExtLedgerState_ = O.ExtLedgerState (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
+type ExtLedgerCfg_ = O.ExtLedgerCfg (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
