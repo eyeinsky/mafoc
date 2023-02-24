@@ -98,7 +98,21 @@ commonLocalChainsyncConfig = LocalChainsyncConfig
   <*> commonPipelineSize
   <*> commonChunkSize
 
--- * Parse interval
+-- * String parsers
+
+parseSlotNo_ :: String -> Either String C.SlotNo
+parseSlotNo_ str = maybe (leftError "Can't read SlotNo" str) (Right . C.SlotNo) $ Read.readMaybe str
+
+leftError :: String -> String -> Either String a
+leftError label str = Left $ label <> ": '" <> str <> "'"
+
+maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
+maybeParseHashBlockHeader =
+  either (const Nothing) Just
+  . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
+  . C8.pack
+
+-- ** Interval
 
 parseIntervalEither :: String -> Either String Interval
 parseIntervalEither str = Interval <$> parseFrom from <*> parseUpTo upTo
@@ -124,18 +138,6 @@ parseUpTo str = case str of
     _   -> SlotNo <$> parseSlotNo_ rest
   "" -> Right Infinity
   _ -> leftError "Can't read slot interval end" str
-
-parseSlotNo_ :: String -> Either String C.SlotNo
-parseSlotNo_ str = maybe (leftError "Can't read SlotNo" str) (Right . C.SlotNo) $ Read.readMaybe str
-
-leftError :: String -> String -> Either String a
-leftError label str = Left $ label <> ": '" <> str <> "'"
-
-maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
-maybeParseHashBlockHeader =
-  either (const Nothing) Just
-  . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
-  . C8.pack
 
 -- * Helpers
 
