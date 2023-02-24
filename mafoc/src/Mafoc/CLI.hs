@@ -78,7 +78,9 @@ commonSecurityParamEither :: O.Parser (Either Natural FilePath)
 commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNodeConfig
 
 commonInterval :: O.Parser Interval
-commonInterval = O.option (O.eitherReader parseIntervalEither) (opt 'i' "interval" "Chain interval to index")
+commonInterval = O.option (O.eitherReader parseIntervalEither)
+  $ opt 'i' "interval" "Chain interval to index, defaults to from genesis to infinity"
+  <> O.value (Interval C.ChainPointAtGenesis Infinity)
 
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
