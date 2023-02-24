@@ -99,9 +99,16 @@ mkLocalNodeConnectInfo networkId socketPath = C.LocalNodeConnectInfo
 mkConnectInfo :: C.Env -> FilePath -> C.LocalNodeConnectInfo C.CardanoMode
 mkConnectInfo env socketPath = C.LocalNodeConnectInfo
   { C.localConsensusModeParams = cardanoModeParams
-  , C.localNodeNetworkId       = networkId'
+  , C.localNodeNetworkId       = envNetworkId env
   , C.localNodeSocketPath      = socketPath
   }
+  where
+    cardanoModeParams = C.CardanoModeParams . C.EpochSlots $ 10 * C.envSecurityParam env
+
+envNetworkId :: C.Env -> C.NetworkId
+envNetworkId env = case Cardano.Chain.Genesis.configReqNetMagic byronConfig of
+  RequiresNoMagic -> C.Mainnet
+  RequiresMagic   -> C.Testnet networkMagic
   where
     -- Derive the NetworkId as described in network-magic.md from the
     -- cardano-ledger-specs repo.
@@ -116,12 +123,6 @@ mkConnectInfo env socketPath = C.LocalNodeConnectInfo
       $ unProtocolMagicId
       $ Cardano.Chain.Genesis.gdProtocolMagicId
       $ Cardano.Chain.Genesis.configGenesisData byronConfig
-
-    networkId' = case Cardano.Chain.Genesis.configReqNetMagic byronConfig of
-      RequiresNoMagic -> C.Mainnet
-      RequiresMagic   -> C.Testnet networkMagic
-
-    cardanoModeParams = C.CardanoModeParams . C.EpochSlots $ 10 * C.envSecurityParam env
 
 -- | Ignore rollback events in the chainsync event stream. Useful for
 -- monitor which blocks has been seen by the node, regardless whether
