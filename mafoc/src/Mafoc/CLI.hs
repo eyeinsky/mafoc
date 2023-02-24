@@ -78,7 +78,9 @@ commonSecurityParam :: O.Parser Natural
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
 commonSecurityParamEither :: O.Parser SecurityParamOrNodeConfig
-commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNodeConfig
+commonSecurityParamEither =
+      Left <$> ((,) <$> commonSecurityParam <*> commonNetworkId)
+  <|> Right <$> commonNodeConfig
 
 commonNetwork :: O.Parser NodeFolderOrSecurityParamOrNodeConfig
 commonNetwork =
@@ -102,7 +104,6 @@ commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
 commonLocalChainsyncConfig = LocalChainsyncConfig
   <$> commonNetwork
   <*> commonInterval
-  <*> commonNetworkId
   <*> commonLogging
   <*> commonPipelineSize
   <*> commonChunkSize

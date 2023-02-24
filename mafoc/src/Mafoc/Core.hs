@@ -21,10 +21,10 @@ import Cardano.BM.Data.Trace (Trace)
 import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
+import Cardano.Streaming.Helpers (envNetworkId)
 import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Logging qualified as Marconi
-import Ouroboros.Consensus.Protocol.TPraos qualified as TPraos
 
 -- * Interval
 
@@ -69,13 +69,10 @@ takeUpTo upTo' source = case upTo' of
 
 -- * Additions to cardano-api
 
-getSecurityParam :: FilePath -> IO Natural
-getSecurityParam nodeConfig = do
+getSecurityParamAndNetworkId :: FilePath -> IO (Natural, C.NetworkId)
+getSecurityParamAndNetworkId nodeConfig = do
   (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
-  let consensusConfig = C.envProtocolConfig env -- :: TPraos.ConsensusConfig (HFC.HardForkProtocol (Consensus.CardanoEras Shelley.StandardCrypto))
-      -- _ = TPraos.tpraosNetworkId $ TPraos.tpraosParams TPraos.consensusConfig
-      -- networkMagic = undefined
-  pure $ fromIntegral $ C.envSecurityParam env
+  pure (fromIntegral $ C.envSecurityParam env, envNetworkId env)
 
 -- | Convert event from @ChainSyncEvent@ to @Event@.
 fromChainSyncEvent
@@ -200,14 +197,13 @@ class Indexer a where
 type NodeFolder = FilePath
 type NodeConfig = FilePath
 type SocketPath = FilePath
-type SecurityParamOrNodeConfig = Either Natural NodeConfig
-type NodeFolderOrSecurityParamOrNodeConfig = Either FilePath (SocketPath, SecurityParamOrNodeConfig)
+type SecurityParamOrNodeConfig = Either (Natural, C.NetworkId) NodeConfig
+type NodeFolderOrSecurityParamOrNodeConfig = Either NodeFolder (SocketPath, SecurityParamOrNodeConfig)
 
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig = LocalChainsyncConfig
   { nodeFolderOrSecurityParamOrNodeConfig :: NodeFolderOrSecurityParamOrNodeConfig
   , interval_                             :: Interval
-  , networkId                             :: C.NetworkId
   , logging_                              :: Bool
   , pipelineSize_                         :: Word32
   , chunkSize_                            :: Natural
@@ -216,17 +212,17 @@ data LocalChainsyncConfig = LocalChainsyncConfig
 initializeLocalChainsync :: LocalChainsyncConfig -> IO LocalChainsyncRuntime
 initializeLocalChainsync config = do
   let interval' = interval_ config
-  (socketPath, k) <- case nodeFolderOrSecurityParamOrNodeConfig config of
+  (socketPath, k, networkId'') <- case nodeFolderOrSecurityParamOrNodeConfig config of
     Left nodeFolder -> let
       nodeConfig = nodeFolder </> "config" </> "config.json"
       socketPath = nodeFolder </> "socket" </> "node.socket"
       in do
-      k <- getSecurityParam nodeConfig
-      pure (socketPath, k)
+      (k, networkId') <- getSecurityParamAndNetworkId nodeConfig
+      pure (socketPath, k, networkId')
     Right (socketPath, securityParamOrNodeConfig) -> do
-      k <- either pure getSecurityParam securityParamOrNodeConfig
-      pure (socketPath, k)
-  let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) socketPath
+      (k, networkId') <- either pure getSecurityParamAndNetworkId securityParamOrNodeConfig
+      pure (socketPath, k, networkId')
+  let localNodeCon = CS.mkLocalNodeConnectInfo networkId'' socketPath
   return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create
