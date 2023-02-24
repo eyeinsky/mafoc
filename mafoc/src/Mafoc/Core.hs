@@ -176,7 +176,7 @@ class Indexer a where
   data State a
 
   -- | Fold a block into an event and produce a new state.
-  toEvent :: C.BlockInMode C.CardanoMode -> State a -> IO (Maybe (State a, Event a))
+  toEvent :: C.BlockInMode C.CardanoMode -> State a -> IO (State a, Maybe (Event a))
 
   -- | Initialize an indexer and return its runtime configuration. E.g
   -- open the destination to where data is persisted, etc.
@@ -259,8 +259,8 @@ runIndexer cli = do
   withTrace c "mafoc" $ \trace -> S.effects
     -- Start streaming blocks over local chainsync
     $ (blockSource localChainsyncRuntime trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
-    -- Fold over stream with state, emit events as `Maybe event`
-    & streamFold (\blk s -> maybe (s, Nothing) (\(s', e') -> (s', Just e')) <$> toEvent blk s) initialState
+    -- Fold over stream of blocks with state, emit events as `Maybe event`
+    & streamFold toEvent initialState
     -- Filter out `Nothing`s
     & S.concat
     -- Persist events with `persist` or `persistMany` (buffering writes by

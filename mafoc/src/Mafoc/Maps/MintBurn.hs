@@ -49,7 +49,7 @@ instance Indexer MintBurn where
 
   data State MintBurn = EmptyState
 
-  toEvent a _ = pure $ maybe Nothing (\e -> Just (EmptyState,e)) $ Marconi.MintBurn.toUpdate a
+  toEvent a _ = pure (EmptyState, Marconi.MintBurn.toUpdate a)
 
   initialize MintBurn{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
