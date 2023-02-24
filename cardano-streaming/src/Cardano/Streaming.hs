@@ -140,7 +140,7 @@ chainSyncStreamingClient points nextChainEventVar =
             }
 
 -- | Create stream of @ChainSyncEvent (BlockInMode CardanoMode)@ from
--- a node at @socketPath@ with @networkId@ starting at @point@.
+-- connection @con@ starting at @point@.
 blocks
   :: C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
