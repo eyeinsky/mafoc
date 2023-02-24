@@ -1,11 +1,13 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Mafoc.Maps.NoOp where
 
+import Database.SQLite.Simple qualified as SQL
 import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persist, toEvent),
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   setCheckpointSqlite)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig
@@ -25,11 +27,12 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
 instance Indexer NoOp where
   type Event NoOp = ()
   data State NoOp = EmptyState
-  data Runtime NoOp = Runtime
-  toEvent _runtime _state _blockInMode = pure (EmptyState, Just ())
+  data Runtime NoOp = Runtime { sqlConnection :: SQL.Connection }
+  toEvent _runtime _state _blockInMode = pure (EmptyState, Nothing)
   initialize NoOp{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
-    (_sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime
-    return (EmptyState, chainsyncRuntime', Runtime)
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime
+    return (EmptyState, chainsyncRuntime', Runtime sqlCon)
   persist _runtime _event = return ()
+  checkpoint Runtime{sqlConnection} slotNoBhh = setCheckpointSqlite sqlConnection "noop" slotNoBhh

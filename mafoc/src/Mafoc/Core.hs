@@ -1,14 +1,18 @@
 {-# LANGUAGE AllowAmbiguousTypes    #-}
 {-# LANGUAGE LambdaCase             #-}
+{-# LANGUAGE MultiWayIf             #-}
 {-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Core where
 
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Function ((&))
+import Data.Functor (($>))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as TS
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
@@ -95,38 +99,39 @@ instance Ord C.ChainTip where
 blockChainPoint :: C.BlockInMode mode -> C.ChainPoint
 blockChainPoint (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = C.ChainPoint slotNo hash
 
+blockSlotNoBhh :: C.BlockInMode mode -> SlotNoBhh
+blockSlotNoBhh (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = (slotNo, hash)
+
 blockSlotNo :: C.BlockInMode mode -> C.SlotNo
 blockSlotNo (C.BlockInMode (C.Block (C.BlockHeader slotNo _ _) _) _) = slotNo
 
 -- * Sqlite
 
-sqliteInitBookmarks :: SQL.Connection -> IO ()
-sqliteInitBookmarks c = do
-  SQL.execute_ c "CREATE TABLE IF NOT EXISTS bookmarks (indexer TEXT NOT NULL, slot_no INT NOT NULL, block_header_hash BLOB NOT NULL)"
+-- ** Checkpoint
 
--- | Get bookmark (the place where we left off) for an indexer with @name@
-getIndexerBookmarkSqlite :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
-getIndexerBookmarkSqlite c name = do
-  list <- SQL.query c "SELECT indexer, slot_no, block_header_hash FROM bookmarks WHERE indexer = ?" (SQL.Only name)
+sqliteInitCheckpoints :: SQL.Connection -> IO ()
+sqliteInitCheckpoints sqlCon = do
+  SQL.execute_ sqlCon
+    " CREATE TABLE IF NOT EXISTS checkpoints \
+    \   ( indexer TEXT NOT NULL              \
+    \   , slot_no INT NOT NULL               \
+    \   , block_header_hash BLOB NOT NULL    \
+    \   , PRIMARY KEY (indexer))             "
+
+
+setCheckpointSqlite :: SQL.Connection -> String -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
+setCheckpointSqlite c name (slotNo, bhh) = SQL.execute c
+  "INSERT OR REPLACE INTO checkpoints (indexer, slot_no, block_header_hash) values (?, ?, ?)"
+  (name, slotNo, bhh)
+
+-- | Get checkpoint (the place where we left off) for an indexer with @name@
+getCheckpointSqlite :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
+getCheckpointSqlite sqlCon name = do
+  list <- SQL.query sqlCon "SELECT slot_no, block_header_hash FROM checkpoints WHERE indexer = ?" (SQL.Only name)
   case list of
-    [(slotNo, blockHeaderHash)] -> return $ Just $ C.ChainPoint slotNo blockHeaderHash
-    []                          -> return Nothing
-    _                           -> error "getIndexerBookmark: this should never happen!!"
-
-
-findIntervalToBeIndexed :: Interval -> SQL.Connection -> String -> IO Interval
-findIntervalToBeIndexed cliInterval sqlCon tableName = do
-  maybe notFound found <$> getIndexerBookmarkSqlite sqlCon tableName
-  where
-    notFound = cliInterval
-    found bookmark = if chainPointLaterThanFrom bookmark cliInterval
-      then cliInterval { from = bookmark }
-      else cliInterval
-
-updateIntervalFromBookmarks :: LocalChainsyncRuntime -> String -> SQL.Connection -> IO LocalChainsyncRuntime
-updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon = do
-  interval' <- findIntervalToBeIndexed (interval chainsyncRuntime) sqlCon tableName
-  return $ chainsyncRuntime {interval = interval'}
+    [(slotNo, bhh)] -> return $ Just $ C.ChainPoint slotNo bhh
+    []              -> return Nothing
+    _               -> error "getCheckpointSqlite: this should never happen!!"
 
 -- ** Database path and table(s)
 
@@ -192,6 +197,11 @@ class Indexer a where
   persistMany :: Runtime a -> [Event a] -> IO ()
   persistMany runtime events = mapM_ (persist runtime) events
 
+  -- | Set a checkpoint of lates ChainPoint processed. This is used when
+  -- there are no events to be persisted, but sufficient amount of
+  -- time has passed.
+  checkpoint :: Runtime a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
+
 -- * Local chainsync config
 
 type NodeFolder = FilePath
@@ -226,7 +236,7 @@ initializeLocalChainsync config = do
   return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create
--- destination table), create bookmarks database if doesn't exist,
+-- destination table), create checkpoints database if doesn't exist,
 -- update interval in runtime config by whether there is anywhere to
 -- resume from.
 initializeSqlite
@@ -235,8 +245,26 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime = do
   sqlCon <- SQL.open dbPath
   SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
   sqliteInit sqlCon tableName
-  sqliteInitBookmarks sqlCon
-  chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
+  sqliteInitCheckpoints sqlCon
+
+  -- Find ChainPoint from checkpoints table and update chainsync
+  -- runtime configuration if that is later than what was passed in
+  -- from cli configuration.
+  let cliInterval = interval chainsyncRuntime
+  maybeChainPoint <- getCheckpointSqlite sqlCon tableName
+  newInterval <- case maybeChainPoint of
+    Just cp -> if chainPointLaterThanFrom cp cliInterval
+      then do
+      putStrLn $ "Found checkpoint that is later than cli argument from checkpoints table: " <> show cp
+      return $ cliInterval { from = cp }
+      else do
+      putStrLn $ "Found checkpoint that is not later than cli argument, checkpoint: " <> show cp <> ", cli: " <> show (from cliInterval)
+      return cliInterval
+    _ -> do
+      putStrLn $ "No checkpoint found, going with cli starting point: " <> show (from cliInterval)
+      return cliInterval
+  let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
+
   return (sqlCon, chainsyncRuntime')
 
 -- | Static configuration for block source
@@ -276,20 +304,61 @@ runIndexer cli = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> S.effects
     -- Start streaming blocks over local chainsync
-    $ (blockSource localChainsyncRuntime trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
+    $ (blockSource localChainsyncRuntime trace :: Stream Block)
+    -- Pick out ChainPoint
+    & (S.map topLevelChainPoint :: Stream Block -> Stream (SlotNoBhh, Block))
     -- Fold over stream of blocks with state, emit events as `Maybe event`
-    & foldYield (toEvent indexerRuntime) initialState
-    -- Filter out `Nothing`s
-    & S.concat
+    & foldYield (\st (cp, a) -> do
+                    (st', b) <- toEvent indexerRuntime st a
+                    return (st', (cp, b))
+                ) initialState
+
     -- Persist events with `persist` or `persistMany` (buffering writes by
     -- chunkSize in the latter case)
-    & let chunkSize' = fromEnum $ chunkSize localChainsyncRuntime
-      in if chunkSize localChainsyncRuntime > 1
-          then \source -> source
-            & S.chunksOf chunkSize'
-            & S.mapped (\chunk -> do
-                           persistMany indexerRuntime =<< S.toList_ chunk
-                           pure chunk
-                       )
-            & S.concats
-          else S.chain (persist indexerRuntime)
+    & buffered indexerRuntime (chunkSize localChainsyncRuntime)
+
+  where
+    topLevelChainPoint :: Block -> (SlotNoBhh, Block)
+    topLevelChainPoint b = (blockSlotNoBhh b, b)
+
+    buffered
+      :: Runtime a -> Natural
+      -> Stream (SlotNoBhh, Maybe (Event a)) -> Stream (SlotNoBhh, Maybe (Event a))
+    buffered indexerRuntime' bufferSize source = do
+
+      let initialState :: UTCTime -> (Natural, UTCTime, [Event a])
+          initialState t = (0, t, [])
+
+          step :: (Natural, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a)) -> IO ((Natural, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a)))
+          step state@(n, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent) = do
+            now :: UTCTime <- getCurrentTime
+            let isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
+                -- Write checkpoint and return state with last checkpoint time set to `now`
+                writeCheckpoint = checkpoint indexerRuntime' slotNoBhh $> initialState now
+            state' <- case maybeEvent of
+              -- There is an event
+              Just x -> let succN = succ n
+                in if succN == bufferSize || isCheckpointTime
+                -- If buffer is full or if it's checkpoint time, we flush the buffer and checkpoint
+                then do
+                putStrLn $ "Checkpointing by flushing full buffer (buffer size " <> show bufferSize <> ")"
+                persistMany indexerRuntime' (reverse $ x : xs)
+                writeCheckpoint
+                -- Buffer is not full, let's add event to buffer
+                else return (succN, lastCheckpointTime, x : xs)
+              -- It's time to checkpoint, let's persist events and checkpoint.
+              _ | isCheckpointTime -> do
+                putStrLn $ "Checkpointing by adding a row to checkpoints table: " <> show slotNoBhh
+                persistMany indexerRuntime' (reverse xs) -- This is a no-op when `xs` is empty
+                writeCheckpoint
+              -- It's not checkpoint time and there is no event, pass buffer state unchanged.
+                | otherwise -> return state
+
+            return (state', t)
+
+      currentTime :: UTCTime <- lift $ getCurrentTime
+      foldYield step (initialState currentTime) source
+
+type Block = C.BlockInMode C.CardanoMode
+type Stream e = S.Stream (S.Of e) IO ()
+type SlotNoBhh = (C.SlotNo, C.Hash C.BlockHeader)

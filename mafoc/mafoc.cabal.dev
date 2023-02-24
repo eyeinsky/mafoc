@@ -79,6 +79,7 @@ library
     , primitive
     , sqlite-simple
     , streaming
+    , time
     , transformers
     , vector
     , text

@@ -6,8 +6,9 @@ import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig, blockChainPoint, defaultTableName, initializeLocalChainsync, initializeSqlite)
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+                   LocalChainsyncConfig, blockChainPoint, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   setCheckpointSqlite)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi.ScriptTx
 import Marconi.Core.Storable qualified as Marconi
 
@@ -52,3 +53,5 @@ instance Indexer ScriptTx where
 
   persistMany Runtime{sqlConnection, tableName} events =
     Marconi.ScriptTx.sqliteInsert sqlConnection tableName events
+
+  checkpoint Runtime{sqlConnection} t = setCheckpointSqlite sqlConnection "scripttx" t

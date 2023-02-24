@@ -17,7 +17,7 @@ import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
                    LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
 import Marconi.ChainIndex.Indexers qualified as Marconi
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -97,6 +97,10 @@ instance Indexer EpochStakepoolSize where
     return (State extLedgerState maybeEpochNo, chainsyncRuntime', Runtime sqlCon tableName ledgerConfig)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
+
+  checkpoint _runtime _slotNoBhh = return ()
+  -- TODO: write ledger state, add row to checkpoint table; also load
+  -- this ledger state in initialize.
 
 sqliteInit :: SQL.Connection -> String -> IO ()
 sqliteInit c tableName = SQL.execute_ c $

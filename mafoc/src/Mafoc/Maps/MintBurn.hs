@@ -17,8 +17,10 @@ import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Options.Applicative qualified as Opt
 
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, initialize, persist, persistMany, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, initialize, persist, persistMany, toEvent),
+                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   setCheckpointSqlite)
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
 -- | Configuration data type which does double-duty as the tag for the
@@ -62,3 +64,5 @@ instance Indexer MintBurn where
 
   persistMany Runtime{sqlConnection, tableName} events = do
     Marconi.MintBurn.sqliteInsert sqlConnection tableName events
+
+  checkpoint Runtime{sqlConnection} slotNoBhh = setCheckpointSqlite sqlConnection "mintburn" slotNoBhh
