@@ -128,11 +128,11 @@ updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon = do
 
 -- ** Database path and table(s)
 
-data DbPathAndTableName = DbPathAndTableName FilePath (Maybe String)
+data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
   deriving (Show)
 
 defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
-defaultTableName defaultName (DbPathAndTableName dbPath maybeName) = (dbPath, fromMaybe defaultName maybeName)
+defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
 
 -- * Streaming
 

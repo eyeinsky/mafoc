@@ -22,15 +22,19 @@ commonDbPath :: O.Parser FilePath
 commonDbPath = O.strOption (opt 'd' "db-path" "Path to sqlite database.")
 
 commonDbPathAndTableName :: O.Parser DbPathAndTableName
-commonDbPathAndTableName = O.option (O.eitherReader parse) (opt 'd' "db-path" "Path to sqlite database and optionally table name.")
+commonDbPathAndTableName = O.option (O.eitherReader parse) $ opt 'd' "db"
+  "Optional path to sqlite database (defaults to default.db) and a table name (default is indexer-specific)."
+  <> O.value (DbPathAndTableName Nothing Nothing)
   where
     parse :: String -> Either String DbPathAndTableName
-    parse str = let (dbPath, tableName) = L.span (/= ':') str
-      in do
-      dbPath' <- if L.null dbPath then Left "Can't parse empty database path" else Right dbPath
-      DbPathAndTableName dbPath' <$> case tableName of
-        ':' : rest@(_:_) -> Right $ Just rest
-        _                -> Right Nothing
+    parse str = let
+      (dbPath, tableName) = L.span (/= ':') str
+      dbPath' = if L.null dbPath then Nothing else Just dbPath
+      tableName' = case tableName of
+        ':' : rest@(_:_) -> Just rest
+        _                -> Nothing
+      in Right $ DbPathAndTableName dbPath' tableName'
+
 
 commonNodeConfig :: O.Parser FilePath
 commonNodeConfig = O.strOption (opt 'c' "node-config" "Path to node configuration.")
