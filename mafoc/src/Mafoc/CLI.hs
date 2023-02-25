@@ -57,7 +57,9 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
     hashReader = O.maybeReader maybeParseHashBlockHeader <|> O.readerError "Malformed block hash"
 
 commonPipelineSize :: O.Parser Word32
-commonPipelineSize = O.option O.auto (opt 'p' "pipeline-size" "Size of piplined requests.")
+commonPipelineSize = O.option O.auto
+  $ opt 'p' "pipeline-size" "Size of piplined requests."
+  <> O.value 1
 
 commonNetworkId :: O.Parser C.NetworkId
 commonNetworkId = mainnet <|> C.Testnet <$> testnet
@@ -86,7 +88,9 @@ commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
 commonChunkSize :: O.Parser Natural
-commonChunkSize = O.option O.auto (longOpt "chunk-size" "Size of buffer to be inserted into sqlite" <> O.internal)
+commonChunkSize = O.option O.auto
+  $ longOpt "chunk-size" "Size of buffer to be inserted into sqlite"
+  <> O.value 1
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
 commonLocalChainsyncConfig = LocalChainsyncConfig
