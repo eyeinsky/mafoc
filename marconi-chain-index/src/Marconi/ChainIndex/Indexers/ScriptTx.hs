@@ -8,8 +8,9 @@
 module Marconi.ChainIndex.Indexers.ScriptTx where
 
 import Data.ByteString qualified as BS
-import Data.Foldable (foldl', toList)
+import Data.Foldable (toList)
 import Data.Maybe (catMaybes)
+import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.FromField qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
@@ -141,11 +142,7 @@ deriving instance SQL.FromRow ScriptTxRow
 type Query  = StorableQuery  ScriptTxHandle
 type Result = StorableResult ScriptTxHandle
 
-toUpdate
-  :: forall era . C.IsCardanoEra era
-  => [C.Tx era]
-  -> ChainPoint
-  -> StorableEvent ScriptTxHandle
+toUpdate :: forall era . C.IsCardanoEra era => [C.Tx era] -> ChainPoint -> StorableEvent ScriptTxHandle
 toUpdate txs = ScriptTxEvent txScripts'
   where
     txScripts' = map (\tx -> (TxCbor $ C.serialiseToCBOR tx, getTxScripts tx)) txs
@@ -177,23 +174,8 @@ instance Buffered ScriptTxHandle where
     -> ScriptTxHandle
     -> IO ScriptTxHandle
   persistToStorage es h = do
-    let rows = foldl' (\ea e -> ea ++ flatten e) [] es
-        c    = hdlConnection h
-    SQL.executeMany c
-      "INSERT INTO script_transactions (scriptAddress, txCbor, slotNo, blockHash) VALUES (?, ?, ?, ?)" rows
+    sqliteInsert (hdlConnection h) "script_transactions" (toList es)
     pure h
-
-    where
-      flatten :: StorableEvent ScriptTxHandle -> [ScriptTxRow]
-      flatten (ScriptTxEvent txs (ChainPoint sn hsh)) = do
-        (tx, scriptAddrs) <- txs
-        addr <- scriptAddrs
-        pure $ ScriptTxRow { scriptAddress = addr
-                           , txCbor        = tx
-                           , txSlot        = sn
-                           , blockHash     = hsh
-                           }
-      flatten _ = error "There should be no scripts in the genesis block."
 
   {- We want to potentially store data in two formats. The first one is similar (if
      not identical) to the format of data stored in memory; it should contain information
@@ -301,15 +283,38 @@ instance Resumable ScriptTxHandle where
 open :: FilePath -> Depth -> IO ScriptTxIndexer
 open dbPath (Depth k) = do
   c <- SQL.open dbPath
-  SQL.execute_ c "PRAGMA journal_mode=WAL"
-  SQL.execute_ c "CREATE TABLE IF NOT EXISTS script_transactions (scriptAddress TEXT NOT NULL, txCbor BLOB NOT NULL, slotNo INT NOT NULL, blockHash BLOB NOT NULL)"
-  -- Add this index for normal queries.
-  SQL.execute_ c "CREATE INDEX IF NOT EXISTS script_address ON script_transactions (scriptAddress)"
-  -- Add this index for interval queries.
-  SQL.execute_ c "CREATE INDEX IF NOT EXISTS script_address_slot ON script_transactions (scriptAddress, slotNo)"
-  -- This index helps with group by
-  SQL.execute_ c "CREATE INDEX IF NOT EXISTS script_grp ON script_transactions (slotNo)"
+  sqliteInit c "script_transactions"
   emptyState k (ScriptTxHandle c k)
+
+-- * Sqlite
+
+sqliteInit :: SQL.Connection -> String -> IO ()
+sqliteInit c tableName = do
+  SQL.execute_ c "PRAGMA journal_mode=WAL"
+  SQL.execute_ c $ "CREATE TABLE IF NOT EXISTS " <> tableName' <> " (scriptAddress TEXT NOT NULL, txCbor BLOB NOT NULL, slotNo INT NOT NULL, blockHash BLOB NOT NULL)"
+  -- Add this index for normal queries.
+  SQL.execute_ c $ "CREATE INDEX IF NOT EXISTS script_address ON " <> tableName' <> " (scriptAddress)"
+  -- Add this index for interval queries.
+  SQL.execute_ c $ "CREATE INDEX IF NOT EXISTS script_address_slot ON " <> tableName' <> " (scriptAddress, slotNo)"
+  -- This index helps with group by
+  SQL.execute_ c $ "CREATE INDEX IF NOT EXISTS script_grp ON " <> tableName' <> " (slotNo)"
+  where tableName' = fromString tableName
+
+sqliteInsert :: SQL.Connection -> String -> [StorableEvent ScriptTxHandle] -> IO ()
+sqliteInsert c tableName events = SQL.executeMany c
+  ("INSERT INTO " <> fromString tableName <> " (scriptAddress, txCbor, slotNo, blockHash) VALUES (?, ?, ?, ?)")
+  (flatten =<< events)
+  where
+    flatten :: StorableEvent ScriptTxHandle -> [ScriptTxRow]
+    flatten (ScriptTxEvent txs (ChainPoint sn hsh)) = do
+      (tx, scriptAddrs) <- txs
+      addr <- scriptAddrs
+      pure $ ScriptTxRow { scriptAddress = addr
+                         , txCbor        = tx
+                         , txSlot        = sn
+                         , blockHash     = hsh
+                         }
+    flatten _ = error "There should be no scripts in the genesis block."
 
 -- * Copy-paste
 --
