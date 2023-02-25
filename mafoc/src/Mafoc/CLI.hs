@@ -11,7 +11,8 @@ import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
 import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval),
-                   LocalChainsyncConfig (LocalChainsyncConfig), UpTo (CurrentTip, Infinity, SlotNo))
+                   LocalChainsyncConfig (LocalChainsyncConfig), NodeFolderOrSecurityParamOrNodeConfig,
+                   SecurityParamOrNodeConfig, UpTo (CurrentTip, Infinity, SlotNo))
 
 -- * Options
 
@@ -76,8 +77,13 @@ commonNetworkId = mainnet <|> C.Testnet <$> testnet
 commonSecurityParam :: O.Parser Natural
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
-commonSecurityParamEither :: O.Parser (Either Natural FilePath)
+commonSecurityParamEither :: O.Parser SecurityParamOrNodeConfig
 commonSecurityParamEither = Left <$> commonSecurityParam <|> Right <$> commonNodeConfig
+
+commonNetwork :: O.Parser NodeFolderOrSecurityParamOrNodeConfig
+commonNetwork =
+      Left  <$> O.strArgument (O.metavar "NODE-FOLDER-FOR-ITS-CONFIG-AND-DB" <> O.help "Path to cardano-node's folder.")
+  <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
 
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither)
@@ -94,8 +100,7 @@ commonChunkSize = O.option O.auto
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
 commonLocalChainsyncConfig = LocalChainsyncConfig
-  <$> commonSocketPath
-  <*> commonSecurityParamEither
+  <$> commonNetwork
   <*> commonInterval
   <*> commonNetworkId
   <*> commonLogging

@@ -14,6 +14,7 @@ import Database.SQLite.Simple qualified as SQL
 import Numeric.Natural (Natural)
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
+import System.FilePath ((</>))
 
 import Cardano.Api qualified as C
 import Cardano.BM.Data.Trace (Trace)
@@ -23,6 +24,7 @@ import Cardano.Streaming qualified as CS
 import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Logging qualified as Marconi
+import Ouroboros.Consensus.Protocol.TPraos qualified as TPraos
 
 -- * Interval
 
@@ -69,7 +71,10 @@ takeUpTo upTo' source = case upTo' of
 
 getSecurityParam :: FilePath -> IO Natural
 getSecurityParam nodeConfig = do
-  (env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
+  (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
+  let consensusConfig = C.envProtocolConfig env -- :: TPraos.ConsensusConfig (HFC.HardForkProtocol (Consensus.CardanoEras Shelley.StandardCrypto))
+      -- _ = TPraos.tpraosNetworkId $ TPraos.tpraosParams TPraos.consensusConfig
+      -- networkMagic = undefined
   pure $ fromIntegral $ C.envSecurityParam env
 
 -- | Convert event from @ChainSyncEvent@ to @Event@.
@@ -190,22 +195,38 @@ class Indexer a where
   persistMany :: Runtime a -> [Event a] -> IO ()
   persistMany runtime events = mapM_ (persist runtime) events
 
+-- * Local chainsync config
+
+type NodeFolder = FilePath
+type NodeConfig = FilePath
+type SocketPath = FilePath
+type SecurityParamOrNodeConfig = Either Natural NodeConfig
+type NodeFolderOrSecurityParamOrNodeConfig = Either FilePath (SocketPath, SecurityParamOrNodeConfig)
+
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig = LocalChainsyncConfig
-  { socketPath                :: String
-  , securityParamOrNodeConfig :: Either Natural FilePath
-  , interval_                 :: Interval
-  , networkId                 :: C.NetworkId
-  , logging_                  :: Bool
-  , pipelineSize_             :: Word32
-  , chunkSize_                :: Natural
+  { nodeFolderOrSecurityParamOrNodeConfig :: NodeFolderOrSecurityParamOrNodeConfig
+  , interval_                             :: Interval
+  , networkId                             :: C.NetworkId
+  , logging_                              :: Bool
+  , pipelineSize_                         :: Word32
+  , chunkSize_                            :: Natural
   } deriving Show
 
 initializeLocalChainsync :: LocalChainsyncConfig -> IO LocalChainsyncRuntime
 initializeLocalChainsync config = do
   let interval' = interval_ config
-  let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) (socketPath config)
-  k <- either pure getSecurityParam $ securityParamOrNodeConfig config
+  (socketPath, k) <- case nodeFolderOrSecurityParamOrNodeConfig config of
+    Left nodeFolder -> let
+      nodeConfig = nodeFolder </> "config" </> "config.json"
+      socketPath = nodeFolder </> "socket" </> "node.socket"
+      in do
+      k <- getSecurityParam nodeConfig
+      pure (socketPath, k)
+    Right (socketPath, securityParamOrNodeConfig) -> do
+      k <- either pure getSecurityParam securityParamOrNodeConfig
+      pure (socketPath, k)
+  let localNodeCon = CS.mkLocalNodeConnectInfo (networkId config) socketPath
   return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create

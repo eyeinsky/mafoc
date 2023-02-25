@@ -67,13 +67,16 @@ library
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:   cardano-api
+  build-depends:
+    , cardano-api
+    , ouroboros-consensus-protocol
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
   build-depends:
     , base           >=4.9 && <5
+    , filepath
     , primitive
     , sqlite-simple
     , streaming

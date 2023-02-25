@@ -73,6 +73,7 @@ library
     , iohk-monitoring
     , ouroboros-consensus
     , ouroboros-consensus-cardano
+    , ouroboros-consensus-protocol
 
   ------------------------
   -- Non-IOG dependencies
@@ -82,6 +83,7 @@ library
     , base                  >=4.9 && <5
     , bytestring
     , containers
+    , filepath
     , optparse-applicative
     , primitive
     , sqlite-simple
