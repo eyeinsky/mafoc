@@ -53,6 +53,7 @@ library
     Mafoc.Maps.BlockBasics
     Mafoc.Maps.MintBurn
     Mafoc.Maps.NoOp
+    Mafoc.Maps.ScriptTx
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
 

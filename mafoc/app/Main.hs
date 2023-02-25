@@ -15,6 +15,7 @@ import Mafoc.Folds.EpochStakepoolSize qualified as EpochStakepoolSize
 import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
 import Mafoc.Maps.NoOp qualified as NoOp
+import Mafoc.Maps.ScriptTx qualified as ScriptTx
 import Mafoc.RollbackRingBuffer (RollbackException)
 import Mafoc.Speed qualified as Speed
 
@@ -28,6 +29,7 @@ main = printRollbackException $ parseAndPrintCli >>= \case
   MintBurn configFromCli -> runIndexer configFromCli
   NoOp configFromCli -> runIndexer configFromCli
   EpochStakepoolSize configFromCli -> runIndexer configFromCli
+  ScriptTx configFromCli -> runIndexer configFromCli
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
@@ -46,6 +48,7 @@ data Command
   | MintBurn MintBurn.MintBurn
   | NoOp NoOp.NoOp
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
+  | ScriptTx ScriptTx.ScriptTx
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
