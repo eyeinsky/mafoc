@@ -233,6 +233,7 @@ initializeSqlite
   :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
 initializeSqlite dbPath tableName sqliteInit chainsyncRuntime = do
   sqlCon <- SQL.open dbPath
+  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
   sqliteInit sqlCon tableName
   sqliteInitBookmarks sqlCon
   chainsyncRuntime' <- updateIntervalFromBookmarks chainsyncRuntime tableName sqlCon
