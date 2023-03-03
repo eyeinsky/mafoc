@@ -26,7 +26,7 @@ instance Indexer NoOp where
   type Event NoOp = ()
   data State NoOp = EmptyState
   data Runtime NoOp = Runtime
-  toEvent _runtime _blockInMode _state = pure (EmptyState, Just ())
+  toEvent _runtime _state _blockInMode = pure (EmptyState, Just ())
   initialize NoOp{chainsync, dbPathAndTableName} = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName

@@ -148,16 +148,16 @@ loopM source f = loop source
         _ <- f event
         loop source''
 
--- | Helper to create loops
-streamFold :: Monad m => (a -> b -> m (b, c)) -> b -> S.Stream (S.Of a) m r -> S.Stream (S.Of c) m r
-streamFold f acc_ source_ = loop acc_ source_
+-- | Fold a stream of @a@s yield a stream of @b@s while keeping a state of @st".
+foldYield :: Monad m => (st -> a -> m (st, b)) -> st -> S.Stream (S.Of a) m r -> S.Stream (S.Of b) m r
+foldYield f st_ source_ = loop st_ source_
   where
-    loop acc source = lift (S.next source) >>= \case
+    loop st source = lift (S.next source) >>= \case
       Left r -> pure r
       Right (e, source') -> do
-        (acc', e') <- lift $ f e acc
+        (st', e') <- lift $ f st e
         S.yield e'
-        loop acc' source'
+        loop st' source'
 
 -- * Indexer class
 
@@ -178,7 +178,7 @@ class Indexer a where
   data State a
 
   -- | Fold a block into an event and produce a new state.
-  toEvent :: Runtime a -> C.BlockInMode C.CardanoMode -> State a -> IO (State a, Maybe (Event a))
+  toEvent :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> IO (State a, Maybe (Event a))
 
   -- | Initialize an indexer and return its runtime configuration. E.g
   -- open the destination to where data is persisted, etc.
@@ -278,7 +278,7 @@ runIndexer cli = do
     -- Start streaming blocks over local chainsync
     $ (blockSource localChainsyncRuntime trace :: S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ())
     -- Fold over stream of blocks with state, emit events as `Maybe event`
-    & streamFold (toEvent indexerRuntime) initialState
+    & foldYield (toEvent indexerRuntime) initialState
     -- Filter out `Nothing`s
     & S.concat
     -- Persist events with `persist` or `persistMany` (buffering writes by

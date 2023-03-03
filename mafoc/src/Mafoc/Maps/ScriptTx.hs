@@ -36,7 +36,7 @@ instance Indexer ScriptTx where
     }
   data State ScriptTx = EmptyState
 
-  toEvent _runtime blockInMode@(C.BlockInMode (C.Block _ txs) _) _state = pure (EmptyState, event)
+  toEvent _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = pure (EmptyState, event)
     where
       event = let
         event'@(Marconi.ScriptTx.ScriptTxEvent txScripts _) = Marconi.ScriptTx.toUpdate txs (blockChainPoint blockInMode)

@@ -46,7 +46,7 @@ instance Indexer BlockBasics where
     , tableName     :: String
     }
 
-  toEvent _runtime blockInMode _state = pure (EmptyState, Just $ blockToRow blockInMode)
+  toEvent _runtime _state blockInMode = pure (EmptyState, Just $ blockToRow blockInMode)
 
   persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
 
