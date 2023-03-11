@@ -27,7 +27,6 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
-import Cardano.Streaming.Helpers (envNetworkId)
 import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Logging qualified as Marconi
@@ -56,40 +55,41 @@ chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
 takeUpTo
   :: Trace.Trace IO TS.Text
   -> UpTo
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) (cp, C.ChainTip))) IO ()
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) (cp, C.ChainTip))) IO ()
+  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) IO ()
+  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) IO ()
 takeUpTo trace upTo' source = case upTo' of
   SlotNo slotNo -> do
     lift $ traceDebug trace $ "Index up to " <> show slotNo
     flip S.takeWhile source $ \case
-      RB.RollForward blk _ -> blockSlotNo blk <= slotNo
-      _                    -> True
+      RB.RollForward _blk cp _ -> chainPointSlotNo cp <= slotNo
+      RB.RollBackward{}        -> True
   Infinity -> source
   CurrentTip -> S.lift (S.next source) >>= \case
     Left r -> return r
     Right (event, source') -> do
-      lift $ traceDebug trace $ "Indexing up to current tip, which is: " <> show (getTipPoint event)
+      let tip = getTipPoint event
+      lift $ traceDebug trace $ "Indexing up to current tip, which is: " <> show tip
       S.yield event -- We can always yield the current event, as that
                     -- is the source for the upper bound anyway.
       flip S.takeWhile source' $ \case
-        RB.RollForward blk _ -> blockChainPoint blk <= getTipPoint event
-        _                    -> True
+        RB.RollForward _blk cp _ct -> cp <= tip
+        RB.RollBackward{}          -> True -- We skip rollbacks as these can ever only to an earlier point
       lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <> show (getTipPoint event) <> ")"
 
   where
-    getTipPoint :: RB.Event a (b, C.ChainTip) -> C.ChainPoint
+    getTipPoint :: RB.Event a C.ChainPoint -> C.ChainPoint
     getTipPoint = \case
-      RB.RollForward _ (_, ct) -> C.chainTipToChainPoint ct
-      RB.RollBackward (_, ct)  -> C.chainTipToChainPoint ct
+      RB.RollForward _e _cp ct -> ct
+      RB.RollBackward _cp ct   -> ct
 
 -- | Convert event from @ChainSyncEvent@ to @Event@.
 fromChainSyncEvent
   :: Monad m
   => S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) m r
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) (C.ChainPoint, C.ChainTip))) m r
+  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) m r
 fromChainSyncEvent = S.map $ \e -> case e of
-  CS.RollForward a ct   -> RB.RollForward a (blockChainPoint a, ct)
-  CS.RollBackward cp ct -> RB.RollBackward (cp, ct)
+  CS.RollForward blk ct -> RB.RollForward blk (blockChainPoint blk) (C.chainTipToChainPoint ct)
+  CS.RollBackward rp ct -> RB.RollBackward rp (C.chainTipToChainPoint ct)
 
 -- * Sqlite
 

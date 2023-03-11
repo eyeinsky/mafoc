@@ -13,10 +13,9 @@ import Data.Vector.Generic.Mutable qualified as VGM
 import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
-
 data Event a p
-  = RollForward a p
-  | RollBackward p
+  = RollForward a p p
+  | RollBackward p p
 
 data RollbackException e
   = RollbackLocationNotFound e
@@ -34,8 +33,8 @@ rollbackRingBuffer bufferSizeNat eventStream = let
     else let loop source = lift (S.next source) >>= \case
                Left r -> pure r
                Right (event, source') -> case event of
-                 RollBackward cp -> lift $ IO.throwIO $ RollbackLocationNotFound cp
-                 RollForward a _ -> S.yield a >> loop source'
+                 RollBackward rp _cp   -> lift $ IO.throwIO $ RollbackLocationNotFound rp
+                 RollForward a _ep _cp -> S.yield a >> loop source'
       in loop eventStream
 
 -- | Fill phase, don't yield anything. Consume ChainSyncEvents and
@@ -50,15 +49,15 @@ fill
 fill i j source bufferSize vector = lift (S.next source) >>= \case
   Left r -> pure r
   Right (event, source') -> case event of
-    RollForward a p -> do
-      lift $ VGM.unsafeWrite vector i (a, p)
+    RollForward a ep _cp -> do
+      lift $ VGM.unsafeWrite vector i (a, ep)
       let i' = (i + 1) `rem` bufferSize
           j' = j + 1
       if j' == bufferSize
         then fillYield i' source' bufferSize vector
         else fill i' j' source' bufferSize vector
 
-    RollBackward p -> rewind p i j source' bufferSize vector
+    RollBackward p _ -> rewind p i j source' bufferSize vector
 
 -- | Fill & yield phase. Buffer is full in the beginning, but will
 -- need to be refilled when a rollback occurs.
@@ -66,12 +65,12 @@ fillYield :: (Eq p, Show p, Typeable p) => Int -> S.Stream (S.Of (Event a p)) IO
 fillYield i source bufferSize vector = lift (S.next source) >>= \case
   Left r -> pure r
   Right (event, source') -> case event of
-    RollForward a p -> do
-      (a', _) <- lift $ VGM.exchange vector i (a, p)
+    RollForward a ep _cp -> do
+      (a', _) <- lift $ VGM.exchange vector i (a, ep)
       S.yield a'
       let i' = (i + 1) `rem` bufferSize
       fillYield i' source' bufferSize vector
-    RollBackward p -> rewind p i bufferSize source' bufferSize vector
+    RollBackward rp _ -> rewind rp i bufferSize source' bufferSize vector
 
 rewind :: (Eq p, Show p, Typeable p) => p -> Int -> Int -> S.Stream (S.Of (Event a p)) IO r -> Int -> VG.Mutable V.Vector (PrimState IO) (a, p) -> S.Stream (S.Of a) IO r
 rewind p i j source' bufferSize vector = do
@@ -120,4 +119,4 @@ calculateRewind foundAtIndex vectorSize i j = let
   in (i' `rem` vectorSize, j')
 
 ignoreRollbacks :: Monad m => S.Stream (S.Of (Event a p)) m r -> S.Stream (S.Of a) m r
-ignoreRollbacks = S.mapMaybe (\case RollForward e _ -> Just e; _ -> Nothing)
+ignoreRollbacks = S.mapMaybe (\case RollForward e _ _ -> Just e; _ -> Nothing)

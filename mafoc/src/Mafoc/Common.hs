@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
@@ -33,3 +34,8 @@ blockSlotNoBhh (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs
 
 blockSlotNo :: C.BlockInMode mode -> C.SlotNo
 blockSlotNo (C.BlockInMode (C.Block (C.BlockHeader slotNo _ _) _) _) = slotNo
+
+chainPointSlotNo :: C.ChainPoint -> C.SlotNo
+chainPointSlotNo = \case
+  C.ChainPoint slotNo _ -> slotNo
+  C.ChainPointAtGenesis -> C.SlotNo 0

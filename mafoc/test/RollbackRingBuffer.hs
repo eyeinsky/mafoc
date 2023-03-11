@@ -7,7 +7,6 @@ module RollbackRingBuffer where
 import Control.Exception qualified as IO
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
-import Data.String (fromString)
 import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
@@ -64,17 +63,17 @@ rollbackRingBufferComprehensiveTest = H.property $ do
       source :: IntStream
       source = do
         forM_ events (S.yield . mkEvent)
-        S.yield $ RollBackward $ fromEnum rollbackPoint
+        S.yield $ RollBackward (fromEnum rollbackPoint) undefined
 
   liftIO (IO.try $ S.toList_ $ intRollbackRingBuffer source) >>= \case
-    Left (RollbackLocationNotFound (p :: Int)) -> if
+    Left (RollbackLocationNotFound (_ :: Int)) -> if
       | rollbackPoint >= nEvents -> do
-          H.label $ "Rollback point '" <> fromString (show p) <> "' not in generated events"
+          H.label $ "Rollback point not in generated events"
           H.success
       | rollbackPoint < nEvents - bufferSize -> do
-          H.label $ "Rollback point '" <> fromString (show p) <> "' not in buffer anymore"
+          H.label $ "Rollback point not in buffer anymore"
           H.success
-      | otherwise -> fail $ "Rollback point '" <> fromString (show p) <> "' was not found, but none of the valid conditions for it matched !!"
+      | otherwise -> fail $ "Rollback point was not found, but none of the valid conditions for it matched !!"
 
     Right overflow -> if nEvents <= bufferSize
       then do
@@ -92,4 +91,4 @@ rollbackRingBufferComprehensiveTest = H.property $ do
 
 -- | Make an event where payload and point are the same.
 mkEvent :: a -> Event a a
-mkEvent a = RollForward a a
+mkEvent a = RollForward a a a
