@@ -88,10 +88,10 @@ instance Indexer EpochStakepoolSize where
             _                   -> Nothing
     return (newIndexerState, maybeEvent)
 
-  initialize EpochStakepoolSize{chainsync, nodeConfig, dbPathAndTableName} = do
+  initialize EpochStakepoolSize{chainsync, nodeConfig, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     (ledgerConfig, extLedgerState) <- liftIO $ Marconi.getInitialExtLedgerState nodeConfig
     let maybeEpochNo = Marconi.getEpochNo extLedgerState
     return (State extLedgerState maybeEpochNo, chainsyncRuntime', Runtime sqlCon tableName ledgerConfig)

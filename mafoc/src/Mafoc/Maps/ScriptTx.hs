@@ -45,10 +45,10 @@ instance Indexer ScriptTx where
              [] -> Nothing
              _  -> Just event'
 
-  initialize ScriptTx{chainsync, dbPathAndTableName} = do
+  initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.ScriptTx.sqliteInit chainsyncRuntime
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.ScriptTx.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events =

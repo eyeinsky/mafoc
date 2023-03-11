@@ -84,6 +84,7 @@ library
     , containers
     , filepath
     , optparse-applicative
+    , prettyprinter
     , primitive
     , sqlite-simple
     , stm

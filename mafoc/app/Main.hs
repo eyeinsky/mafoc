@@ -20,7 +20,7 @@ import Mafoc.RollbackRingBuffer (RollbackException)
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
-main = printRollbackException $ parseAndPrintCli >>= \case
+main = printRollbackException $ Opt.execParser cmdParserInfo >>= \case
   Speed what -> case what of
     Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
     Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
@@ -33,12 +33,6 @@ main = printRollbackException $ parseAndPrintCli >>= \case
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
-
-parseAndPrintCli :: IO Command
-parseAndPrintCli = do
-  cmd <- Opt.execParser cmdParserInfo
-  print cmd
-  return cmd
 
 -- * Arguments
 

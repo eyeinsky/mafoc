@@ -29,10 +29,10 @@ instance Indexer NoOp where
   data State NoOp = EmptyState
   data Runtime NoOp = Runtime { sqlConnection :: SQL.Connection }
   toEvent _runtime _state _blockInMode = pure (EmptyState, Nothing)
-  initialize NoOp{chainsync, dbPathAndTableName} = do
+  initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon)
   persist _runtime _event = return ()
   checkpoint Runtime{sqlConnection} slotNoBhh = setCheckpointSqlite sqlConnection "noop" slotNoBhh

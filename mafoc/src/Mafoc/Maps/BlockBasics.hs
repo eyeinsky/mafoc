@@ -51,10 +51,10 @@ instance Indexer BlockBasics where
 
   persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
 
-  initialize BlockBasics{chainsync, dbPathAndTableName} = do
+  initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   checkpoint Runtime{sqlConnection} slotNoBhh = setCheckpointSqlite sqlConnection "blockbasics" slotNoBhh
