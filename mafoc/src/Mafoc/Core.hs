@@ -4,8 +4,10 @@
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
-module Mafoc.Core where
+module Mafoc.Core
+  ( module Mafoc.Core
+  , module Mafoc.Common
+  ) where
 
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Function ((&))
@@ -31,6 +33,9 @@ import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Logging qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
+
+import Mafoc.Common (Block, SlotNoBhh, Stream, blockChainPoint, blockSlotNoBhh, chainPointSlotNo,
+                     getSecurityParamAndNetworkId)
 
 -- * Interval
 
@@ -77,13 +82,6 @@ takeUpTo trace upTo' source = case upTo' of
       RB.RollForward _ (_, ct) -> C.chainTipToChainPoint ct
       RB.RollBackward (_, ct)  -> C.chainTipToChainPoint ct
 
--- * Additions to cardano-api
-
-getSecurityParamAndNetworkId :: FilePath -> IO (Natural, C.NetworkId)
-getSecurityParamAndNetworkId nodeConfig = do
-  (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
-  pure (fromIntegral $ C.envSecurityParam env, envNetworkId env)
-
 -- | Convert event from @ChainSyncEvent@ to @Event@.
 fromChainSyncEvent
   :: Monad m
@@ -92,24 +90,6 @@ fromChainSyncEvent
 fromChainSyncEvent = S.map $ \e -> case e of
   CS.RollForward a ct   -> RB.RollForward a (blockChainPoint a, ct)
   CS.RollBackward cp ct -> RB.RollBackward (cp, ct)
-
-instance Ord C.ChainTip where
-  compare C.ChainTipAtGenesis C.ChainTipAtGenesis = EQ
-  compare C.ChainTipAtGenesis _                   = LT
-  compare _ C.ChainTipAtGenesis                   = GT
-  compare (C.ChainTip a _ _) (C.ChainTip b _ _)   = compare a b
-
--- ** Block accessors
-
--- | Create a ChainPoint from BlockInMode
-blockChainPoint :: C.BlockInMode mode -> C.ChainPoint
-blockChainPoint (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = C.ChainPoint slotNo hash
-
-blockSlotNoBhh :: C.BlockInMode mode -> SlotNoBhh
-blockSlotNoBhh (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = (slotNo, hash)
-
-blockSlotNo :: C.BlockInMode mode -> C.SlotNo
-blockSlotNo (C.BlockInMode (C.Block (C.BlockHeader slotNo _ _) _) _) = slotNo
 
 -- * Sqlite
 
@@ -378,9 +358,7 @@ runIndexer cli = do
       currentTime :: UTCTime <- lift $ getCurrentTime
       foldYield step (initialState currentTime) source
 
-type Block = C.BlockInMode C.CardanoMode
 type Stream e = S.Stream (S.Of e) IO ()
-type SlotNoBhh = (C.SlotNo, C.Hash C.BlockHeader)
 
 traceInfo :: Trace.Trace IO TS.Text -> String -> IO ()
 traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
