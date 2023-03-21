@@ -2,10 +2,13 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
+import Data.Coerce (coerce)
+import Data.Word (Word64)
+import Numeric.Natural (Natural)
+
 import Cardano.Api qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
-import Numeric.Natural (Natural)
 
 -- * Additions to cardano-api
 
@@ -22,6 +25,18 @@ instance Ord C.ChainTip where
   compare C.ChainTipAtGenesis _                   = LT
   compare _ C.ChainTipAtGenesis                   = GT
   compare (C.ChainTip a _ _) (C.ChainTip b _ _)   = compare a b
+
+tipDistance :: C.ChainPoint -> C.ChainTip -> Natural
+tipDistance C.ChainPoint{} C.ChainTipAtGenesis = error "This should never happen"
+tipDistance cp ct = let
+  cp' = case cp of
+    C.ChainPointAtGenesis -> 0
+    C.ChainPoint slotNo _ -> slotNo
+  ct' = case ct of
+    C.ChainTipAtGenesis   -> 0
+    C.ChainTip slotNo _ _ -> slotNo
+  d = ct' - cp'
+  in fromIntegral (coerce d :: Word64) :: Natural
 
 -- ** Block accessors
 
