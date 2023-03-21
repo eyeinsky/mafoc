@@ -33,7 +33,7 @@ import Marconi.ChainIndex.Logging qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
-import Mafoc.Common (Block, SlotNoBhh, Stream, blockChainPoint, blockSlotNoBhh, chainPointSlotNo,
+import Mafoc.Common (Block, SlotNoBhh, Stream, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo,
                      getSecurityParamAndNetworkId)
 
 -- * Interval
@@ -55,32 +55,32 @@ chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
 takeUpTo
   :: Trace.Trace IO TS.Text
   -> UpTo
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) IO ()
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) IO ()
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
 takeUpTo trace upTo' source = case upTo' of
   SlotNo slotNo -> do
     lift $ traceDebug trace $ "Index up to " <> show slotNo
     flip S.takeWhile source $ \case
-      RB.RollForward _blk cp _ -> chainPointSlotNo cp <= slotNo
-      RB.RollBackward{}        -> True
+      CS.RollForward blk _ -> blockSlotNo blk <= slotNo
+      CS.RollBackward{}    -> True
   Infinity -> source
   CurrentTip -> S.lift (S.next source) >>= \case
     Left r -> return r
     Right (event, source') -> do
-      let tip = getTipPoint event
+      let tip = getTipPoint event :: C.ChainPoint
       lift $ traceDebug trace $ "Indexing up to current tip, which is: " <> show tip
       S.yield event -- We can always yield the current event, as that
                     -- is the source for the upper bound anyway.
       flip S.takeWhile source' $ \case
-        RB.RollForward _blk cp _ct -> cp <= tip
-        RB.RollBackward{}          -> True -- We skip rollbacks as these can ever only to an earlier point
+        CS.RollForward blk _ct -> blockChainPoint blk <= tip
+        CS.RollBackward{}      -> True -- We skip rollbacks as these can ever only to an earlier point
       lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <> show (getTipPoint event) <> ")"
 
   where
-    getTipPoint :: RB.Event a C.ChainPoint -> C.ChainPoint
+    getTipPoint :: CS.ChainSyncEvent a -> C.ChainPoint
     getTipPoint = \case
-      RB.RollForward _e _cp ct -> ct
-      RB.RollBackward _cp ct   -> ct
+      CS.RollForward _blk ct -> C.chainTipToChainPoint ct
+      CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
 
 -- | Convert event from @ChainSyncEvent@ to @Event@.
 fromChainSyncEvent
