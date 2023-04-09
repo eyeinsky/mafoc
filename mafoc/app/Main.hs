@@ -32,7 +32,7 @@ main = printRollbackException $ Opt.execParser cmdParserInfo >>= \case
   ScriptTx configFromCli -> runIndexer configFromCli
 
 printRollbackException :: IO () -> IO ()
-printRollbackException io = io `IO.catch` (\(a :: RollbackException C.ChainPoint) -> print a)
+printRollbackException io = io `IO.catch` (\(a :: IO.SomeException) -> print a)
 
 -- * Arguments
 

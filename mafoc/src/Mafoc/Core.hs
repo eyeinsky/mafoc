@@ -59,7 +59,7 @@ takeUpTo
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
 takeUpTo trace upTo' source = case upTo' of
   SlotNo slotNo -> do
-    lift $ traceDebug trace $ "Index up to " <> show slotNo
+    lift $ traceDebug trace $ "Will index up to " <> show slotNo
     flip S.takeWhile source $ \case
       CS.RollForward blk _ -> blockSlotNo blk <= slotNo
       CS.RollBackward{}    -> True
@@ -68,7 +68,7 @@ takeUpTo trace upTo' source = case upTo' of
     Left r -> return r
     Right (event, source') -> do
       let tip = getTipPoint event :: C.ChainPoint
-      lift $ traceDebug trace $ "Indexing up to current tip, which is: " <> show tip
+      lift $ traceDebug trace $ "Will index up to current tip, which is: " <> show tip
       S.yield event -- We can always yield the current event, as that
                     -- is the source for the upper bound anyway.
       flip S.takeWhile source' $ \case
@@ -295,9 +295,9 @@ runIndexer cli = do
     (initialState, localChainsyncRuntime, indexerRuntime) <- initialize cli trace
     S.effects
       -- Start streaming blocks over local chainsync
-      $ (blockSource localChainsyncRuntime trace :: Stream Block)
+      $ (blockSource localChainsyncRuntime trace)
       -- Pick out ChainPoint
-      & (S.map topLevelChainPoint :: Stream Block -> Stream (SlotNoBhh, Block))
+      & (S.map topLevelChainPoint)
       -- Fold over stream of blocks with state, emit events as `Maybe event`
       & foldYield (\st (cp, a) -> do
                       (st', b) <- toEvent indexerRuntime st a
@@ -314,7 +314,8 @@ runIndexer cli = do
 
     buffered
       :: Runtime a -> Trace.Trace IO TS.Text -> Natural
-      -> Stream (SlotNoBhh, Maybe (Event a)) -> Stream (SlotNoBhh, Maybe (Event a))
+      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a))) IO ()
+      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a))) IO ()
     buffered indexerRuntime' trace bufferSize source = do
 
       let initialState :: UTCTime -> (Natural, UTCTime, [Event a])
@@ -357,8 +358,6 @@ runIndexer cli = do
 
       currentTime :: UTCTime <- lift $ getCurrentTime
       foldYield step (initialState currentTime) source
-
-type Stream e = S.Stream (S.Of e) IO ()
 
 traceInfo :: Trace.Trace IO TS.Text -> String -> IO ()
 traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
