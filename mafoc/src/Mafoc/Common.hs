@@ -3,7 +3,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Coerce (coerce)
 import Data.Word (Word64)
 import Numeric.Natural (Natural)
@@ -60,12 +60,34 @@ chainPointSlotNo = \case
 -- * Streaming
 
 streamPassReturn
-  :: Monad m => S.Stream (S.Of a) m r
+  :: Monad m
+  => S.Stream (S.Of a) m r
   -> (a -> S.Stream (S.Of a) m r -> S.Stream (S.Of b) m r)
   -> S.Stream (S.Of b) m r
 streamPassReturn source f = lift (S.next source) >>= \case
   Left r                 -> pure r
   Right (event, source') -> f event source'
+
+-- | Consume a stream @source@ in a loop and run effect @f@ on it.
+loopM :: (MonadTrans t1, Monad m, Monad (t1 m)) => S.Stream (S.Of t2) m b -> (t2 -> t1 m a) -> t1 m b
+loopM source f = loop source
+  where
+    loop source' = lift (S.next source') >>= \case
+      Left r -> pure r
+      Right (event, source'') -> do
+        _ <- f event
+        loop source''
+
+-- | Fold a stream of @a@'s, yield a stream of @b@s, while keeping a state of @st".
+foldYield :: Monad m => (st -> a -> m (st, b)) -> st -> S.Stream (S.Of a) m r -> S.Stream (S.Of b) m r
+foldYield f st source = loop st source
+  where
+    loop st' source' = lift (S.next source') >>= \case
+      Left r -> pure r
+      Right (e, source'') -> do
+        (st'', e') <- lift $ f st' e
+        S.yield e'
+        loop st'' source''
 
 -- * Base
 

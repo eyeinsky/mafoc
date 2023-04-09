@@ -84,7 +84,7 @@ commonSecurityParamEither =
 
 commonNetwork :: O.Parser NodeFolderOrSecurityParamOrNodeConfig
 commonNetwork =
-      Left  <$> O.strArgument (O.metavar "NODE-FOLDER-FOR-ITS-CONFIG-AND-DB" <> O.help "Path to cardano-node's folder.")
+      Left  <$> O.strArgument (O.metavar "NODE-FOLDER" <> O.help "Path to cardano-node's folder. The program will figure out socket path, security parameter, network and node config path from it.")
   <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
 
 commonInterval :: O.Parser Interval
@@ -95,9 +95,9 @@ commonInterval = O.option (O.eitherReader parseIntervalEither)
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
-commonChunkSize :: O.Parser Natural
-commonChunkSize = O.option O.auto
-  $ longOpt "chunk-size" "Size of buffer to be inserted into sqlite"
+commonBatchSize :: O.Parser Natural
+commonBatchSize = O.option O.auto
+  $ longOpt "batch-size" "Batche size for persisting events"
   <> O.value 1
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
@@ -106,7 +106,7 @@ commonLocalChainsyncConfig = LocalChainsyncConfig
   <*> commonInterval
   <*> commonLogging
   <*> commonPipelineSize
-  <*> commonChunkSize
+  <*> commonBatchSize
 
 -- * String parsers
 

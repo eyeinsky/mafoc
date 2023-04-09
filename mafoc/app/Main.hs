@@ -6,7 +6,6 @@ module Main where
 import Control.Exception qualified as IO
 import Options.Applicative qualified as Opt
 
-import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
@@ -55,6 +54,7 @@ cmdParser = Opt.subparser
  <> Opt.command "blockbasics" (BlockBasics <$> BlockBasics.parseCli)
  <> Opt.command "mintburn" (MintBurn <$> MintBurn.parseCli)
  <> Opt.command "noop" (NoOp <$> NoOp.parseCli)
+ <> Opt.command "epochstakepoolsize" (EpochStakepoolSize <$> EpochStakepoolSize.parseCli)
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

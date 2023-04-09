@@ -111,7 +111,6 @@ executable mafoc
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies

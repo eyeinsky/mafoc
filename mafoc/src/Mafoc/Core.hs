@@ -9,7 +9,7 @@ module Mafoc.Core
   , module Mafoc.Common
   ) where
 
-import Control.Monad.Trans.Class (MonadTrans, lift)
+import Control.Monad.Trans.Class (lift)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as TS
@@ -33,7 +33,7 @@ import Marconi.ChainIndex.Logging qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
-import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo,
+import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
                      getSecurityParamAndNetworkId, tipDistance)
 
 -- * Interval
@@ -120,27 +120,6 @@ defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromM
 
 -- * Streaming
 
--- | Consume a stream @source@ in a loop and run effect @f@ on it.
-loopM :: (MonadTrans t1, Monad m, Monad (t1 m)) => S.Stream (S.Of t2) m b -> (t2 -> t1 m a) -> t1 m b
-loopM source f = loop source
-  where
-    loop source' = lift (S.next source') >>= \case
-      Left r -> pure r
-      Right (event, source'') -> do
-        _ <- f event
-        loop source''
-
--- | Fold a stream of @a@s yield a stream of @b@s while keeping a state of @st".
-foldYield :: Monad m => (st -> a -> m (st, b)) -> st -> S.Stream (S.Of a) m r -> S.Stream (S.Of b) m r
-foldYield f st_ source_ = loop st_ source_
-  where
-    loop st source = lift (S.next source) >>= \case
-      Left r -> pure r
-      Right (e, source') -> do
-        (st', e') <- lift $ f st e
-        S.yield e'
-        loop st' source'
-
 -- * Indexer class
 
 class Indexer a where
@@ -193,7 +172,7 @@ data LocalChainsyncConfig = LocalChainsyncConfig
   , interval_                             :: Interval
   , logging_                              :: Bool
   , pipelineSize_                         :: Word32
-  , chunkSize_                            :: Natural
+  , batchSize_                            :: Natural
   } deriving Show
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
@@ -213,7 +192,7 @@ initializeLocalChainsync config = do
       (k, networkId') <- either pure getSecurityParamAndNetworkId securityParamOrNodeConfig
       pure (socketPath, k, networkId')
   let localNodeCon = CS.mkLocalNodeConnectInfo networkId'' socketPath
-  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (chunkSize_ config)
+  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (batchSize_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create
 -- destination table), create checkpoints database if doesn't exist,
@@ -254,7 +233,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , securityParam       :: Natural
   , logging             :: Bool
   , pipelineSize        :: Word32
-  , chunkSize           :: Natural
+  , batchSize           :: Natural
   }
 
 blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
@@ -290,15 +269,16 @@ runIndexer cli = do
       $ blockSource localChainsyncRuntime trace
       -- Pick out ChainPoint
       & S.map (\blk -> (blockSlotNoBhh blk, blk))
-      -- Fold over stream of blocks with state, emit events as `Maybe event`
+      -- Fold over stream of blocks with state, emit indexer events as
+      -- `Maybe event` (because not all blocks generate an event)
       & foldYield (\st (cp, a) -> do
                       (st', b) <- toEvent indexerRuntime st a
                       return (st', (cp, b))
                   ) initialState
 
       -- Persist events with `persist` or `persistMany` (buffering writes by
-      -- chunkSize in the latter case)
-      & buffered indexerRuntime trace (chunkSize localChainsyncRuntime)
+      -- batchSize in the latter case)
+      & buffered indexerRuntime trace (batchSize localChainsyncRuntime)
 
   where
     buffered

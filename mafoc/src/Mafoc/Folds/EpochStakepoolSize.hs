@@ -59,34 +59,33 @@ instance Indexer EpochStakepoolSize where
     , maybeEpochNo   :: Maybe C.EpochNo
     }
 
+  toEvent (Runtime{ledgerCfg}) state blockInMode = return (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
+    where
+    newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
+    maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
+    stakeMap = Marconi.getStakeMap newExtLedgerState
+    maybeEvent :: Maybe EpochStakepoolSizeEvent
+    maybeEvent = case maybeEpochNo state of
+      Just previousEpochNo -> case maybeCurrentEpochNo of
+        -- Epoch number increases: it is epoch boundary so emit an event
+        Just currentEpochNo -> let epochDiff = currentEpochNo - previousEpochNo
+          in case epochDiff of
+               -- Epoch increased, emit an event
+               1 -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
+               -- Epoch remained the same, don't emit an event
+               0 -> Nothing
+               _ -> error $ "EpochStakepoolSize indexer: assumption violated: epoch changed by " <> show epochDiff <> " instead of expected 0 or 1."
+        _ -> error $ "EpochStakepoolSize indexer: assumption violated: there was a previous epoch no, but there is none now — this can't be!"
+        -- todo: Replace the errors above with specific exceptions
+      _ -> case maybeCurrentEpochNo of
+        -- There was no previous epoch no (= it was Byron era) but
+        -- there is one now: emit an event as this started a new
+        -- epoch.
+        Just currentEpochNo -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
+        -- No previous epoch no and no current epoch no, the Byron
+        -- era continues.
+        _                   -> Nothing
 
-  toEvent (Runtime{ledgerCfg}) State{extLedgerState, maybeEpochNo = maybePreviousEpochNo} blockInMode = do
-    let newExtLedgerState = Marconi.applyBlock ledgerCfg extLedgerState blockInMode
-        maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
-        newIndexerState = State newExtLedgerState maybeCurrentEpochNo
-        stakeMap = Marconi.getStakeMap newExtLedgerState -- :: Map PoolId Lovelace
-        maybeEvent :: Maybe EpochStakepoolSizeEvent
-        maybeEvent = case maybePreviousEpochNo of
-          Just previousEpochNo -> case maybeCurrentEpochNo of
-            -- Epoch number increases: it is epoch boundary so emit an event
-            Just currentEpochNo -> let epochDiff = currentEpochNo - previousEpochNo
-              in case epochDiff of
-                   -- Epoch increased, emit an event
-                   1 -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
-                   -- Epoch remained the same, don't emit an event
-                   0 -> Nothing
-                   _ -> error $ "EpochStakepoolSize indexer: assumption violated: epoch changed by " <> show epochDiff <> " instead of expected 0 or 1."
-            _ -> error $ "EpochStakepoolSize indexer: assumption violated: there was a previous epoch no, but there is none now — this can't be!"
-            -- todo: Replace the errors above with specific exceptions
-          _ -> case maybeCurrentEpochNo of
-            -- There was no previous epoch no (= it was Byron era) but
-            -- there is one now: emit an event as this started a new
-            -- epoch.
-            Just currentEpochNo -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
-            -- No previous epoch no and no current epoch no, the Byron
-            -- era continues.
-            _                   -> Nothing
-    return (newIndexerState, maybeEvent)
 
   initialize EpochStakepoolSize{chainsync, nodeConfig, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
