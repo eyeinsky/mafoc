@@ -1,4 +1,5 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
@@ -27,23 +28,23 @@ instance Ord C.ChainTip where
   compare _ C.ChainTipAtGenesis                   = GT
   compare (C.ChainTip a _ _) (C.ChainTip b _ _)   = compare a b
 
-tipDistance :: C.ChainPoint -> C.ChainTip -> Natural
-tipDistance C.ChainPoint{} C.ChainTipAtGenesis = error "This should never happen"
-tipDistance cp ct = let
-  cp' = case cp of
-    C.ChainPointAtGenesis -> 0
-    C.ChainPoint slotNo _ -> slotNo
-  ct' = case ct of
-    C.ChainTipAtGenesis   -> 0
-    C.ChainTip slotNo _ _ -> slotNo
-  d = ct' - cp'
-  in fromIntegral (coerce d :: Word64) :: Natural
+tipDistance :: C.BlockInMode mode -> C.ChainTip -> Natural
+tipDistance blk ct = let
+  blockNoToNatural :: C.BlockNo -> Natural
+  blockNoToNatural = fromIntegral . coerce @_ @Word64
+  tipBlockNo = case ct of
+    C.ChainTipAtGenesis     -> 0
+    C.ChainTip _ _ blockNo' -> blockNo'
+  in blockNoToNatural tipBlockNo - blockNoToNatural (blockNo blk)
 
 -- ** Block accessors
 
 -- | Create a ChainPoint from BlockInMode
 blockChainPoint :: C.BlockInMode mode -> C.ChainPoint
 blockChainPoint (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = C.ChainPoint slotNo hash
+
+blockNo :: C.BlockInMode mode -> C.BlockNo
+blockNo (C.BlockInMode (C.Block (C.BlockHeader _slotNo _bh blockNo') _) _) = blockNo'
 
 blockSlotNoBhh :: C.BlockInMode mode -> SlotNoBhh
 blockSlotNoBhh (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _blockNo) _txs) _) = (slotNo, hash)

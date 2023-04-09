@@ -265,7 +265,7 @@ blockSource cc trace = blocks' (localNodeConnection cc) from'
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
   & RB.rollbackRingBuffer (securityParam cc)
-       (\blk ct -> tipDistance (blockChainPoint blk) ct)
+       tipDistance
        blockSlotNoBhh
   where
     Interval from' upTo' = interval cc
