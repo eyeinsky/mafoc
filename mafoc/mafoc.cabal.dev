@@ -55,6 +55,7 @@ library
     Mafoc.Maps.NoOp
     Mafoc.Maps.ScriptTx
     Mafoc.RollbackRingBuffer
+    Mafoc.RingBuffer
     Mafoc.Speed
 
   --------------------
@@ -136,7 +137,6 @@ library
   build-depends:
     , base             >=4.9 && <5
     , hedgehog
-    , hedgehog-extras
     , streaming
     , tasty
     , tasty-hedgehog

@@ -16,7 +16,6 @@ import Mafoc.Maps.BlockBasics qualified as BlockBasics
 import Mafoc.Maps.MintBurn qualified as MintBurn
 import Mafoc.Maps.NoOp qualified as NoOp
 import Mafoc.Maps.ScriptTx qualified as ScriptTx
-import Mafoc.RollbackRingBuffer (RollbackException)
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()

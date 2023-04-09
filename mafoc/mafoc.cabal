@@ -47,6 +47,7 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
+    Mafoc.Common
     Mafoc.Core
     Mafoc.Folds.EpochStakepoolSize
     Mafoc.Indexer.Class
@@ -54,6 +55,7 @@ library
     Mafoc.Maps.MintBurn
     Mafoc.Maps.NoOp
     Mafoc.Maps.ScriptTx
+    Mafoc.RingBuffer
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
 
@@ -123,20 +125,29 @@ test-suite mafoc-test
   hs-source-dirs: test
   main-is:        Spec.hs
   type:           exitcode-stdio-1.0
-  other-modules:  RollbackRingBuffer
+  other-modules:
+    RingBuffer
+    RollbackRingBuffer
+    Spec.Helpers
 
   --------------------
   -- Local components
   --------------------
-  build-depends:  mafoc
+  build-depends:
+    , cardano-streaming
+    , mafoc
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
   build-depends:
-    , base             >=4.9 && <5
+    , base            >=4.9 && <5
     , hedgehog
-    , hedgehog-extras
     , streaming
     , tasty
     , tasty-hedgehog

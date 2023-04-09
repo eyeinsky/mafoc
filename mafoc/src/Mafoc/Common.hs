@@ -2,9 +2,11 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
+import Control.Monad.Trans.Class (lift)
 import Data.Coerce (coerce)
 import Data.Word (Word64)
 import Numeric.Natural (Natural)
+import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
 import Cardano.Streaming qualified as CS
@@ -12,7 +14,6 @@ import Cardano.Streaming.Helpers qualified as CS
 
 -- * Additions to cardano-api
 
-type Block = C.BlockInMode C.CardanoMode
 type SlotNoBhh = (C.SlotNo, C.Hash C.BlockHeader)
 
 getSecurityParamAndNetworkId :: FilePath -> IO (Natural, C.NetworkId)
@@ -54,3 +55,21 @@ chainPointSlotNo :: C.ChainPoint -> C.SlotNo
 chainPointSlotNo = \case
   C.ChainPoint slotNo _ -> slotNo
   C.ChainPointAtGenesis -> C.SlotNo 0
+
+-- * Streaming
+
+streamPassReturn
+  :: Monad m => S.Stream (S.Of a) m r
+  -> (a -> S.Stream (S.Of a) m r -> S.Stream (S.Of b) m r)
+  -> S.Stream (S.Of b) m r
+streamPassReturn source f = lift (S.next source) >>= \case
+  Left r                 -> pure r
+  Right (event, source') -> f event source'
+
+-- * Base
+
+-- in base since: base-4.8.0.0
+minusNaturalMaybe :: Natural -> Natural -> Maybe Natural
+minusNaturalMaybe a b
+  | a < b = Nothing
+  | otherwise = Just (a - b)

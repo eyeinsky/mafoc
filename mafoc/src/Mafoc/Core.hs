@@ -33,8 +33,8 @@ import Marconi.ChainIndex.Logging qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
-import Mafoc.Common (Block, SlotNoBhh, Stream, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo,
-                     getSecurityParamAndNetworkId)
+import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo,
+                     getSecurityParamAndNetworkId, tipDistance)
 
 -- * Interval
 
@@ -81,15 +81,6 @@ takeUpTo trace upTo' source = case upTo' of
     getTipPoint = \case
       CS.RollForward _blk ct -> C.chainTipToChainPoint ct
       CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
-
--- | Convert event from @ChainSyncEvent@ to @Event@.
-fromChainSyncEvent
-  :: Monad m
-  => S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) m r
-  -> S.Stream (S.Of (RB.Event (C.BlockInMode mode) C.ChainPoint)) m r
-fromChainSyncEvent = S.map $ \e -> case e of
-  CS.RollForward blk ct -> RB.RollForward blk (blockChainPoint blk) (C.chainTipToChainPoint ct)
-  CS.RollBackward rp ct -> RB.RollBackward rp (C.chainTipToChainPoint ct)
 
 -- * Sqlite
 
@@ -269,12 +260,13 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
 blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
 blockSource cc trace = blocks' (localNodeConnection cc) from'
   & (if logging cc then Marconi.logging trace else id)
-  & fromChainSyncEvent
   & takeUpTo trace upTo'
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
   & RB.rollbackRingBuffer (securityParam cc)
+       (\blk ct -> tipDistance (blockChainPoint blk) ct)
+       blockSlotNoBhh
   where
     Interval from' upTo' = interval cc
     blocks'
@@ -295,9 +287,9 @@ runIndexer cli = do
     (initialState, localChainsyncRuntime, indexerRuntime) <- initialize cli trace
     S.effects
       -- Start streaming blocks over local chainsync
-      $ (blockSource localChainsyncRuntime trace)
+      $ blockSource localChainsyncRuntime trace
       -- Pick out ChainPoint
-      & (S.map topLevelChainPoint)
+      & S.map (\blk -> (blockSlotNoBhh blk, blk))
       -- Fold over stream of blocks with state, emit events as `Maybe event`
       & foldYield (\st (cp, a) -> do
                       (st', b) <- toEvent indexerRuntime st a
@@ -309,9 +301,6 @@ runIndexer cli = do
       & buffered indexerRuntime trace (chunkSize localChainsyncRuntime)
 
   where
-    topLevelChainPoint :: Block -> (SlotNoBhh, Block)
-    topLevelChainPoint b = (blockSlotNoBhh b, b)
-
     buffered
       :: Runtime a -> Trace.Trace IO TS.Text -> Natural
       -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a))) IO ()
