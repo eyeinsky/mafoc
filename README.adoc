@@ -5,5 +5,3 @@ This is temporary fork of
 link:https://github.com/input-output-hk/plutus-apps[plutus-apps]
 repository for purpose of developing link:./mafoc[mafoc indexer] -- a
 subfolder in this repo.
-
-====

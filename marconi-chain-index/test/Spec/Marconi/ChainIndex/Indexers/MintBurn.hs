@@ -11,6 +11,7 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace (logError)
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming (ChainSyncEventException (NoIntersectionFound), withChainSyncEventStream)
+import Cardano.Testnet qualified as TN
 import Control.Concurrent qualified as IO
 import Control.Concurrent.Async qualified as IO
 import Control.Concurrent.STM qualified as IO
@@ -27,6 +28,7 @@ import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Word (Word64)
+import GHC.Stack (HasCallStack)
 import Gen.Marconi.ChainIndex.Indexers.MintBurn qualified as Gen
 import Hedgehog (Property, forAll, tripping, (===))
 import Hedgehog qualified as H
@@ -35,6 +37,7 @@ import Hedgehog.Extras.Test.Base qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Helpers qualified as TN
+import Marconi.ChainIndex.Error (raiseException)
 import Marconi.ChainIndex.Indexers qualified as M
 import Marconi.ChainIndex.Indexers.MintBurn (MintAsset (MintAsset), MintBurnHandle (MintBurnHandle),
                                              StorableQuery (QueryAllMintBurn, QueryByAssetId),
@@ -48,17 +51,19 @@ import Prettyprinter.Render.Text (renderStrict)
 import Streaming.Prelude qualified as S
 import System.Directory qualified as IO
 import System.FilePath ((</>))
-import Test.Base qualified as H
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testPropertyNamed)
-import Testnet.Cardano qualified as TN
+
+integration :: HasCallStack => H.Integration () -> H.Property
+integration = H.withTests 1 . H.propertyOnce
+
 
 -- | Each test case is described beside every top level property
 -- declaration.
 tests :: TestTree
 tests = testGroup "MintBurn"
   [ testPropertyNamed
-      "Mints in `TxBodyContent` survive `makeTransactionBody` and end up in expected place in `TxBody`"
+      "Mints in `TxBodyContent` survive `createAndValidateTransactionBody` and end up in expected place in `TxBody`"
       "mintsPreserved" mintsPreserved
   , testPropertyNamed
       "Querying everything should return all indexed event"
@@ -111,13 +116,13 @@ tests = testGroup "MintBurn"
   ]
 
 -- | This is a sanity-check test that turns a TxBodyContent with mint
--- events into a TxBody through `makeTransactionBody` and checks if
+-- events into a TxBody through `createAndValidateTransactionBody` and checks if
 -- the mint events are found in the result. It doesn't test an
 -- indexer.
 mintsPreserved :: Property
 mintsPreserved = H.property $ do
   mintValue <- forAll Gen.genTxMintValue
-  C.Tx txb _ :: C.Tx C.AlonzoEra <- forAll (Gen.genTxWithMint mintValue) >>= \case
+  C.Tx txb _ :: C.Tx C.BabbageEra <- forAll (Gen.genTxWithMint mintValue) >>= \case
     Left err  -> fail $ "TxBodyError: " <> show err
     Right tx' -> return tx'
   -- Index the transaction:
@@ -136,7 +141,7 @@ propQueryingEverythingShouldReturnAllIndexedEvents :: Property
 propQueryingEverythingShouldReturnAllIndexedEvents = H.property $ do
   (indexer, insertedEvents, _) <- Gen.genIndexWithEvents ":memory:"
   -- Query results:
-  MintBurnResult queryResult <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
+  MintBurnResult queryResult <- liftIO $ raiseException $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
   -- Compare the sets of events inserted to the indexer and the set
   -- gotten out of the indexer:
   equalSet (MintBurn.groupBySlotAndHash insertedEvents) (MintBurn.fromRows queryResult)
@@ -144,7 +149,7 @@ propQueryingEverythingShouldReturnAllIndexedEvents = H.property $ do
 propQueryingAssetIdsIndividuallyShouldBeSameAsQueryingAll :: Property
 propQueryingAssetIdsIndividuallyShouldBeSameAsQueryingAll = H.property $ do
   (indexer, insertedEvents, _) <- Gen.genIndexWithEvents ":memory:"
-  MintBurnResult allTxMintRows <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
+  MintBurnResult allTxMintRows <- liftIO $ raiseException $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
 
   -- Getting all AssetIds from generated events
   let assetIds = concatMap
@@ -156,7 +161,8 @@ propQueryingAssetIdsIndividuallyShouldBeSameAsQueryingAll = H.property $ do
                  $ MintBurn.txMintEventTxAssets e)
             insertedEvents
   combinedTxMintRows <- fmap concat <$> forM assetIds $ \(policyId, assetName) -> do
-      (MintBurnResult rows) <- liftIO $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName Nothing
+      (MintBurnResult rows) <- liftIO $ raiseException
+          $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName Nothing
       pure rows
 
   equalSet allTxMintRows combinedTxMintRows
@@ -166,7 +172,8 @@ propQueryingAllMintBurnAtPointShouldReturnMintsUntilThatPoint = H.property $ do
   (indexer, insertedEvents, _) <- Gen.genIndexWithEvents ":memory:"
   let possibleSlots = Set.toList $ Set.fromList $ fmap MintBurn.txMintEventSlotNo insertedEvents
   slotNo <- if null possibleSlots then pure (C.SlotNo 0) else forAll $ Gen.element possibleSlots
-  MintBurnResult actualTxMints <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just slotNo)
+  MintBurnResult actualTxMints <- liftIO $ raiseException
+      $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just slotNo)
   let expectedTxMints = filter (\e -> MintBurn.txMintEventSlotNo e <= slotNo) insertedEvents
   equalSet expectedTxMints (MintBurn.fromRows actualTxMints)
 
@@ -175,7 +182,8 @@ propQueryingAssetIdsIndividuallyAtPointShouldBeSameAsQueryingAllAtPoint = H.prop
   (indexer, insertedEvents, _) <- Gen.genIndexWithEvents ":memory:"
   let possibleSlots = Set.toList $ Set.fromList $ fmap MintBurn.txMintEventSlotNo insertedEvents
   slotNo <- if null possibleSlots then pure (C.SlotNo 0) else forAll $ Gen.element possibleSlots
-  MintBurnResult allTxMintRows <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just slotNo)
+  MintBurnResult allTxMintRows <- liftIO $ raiseException
+      $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just slotNo)
 
   -- Getting all AssetIds from generated events
   let assetIds = concatMap
@@ -187,7 +195,8 @@ propQueryingAssetIdsIndividuallyAtPointShouldBeSameAsQueryingAllAtPoint = H.prop
                  $ MintBurn.txMintEventTxAssets e)
             insertedEvents
   combinedTxMintRows <- fmap concat <$> forM assetIds $ \(policyId, assetName) -> do
-      (MintBurnResult rows) <- liftIO $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName (Just slotNo)
+      (MintBurnResult rows) <- liftIO $ raiseException
+          $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName (Just slotNo)
       pure rows
 
   equalSet allTxMintRows combinedTxMintRows
@@ -197,8 +206,10 @@ propQueryingAllMintBurnAtLatestPointShouldBeSameAsAllMintBurnQuery = H.property 
   (indexer, insertedEvents, _) <- Gen.genIndexWithEvents ":memory:"
   let possibleSlots = fmap MintBurn.txMintEventSlotNo insertedEvents
       latestSlotNo = if null possibleSlots then C.SlotNo 0 else List.maximum possibleSlots
-  MintBurnResult allTxMintRows <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
-  MintBurnResult txMintRowsAtSlot <- liftIO $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just latestSlotNo)
+  MintBurnResult allTxMintRows <- liftIO $ raiseException
+      $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
+  MintBurnResult txMintRowsAtSlot <- liftIO $ raiseException
+      $ RI.query RI.QEverything indexer $ QueryAllMintBurn (Just latestSlotNo)
   equalSet allTxMintRows txMintRowsAtSlot
 
 propQueryingAssetIdsAtLatestPointShouldBeSameAsAssetIdsQuery :: Property
@@ -218,8 +229,10 @@ propQueryingAssetIdsAtLatestPointShouldBeSameAsAssetIdsQuery = H.property $ do
             insertedEvents
 
   forM_ assetIds $ \(policyId, assetName) -> do
-      (MintBurnResult allTxMintRows) <- liftIO $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName Nothing
-      (MintBurnResult txMintRowsAtSlot) <- liftIO $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName (Just latestSlotNo)
+      (MintBurnResult allTxMintRows) <- liftIO $ raiseException
+          $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName Nothing
+      (MintBurnResult txMintRowsAtSlot) <- liftIO $ raiseException
+          $ RI.query RI.QEverything indexer $ QueryByAssetId policyId assetName (Just latestSlotNo)
       equalSet allTxMintRows txMintRowsAtSlot
 
 
@@ -232,7 +245,8 @@ propRecreatingIndexerFromDiskShouldOnlyReturnPersistedEvents = H.property $ do
   (indexer, events, (bufferSize, _nTx)) <- Gen.genIndexWithEvents ":memory:"
   -- Open a new indexer based off of the old indexers sql connection:
   indexer' <- liftIO $ mkNewIndexerBasedOnOldDb indexer
-  MintBurnResult queryResult <- liftIO $ RI.query RI.QEverything indexer' $ QueryAllMintBurn Nothing
+  MintBurnResult queryResult <- liftIO $ raiseException
+      $ RI.query RI.QEverything indexer' $ QueryAllMintBurn Nothing
   let expected = MintBurn.groupBySlotAndHash $ take (eventsPersisted (fromIntegral bufferSize) (length events)) events
   -- The test: events that were persisted are exactly those we get from the query.
   equalSet expected (MintBurn.fromRows queryResult)
@@ -261,9 +275,8 @@ rewind = H.property $ do
   -- Rollback slot is from 0 to number of slots (slot numbers are from 0 to nTx - 1)
   rollbackSlotNo <- fmap coerce $ forAll $ Gen.integral $ Range.constant 0 ((let w64 = fromIntegral nTx in if w64 == 0 then 0 else w64 - 1) :: Word64)
   let cp = C.ChainPoint rollbackSlotNo dummyBlockHeaderHash
-  rewoundIndexer <- let errMsg = "Failed to rewind! This shouldn't happen and the test should be fixed"
-    in maybe (fail errMsg) pure =<< liftIO (RI.rewind cp indexer)
-  MintBurnResult queryResult <- liftIO $ RI.query RI.QEverything rewoundIndexer $ QueryAllMintBurn Nothing
+  rewoundIndexer <- liftIO (raiseException $ RI.rewind cp indexer)
+  MintBurnResult queryResult <- liftIO $ raiseException $ RI.query RI.QEverything rewoundIndexer $ QueryAllMintBurn Nothing
   -- Expect only older than rollback events.
   let expected = filter (\e -> MintBurn.txMintEventSlotNo e <= rollbackSlotNo) events
   equalSet expected (MintBurn.fromRows queryResult)
@@ -276,7 +289,7 @@ intervals = H.property $ do
   let
     cpFromSlot slotNo = C.ChainPoint slotNo dummyBlockHeaderHash
     queryInterval from to = do
-      MintBurnResult queryResult <- liftIO $ RI.query (RI.QInterval from to) indexer $ QueryAllMintBurn Nothing
+      MintBurnResult queryResult <- liftIO $ raiseException $ RI.query (RI.QInterval from to) indexer $ QueryAllMintBurn Nothing
       pure $ MintBurn.fromRows queryResult
 
   -- Genesis to genesis returns nothing
@@ -310,11 +323,11 @@ intervals = H.property $ do
 -- mint event, put it in a transaction and submit it, find the
 -- generated event passed back through the indexer.
 endToEnd :: Property
-endToEnd = H.withShrinks 0 $ H.integration $ (liftIO TN.setDarwinTmpdir >>) $ HE.runFinallies $ H.workspace "." $ \tempPath -> do
+endToEnd = H.withShrinks 0 $ integration $ (liftIO TN.setDarwinTmpdir >>) $ HE.runFinallies $ H.workspace "." $ \tempPath -> do
   base <- HE.noteM $ liftIO . IO.canonicalizePath =<< HE.getProjectBase
-  (localNodeConnectInfo, conf, runtime) <- TN.startTestnet TN.defaultTestnetOptions base tempPath
+  (localNodeConnectInfo, conf, runtime) <- TN.startTestnet (TN.BabbageOnlyTestnetOptions TN.babbageDefaultTestnetOptions) base tempPath
   let networkId = TN.getNetworkId runtime
-  socketPath <- TN.getSocketPathAbs conf runtime
+  socketPath <- TN.getPoolSocketPathAbs conf runtime
 
   -- This is the channel we wait on to know if the event has been indexed
   indexedTxs <- liftIO IO.newChan
@@ -336,11 +349,11 @@ endToEnd = H.withShrinks 0 $ H.integration $ (liftIO TN.setDarwinTmpdir >>) $ HE
         in indexerWorker `catch` handleException :: IO ()
 
   -- Create & submit transaction
-  pparams <- TN.getProtocolParams @C.AlonzoEra localNodeConnectInfo
+  pparams <- TN.getProtocolParams @C.BabbageEra localNodeConnectInfo
   txMintValue <- forAll Gen.genTxMintValue
 
-  genesisVKey :: C.VerificationKey C.GenesisUTxOKey <- TN.readAs (C.AsVerificationKey C.AsGenesisUTxOKey) $ tempPath </> "shelley/utxo-keys/utxo1.vkey"
-  genesisSKey :: C.SigningKey C.GenesisUTxOKey <- TN.readAs (C.AsSigningKey C.AsGenesisUTxOKey) $ tempPath </> "shelley/utxo-keys/utxo1.skey"
+  genesisVKey :: C.VerificationKey C.GenesisUTxOKey <- TN.readAs (C.AsVerificationKey C.AsGenesisUTxOKey) $ tempPath </> "utxo-keys/utxo1.vkey"
+  genesisSKey :: C.SigningKey C.GenesisUTxOKey <- TN.readAs (C.AsSigningKey C.AsGenesisUTxOKey) $ tempPath </> "utxo-keys/utxo1.skey"
   let paymentKey = C.castVerificationKey genesisVKey :: C.VerificationKey C.PaymentKey
       address :: C.Address C.ShelleyAddr
       address = C.makeShelleyAddress
@@ -349,31 +362,35 @@ endToEnd = H.withShrinks 0 $ H.integration $ (liftIO TN.setDarwinTmpdir >>) $ HE
         C.NoStakeAddress :: C.Address C.ShelleyAddr
 
   value <- H.fromJustM $ getValue txMintValue
-  (txIns, lovelace) <- TN.getAddressTxInsValue @C.AlonzoEra localNodeConnectInfo address
+  (txIns, lovelace) <- TN.getAddressTxInsValue @C.BabbageEra localNodeConnectInfo address
 
   let keyWitnesses = [C.WitnessPaymentKey $ C.castSigningKey genesisSKey]
-      mkTxOuts lovelace' = [TN.mkAddressValueTxOut address $ C.TxOutValue C.MultiAssetInAlonzoEra $ C.lovelaceToValue lovelace' <> value]
-      validityRange = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInAlonzoEra)
+      mkTxOuts lovelace' = [TN.mkAddressValueTxOut address $ C.TxOutValue C.MultiAssetInBabbageEra $ C.lovelaceToValue lovelace' <> value]
+      validityRange = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInBabbageEra)
   (feeLovelace, txbc) <- TN.calculateAndUpdateTxFee pparams networkId (length txIns) (length keyWitnesses) (TN.emptyTxBodyContent validityRange pparams)
     { C.txIns = map (, C.BuildTxWith $ C.KeyWitness C.KeyWitnessForSpending) txIns
     , C.txOuts = mkTxOuts 0
     , C.txProtocolParams = C.BuildTxWith $ Just pparams
     , C.txMintValue = txMintValue
-    , C.txInsCollateral = C.TxInsCollateral C.CollateralInAlonzoEra txIns
+    , C.txInsCollateral = C.TxInsCollateral C.CollateralInBabbageEra txIns
     }
-  txBody :: C.TxBody C.AlonzoEra <- H.leftFail $ C.makeTransactionBody $ txbc
+  txBody :: C.TxBody C.BabbageEra <- H.leftFail $ C.createAndValidateTransactionBody $ txbc
     { C.txOuts = mkTxOuts $ lovelace - feeLovelace }
-  let keyWitnesses' :: [C.KeyWitness C.AlonzoEra]
+  let keyWitnesses' :: [C.KeyWitness C.BabbageEra]
       keyWitnesses' = map (C.makeShelleyKeyWitness txBody) keyWitnesses
   TN.submitTx localNodeConnectInfo $ C.makeSignedTransaction keyWitnesses' txBody
 
   -- Receive event from the indexer, compare the mint that we
   -- submitted above with the one we got from the indexer.
-  event <- liftIO $ IO.readChan indexedTxs
-  case MintBurn.txMintEventTxAssets event of
-     (_txId, gottenMintEvents :: NonEmpty MintAsset) :| [] -> let
-       in equalSet (mintsToPolicyAssets $ NonEmpty.toList gottenMintEvents) (getPolicyAssets txMintValue)
-     _ -> fail "More than one mint/burn event, but we created only one!"
+  indexer :: MintBurn.MintBurnIndexer <- liftIO $ IO.readChan indexedTxs
+  MintBurnResult txMintRows :: RI.StorableResult MintBurnHandle <-
+    liftIO $ raiseException $ RI.query RI.QEverything indexer $ QueryAllMintBurn Nothing
+  case MintBurn.fromRows txMintRows of
+    event : _ ->  case MintBurn.txMintEventTxAssets event of
+      (_txId, gottenMintEvents :: NonEmpty MintAsset) :| [] -> let
+        in equalSet (mintsToPolicyAssets $ NonEmpty.toList gottenMintEvents) (getPolicyAssets txMintValue)
+      _ -> fail "More than one mint/burn event, but we created only one!"
+    _ -> fail "No events in indexer, but we inserted one!"
 
 propJsonRoundtripTxMintRow :: Property
 propJsonRoundtripTxMintRow = H.property $ do
@@ -398,7 +415,7 @@ eventsPersisted bufferSize nEvents = let
 mkNewIndexerBasedOnOldDb :: RI.State MintBurnHandle -> IO (RI.State MintBurnHandle)
 mkNewIndexerBasedOnOldDb indexer = let
     MintBurnHandle sqlCon k = indexer ^. RI.handle
-  in RI.emptyState (fromIntegral k) (MintBurnHandle sqlCon k)
+  in raiseException $ RI.emptyState (fromIntegral k) (MintBurnHandle sqlCon k)
 
 dummyBlockHeaderHash :: C.Hash C.BlockHeader
 dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" :: C.Hash C.BlockHeader
@@ -406,19 +423,19 @@ dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abc
 equalSet :: (H.MonadTest m, Show a, Ord a) => [a] -> [a] -> m ()
 equalSet a b = Set.fromList a === Set.fromList b
 
-getPolicyAssets :: C.TxMintValue C.BuildTx C.AlonzoEra -> [(C.PolicyId, C.AssetName, C.Quantity)]
+getPolicyAssets :: C.TxMintValue C.BuildTx C.BabbageEra -> [(C.PolicyId, C.AssetName, C.Quantity)]
 getPolicyAssets txMintValue = case txMintValue of
-  (C.TxMintValue C.MultiAssetInAlonzoEra mintedValues (C.BuildTxWith _policyIdToWitnessMap)) ->
+  (C.TxMintValue C.MultiAssetInBabbageEra mintedValues (C.BuildTxWith _policyIdToWitnessMap)) ->
     mapMaybe (\(assetId, quantity) -> case assetId of
              C.AssetId policyId assetName -> Just (policyId, assetName, quantity)
              C.AdaAssetId                 -> Nothing
         ) $ C.valueToList mintedValues
   _ -> []
 
-getValue :: C.TxMintValue C.BuildTx C.AlonzoEra -> Maybe C.Value
+getValue :: C.TxMintValue C.BuildTx C.BabbageEra -> Maybe C.Value
 getValue = \case
-  C.TxMintValue C.MultiAssetInAlonzoEra value (C.BuildTxWith _policyIdToWitnessMap) -> Just value
-  _                                                                                 -> Nothing
+  C.TxMintValue C.MultiAssetInBabbageEra value (C.BuildTxWith _policyIdToWitnessMap) -> Just value
+  _                                                                                  -> Nothing
 
 mintsToPolicyAssets :: [MintAsset] -> [(C.PolicyId, C.AssetName, C.Quantity)]
 mintsToPolicyAssets =

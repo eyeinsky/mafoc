@@ -15,30 +15,28 @@ where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Codec.Serialise (serialise)
 import Control.Lens ((^.))
 import Control.Monad (foldM, forM, replicateM)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (first)
-import Data.ByteString.Lazy qualified as LBS
-import Data.ByteString.Short qualified as SBS
 import Data.Coerce (coerce)
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import Data.String (fromString)
-import Gen.Cardano.Api.Typed qualified as CGen
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Marconi.ChainIndex.Error (raiseException)
 import Marconi.ChainIndex.Indexers.MintBurn qualified as MintBurn
 import Marconi.ChainIndex.Logging ()
 import Marconi.ChainIndex.Types (SecurityParam)
 import Marconi.Core.Storable qualified as Storable
-import Plutus.V1.Ledger.Api (MintingPolicy)
-import Plutus.V1.Ledger.Api qualified as PlutusV1
+import PlutusLedgerApi.V1 qualified as PlutusV1
+import PlutusLedgerApi.V2 qualified as PlutusV2
 import PlutusTx qualified
+import Test.Gen.Cardano.Api.Typed qualified as CGen
 
 -- | The workhorse of the test: generate an indexer, then generate
 -- transactions to index, then index them.
@@ -53,8 +51,8 @@ genIndexWithEvents dbPath = do
   H.classify "Buffer doesn't overflow" $ not (null events) && not overflow
   H.classify "Buffer overflows" $ not (null events) && overflow
   indexer <- liftIO $ do
-    indexer <- MintBurn.open dbPath bufferSize
-    foldM (\indexer' event -> Storable.insert (MintBurn.MintBurnEvent event) indexer') indexer events
+    indexer <- raiseException $ MintBurn.open dbPath bufferSize
+    foldM (\indexer' event -> raiseException $ Storable.insert (MintBurn.MintBurnEvent event) indexer') indexer events
   pure (indexer, events, (bufferSize, nTx))
 
 -- | Generate transactions which have mints inside, then extract
@@ -80,10 +78,10 @@ genMintEvents = do
   pure (events, (fromIntegral bufferSize, nTx))
 
 genTxWithMint
-    :: C.TxMintValue C.BuildTx C.AlonzoEra
-    -> Gen (Either C.TxBodyError (C.Tx C.AlonzoEra))
+    :: C.TxMintValue C.BuildTx C.BabbageEra
+    -> Gen (Either C.TxBodyError (C.Tx C.BabbageEra))
 genTxWithMint txMintValue = do
-  txbc <- CGen.genTxBodyContent C.AlonzoEra
+  txbc <- CGen.genTxBodyContent C.BabbageEra
   txIn <- CGen.genTxIn
   pparams' :: C.ProtocolParameters <- CGen.genProtocolParameters
   let
@@ -98,26 +96,26 @@ genTxWithMint txMintValue = do
       }
     txbc' = txbc
       { C.txMintValue = txMintValue
-      , C.txInsCollateral = C.TxInsCollateral C.CollateralInAlonzoEra [txIn]
+      , C.txInsCollateral = C.TxInsCollateral C.CollateralInBabbageEra [txIn]
       , C.txProtocolParams = pparams
       }
   pure $ do
-    txb <- C.makeTransactionBody txbc'
+    txb <- C.createAndValidateTransactionBody txbc'
     pure $ C.signShelleyTransaction txb []
 
 -- | Helper to create tx with @commonMintingPolicy@, @assetName@ and @quantity@
-genTxWithAsset :: C.AssetName -> C.Quantity -> Gen (Either C.TxBodyError (C.Tx C.AlonzoEra))
-genTxWithAsset assetName quantity = genTxWithMint $ C.TxMintValue C.MultiAssetInAlonzoEra mintedValues (C.BuildTxWith $ Map.singleton policyId policyWitness)
+genTxWithAsset :: C.AssetName -> C.Quantity -> Gen (Either C.TxBodyError (C.Tx C.BabbageEra))
+genTxWithAsset assetName quantity = genTxWithMint $ C.TxMintValue C.MultiAssetInBabbageEra mintedValues (C.BuildTxWith $ Map.singleton policyId policyWitness)
   where (policyId, policyWitness, mintedValues) = mkMintValue commonMintingPolicy [(assetName, quantity)]
 
-genTxMintValue :: Gen (C.TxMintValue C.BuildTx C.AlonzoEra)
+genTxMintValue :: Gen (C.TxMintValue C.BuildTx C.BabbageEra)
 genTxMintValue = do
   n :: Int <- Gen.integral (Range.constant 1 5)
   -- n :: Int <- Gen.integral (Range.constant 0 5)
   -- TODO: fix bug RewindableIndex.Storable.rewind and change range to start from 0.
   policyAssets <- replicateM n genAsset
   let (policyId, policyWitness, mintedValues) = mkMintValue commonMintingPolicy policyAssets
-  pure $ C.TxMintValue C.MultiAssetInAlonzoEra mintedValues (C.BuildTxWith $ Map.singleton policyId policyWitness)
+  pure $ C.TxMintValue C.MultiAssetInBabbageEra mintedValues (C.BuildTxWith $ Map.singleton policyId policyWitness)
   where
     genAsset :: Gen (C.AssetName, C.Quantity)
     genAsset = (,) <$> genAssetName <*> genQuantity
@@ -141,37 +139,39 @@ eventsPersisted bufferSize nEvents = let
   numberOfEventsPersisted = bufferFlushesN * bufferSize
   in numberOfEventsPersisted
 
+type MintingPolicy = PlutusTx.CompiledCode (PlutusTx.BuiltinData -> PlutusTx.BuiltinData -> ())
+
 mkMintValue
   :: MintingPolicy -> [(C.AssetName, C.Quantity)]
-  -> (C.PolicyId, C.ScriptWitness C.WitCtxMint C.AlonzoEra, C.Value)
+  -> (C.PolicyId, C.ScriptWitness C.WitCtxMint C.BabbageEra, C.Value)
 mkMintValue policy policyAssets = (policyId, policyWitness, mintedValues)
   where
     serialisedPolicyScript :: C.PlutusScript C.PlutusScriptV1
-    serialisedPolicyScript = C.PlutusScriptSerialised $ SBS.toShort . LBS.toStrict $ serialise $ PlutusV1.unMintingPolicyScript policy
+    serialisedPolicyScript = C.PlutusScriptSerialised $ PlutusV2.serialiseCompiledCode policy
 
     policyId :: C.PolicyId
     policyId = C.scriptPolicyId $ C.PlutusScript C.PlutusScriptV1 serialisedPolicyScript :: C.PolicyId
 
     executionUnits :: C.ExecutionUnits
     executionUnits = C.ExecutionUnits {C.executionSteps = 300000, C.executionMemory = 1000 }
-    redeemer :: C.ScriptData
-    redeemer = C.fromPlutusData $ PlutusV1.toData ()
-    policyWitness :: C.ScriptWitness C.WitCtxMint C.AlonzoEra
-    policyWitness = C.PlutusScriptWitness C.PlutusScriptV1InAlonzo C.PlutusScriptV1
+    redeemer :: C.ScriptRedeemer
+    redeemer = C.unsafeHashableScriptData $ C.fromPlutusData $ PlutusV1.toData ()
+    policyWitness :: C.ScriptWitness C.WitCtxMint C.BabbageEra
+    policyWitness = C.PlutusScriptWitness C.PlutusScriptV1InBabbage C.PlutusScriptV1
       (C.PScript serialisedPolicyScript) C.NoScriptDatumForMint redeemer executionUnits
 
     mintedValues :: C.Value
     mintedValues = C.valueFromList $ map (first (C.AssetId policyId)) policyAssets
 
 commonMintingPolicy :: MintingPolicy
-commonMintingPolicy = PlutusV1.mkMintingPolicyScript $$(PlutusTx.compile [||\_ _ -> ()||])
+commonMintingPolicy = $$(PlutusTx.compile [||\_ _ -> ()||])
 
 -- | Recreate an indexe, useful because the sql connection to a
 -- :memory: database can be reused.
 mkNewIndexerBasedOnOldDb :: Storable.State MintBurn.MintBurnHandle -> IO (Storable.State MintBurn.MintBurnHandle)
 mkNewIndexerBasedOnOldDb indexer = let
     MintBurn.MintBurnHandle sqlCon k = indexer ^. Storable.handle
-  in Storable.emptyState (fromIntegral k) (MintBurn.MintBurnHandle sqlCon k)
+  in raiseException $ Storable.emptyState (fromIntegral k) (MintBurn.MintBurnHandle sqlCon k)
 
 dummyBlockHeaderHash :: C.Hash C.BlockHeader
 dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" :: C.Hash C.BlockHeader
@@ -179,19 +179,19 @@ dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abc
 equalSet :: (H.MonadTest m, Show a, Ord a) => [a] -> [a] -> m ()
 equalSet a b = Set.fromList a === Set.fromList b
 
-getPolicyAssets :: C.TxMintValue C.BuildTx C.AlonzoEra -> [(C.PolicyId, C.AssetName, C.Quantity)]
+getPolicyAssets :: C.TxMintValue C.BuildTx C.BabbageEra -> [(C.PolicyId, C.AssetName, C.Quantity)]
 getPolicyAssets txMintValue = case txMintValue of
-  (C.TxMintValue C.MultiAssetInAlonzoEra mintedValues (C.BuildTxWith _policyIdToWitnessMap)) ->
+  (C.TxMintValue C.MultiAssetInBabbageEra mintedValues (C.BuildTxWith _policyIdToWitnessMap)) ->
     mapMaybe (\(assetId, quantity) -> case assetId of
              C.AssetId policyId assetName -> Just (policyId, assetName, quantity)
              C.AdaAssetId                 -> Nothing
         ) $ C.valueToList mintedValues
   _ -> []
 
-getValue :: C.TxMintValue C.BuildTx C.AlonzoEra -> Maybe C.Value
+getValue :: C.TxMintValue C.BuildTx C.BabbageEra -> Maybe C.Value
 getValue = \case
-  C.TxMintValue C.MultiAssetInAlonzoEra value (C.BuildTxWith _policyIdToWitnessMap) -> Just value
-  _                                                                                 -> Nothing
+  C.TxMintValue C.MultiAssetInBabbageEra value (C.BuildTxWith _policyIdToWitnessMap) -> Just value
+  _                                                                                  -> Nothing
 
 mintsToPolicyAssets :: [MintBurn.MintAsset] -> [(C.PolicyId, C.AssetName, C.Quantity)]
 mintsToPolicyAssets =

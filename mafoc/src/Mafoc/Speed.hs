@@ -78,7 +78,7 @@ instance RI.Buffered NoopHandler where
   persistToStorage _ h = pure h
   getStoredEvents _h = pure $ [NoopEvent C.ChainPointAtGenesis]
 instance RI.Rewindable NoopHandler where
-  rewindStorage _ h = pure $ Just h
+  rewindStorage _ h = pure h
 type NoopIndexer = RI.State NoopHandler
 
 rewindableIndex :: FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
@@ -99,7 +99,7 @@ rewindableIndex socketPath cpFromCli maybeEnd networkId = do
                 printAndDieWhenEnd end bim
                 loop index
               CS.RollBackward cp _ct -> do
-                modifyMVar_ index $ \ix -> fromMaybe ix <$> RI.rewind cp ix
+                modifyMVar_ index $ \ix -> RI.rewind cp ix
                 loop index
 
       void $ IO.withAsync (loop mIndexer) $ \a -> do

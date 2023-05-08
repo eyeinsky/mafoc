@@ -2,12 +2,15 @@
 module Marconi.ChainIndex.Utils
     ( isBlockRollbackable
     , querySecurityParam
+    , querySecurityParamEra
     ) where
 
 import Cardano.Api qualified as C
-import Cardano.Api.Shelley qualified as C
 import Cardano.Streaming.Helpers qualified as C
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Except (ExceptT, throwError)
+import Control.Monad.Trans (MonadTrans (lift))
+import Data.Text (pack)
+import Marconi.ChainIndex.Error (IndexerError (CantStartIndexer))
 import Marconi.ChainIndex.Types (SecurityParam)
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (EraMismatch)
 
@@ -21,23 +24,32 @@ isBlockRollbackable securityParam (C.BlockNo chainSyncBlockNo) localChainTip =
      in chainTipBlockNo - chainSyncBlockNo <= fromIntegral securityParam
 
 -- | Query security param from node
-querySecurityParam :: C.NetworkId -> FilePath -> IO SecurityParam
-querySecurityParam networkId socketPath = do
-  result <- liftIO $ C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode
-  let genesisParameters = either showError (either showError id) (result :: Either C.AcquiringFailure (Either EraMismatch C.GenesisParameters))
+querySecurityParam :: C.NetworkId -> FilePath -> ExceptT IndexerError IO SecurityParam
+querySecurityParam = querySecurityParamEra C.BabbageEraInCardanoMode
+
+-- | Query security param from node
+querySecurityParamEra
+  :: forall era
+   . C.IsShelleyBasedEra era
+  => C.EraInMode era C.CardanoMode
+  -> C.NetworkId
+  -> FilePath
+  -> ExceptT IndexerError IO SecurityParam
+querySecurityParamEra eraInMode networkId socketPath = do
+  result <- lift $ C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode
+  genesisParameters <- case result of
+      Left err         -> toError err
+      Right (Left err) -> toError err
+      Right (Right x)  -> pure x
   return $ fromIntegral $ C.protocolParamSecurity genesisParameters
 
   where
     localNodeConnectInfo :: C.LocalNodeConnectInfo C.CardanoMode
     localNodeConnectInfo = C.mkLocalNodeConnectInfo networkId socketPath
 
-    eraInMode :: C.EraInMode C.BabbageEra C.CardanoMode
-    eraInMode = C.BabbageEraInCardanoMode
-
     queryInMode :: C.QueryInMode C.CardanoMode (Either EraMismatch C.GenesisParameters)
     queryInMode = C.QueryInEra eraInMode
-      $ C.QueryInShelleyBasedEra (C.shelleyBasedEra @C.BabbageEra) C.QueryGenesisParameters
+      $ C.QueryInShelleyBasedEra (C.shelleyBasedEra @era) C.QueryGenesisParameters
 
-    -- TODO /Really/ handle the error.
-    showError :: Show a => a -> b
-    showError = error . show
+    toError :: Show a => a -> ExceptT IndexerError IO b
+    toError = throwError . CantStartIndexer . pack . show

@@ -19,7 +19,6 @@ import Ouroboros.Consensus.Ledger.Extended qualified as O
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
                    LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
-import Marconi.ChainIndex.Indexers qualified as Marconi
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 

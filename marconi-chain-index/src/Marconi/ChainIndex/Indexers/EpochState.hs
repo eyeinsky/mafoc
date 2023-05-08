@@ -85,7 +85,6 @@ module Marconi.ChainIndex.Indexers.EpochState
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Cardano.Ledger.Coin qualified as Ledger
 import Cardano.Ledger.Compactible qualified as Ledger
 import Cardano.Ledger.Era qualified as Ledger
 import Cardano.Ledger.Shelley.API qualified as Ledger
@@ -95,6 +94,8 @@ import Cardano.Slotting.Slot (EpochNo)
 import Codec.CBOR.Read qualified as CBOR
 import Codec.CBOR.Write qualified as CBOR
 import Control.Monad (filterM, forM_, when)
+import Control.Monad.Except (ExceptT)
+import Control.Monad.Trans (MonadTrans (lift))
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.=))
 import Data.ByteString.Base16 qualified as Base16
@@ -115,6 +116,8 @@ import Data.Tuple (swap)
 import Data.VMap qualified as VMap
 import Database.SQLite.Simple qualified as SQL
 import GHC.Generics (Generic)
+import Marconi.ChainIndex.Error (IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
+                                 liftSQLError)
 import Marconi.ChainIndex.Node.Client.GenesisConfig (GenesisConfig, NetworkConfigFile (NetworkConfigFile),
                                                      initExtLedgerStateVar, mkProtocolInfoCardano,
                                                      readCardanoGenesisConfig, readNetworkConfig,
@@ -148,7 +151,7 @@ data EpochStateHandle = EpochStateHandle
     , _epochStateHandleSecurityParam      :: !SecurityParam
     }
 
-type instance StorableMonad EpochStateHandle = IO
+type instance StorableMonad EpochStateHandle = ExceptT IndexerError IO
 
 data instance StorableEvent EpochStateHandle =
     EpochStateEvent
@@ -205,8 +208,8 @@ toStorableEvent extLedgerState slotNo bhh bn chainTip securityParam isFirstEvent
         isFirstEventOfEpoch
 
 -- | From LedgerState, get epoch stake pool delegation: a mapping of pool ID to amount staked in
--- lovelace. We do this by getting the '_pstakeSet' stake snapshot and then use '_delegations' and
--- '_stake' to resolve it into the desired mapping.
+-- lovelace. We do this by getting the 'ssStakeSet' stake snapshot and then use 'ssDelegations' and
+-- 'ssStake' to resolve it into the desired mapping.
 getStakeMap :: ExtLedgerState_ -> Map C.PoolId C.Lovelace
 getStakeMap extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateByron _    -> mempty
@@ -215,23 +218,24 @@ getStakeMap extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateMary st    -> getStakeMapFromShelleyBlock st
   O.LedgerStateAlonzo st  -> getStakeMapFromShelleyBlock st
   O.LedgerStateBabbage st -> getStakeMapFromShelleyBlock st
+  O.LedgerStateConway st  -> getStakeMapFromShelleyBlock st
   where
     getStakeMapFromShelleyBlock
       :: forall proto era c
-       . (c ~ Ledger.Crypto era, c ~ O.StandardCrypto)
+       . (c ~ Ledger.EraCrypto era, c ~ O.StandardCrypto)
       => O.LedgerState (O.ShelleyBlock proto era)
       -> Map C.PoolId C.Lovelace
     getStakeMapFromShelleyBlock st = sdd
       where
         nes = O.shelleyLedgerState st :: Ledger.NewEpochState era
 
-        stakeSnapshot = Ledger._pstakeSet . Ledger.esSnapshots . Ledger.nesEs $ nes :: Ledger.SnapShot c
+        stakeSnapshot = Ledger.ssStakeSet . Ledger.esSnapshots . Ledger.nesEs $ nes :: Ledger.SnapShot c
 
         stakes = Ledger.unStake
-               $ Ledger._stake stakeSnapshot
+               $ Ledger.ssStake stakeSnapshot
 
         delegations :: VMap.VMap VMap.VB VMap.VB (Ledger.Credential 'Ledger.Staking c) (Ledger.KeyHash 'Ledger.StakePool c)
-        delegations = Ledger._delegations stakeSnapshot
+        delegations = Ledger.ssDelegations stakeSnapshot
 
         sdd :: Map C.PoolId C.Lovelace
         sdd = Map.fromListWith (+)
@@ -255,6 +259,7 @@ getEpochNo extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateMary st    -> getEpochNoFromShelleyBlock st
   O.LedgerStateAlonzo st  -> getEpochNoFromShelleyBlock st
   O.LedgerStateBabbage st -> getEpochNoFromShelleyBlock st
+  O.LedgerStateConway st  -> getEpochNoFromShelleyBlock st
   where
     getEpochNoFromShelleyBlock = Just . Ledger.nesEL . O.shelleyLedgerState
 
@@ -305,6 +310,7 @@ getEpochNonce extLedgerState =
       O.ChainDepStateMary st    -> extractNonce st
       O.ChainDepStateAlonzo st  -> extractNonce st
       O.ChainDepStateBabbage st -> extractNoncePraos st
+      O.ChainDepStateConway st  -> extractNoncePraos st
   where
     extractNonce :: O.TPraosState c -> Ledger.Nonce
     extractNonce =
@@ -353,8 +359,9 @@ instance Buffered EpochStateHandle where
         :: Foldable f
         => f (StorableEvent EpochStateHandle)
         -> EpochStateHandle
-        -> IO EpochStateHandle
-    persistToStorage events h@(EpochStateHandle topLevelConfig c ledgerStateDirPath securityParam) = do
+        -> StorableMonad EpochStateHandle EpochStateHandle
+    persistToStorage events h@(EpochStateHandle topLevelConfig c ledgerStateDirPath securityParam)
+        = liftSQLError CantInsertEvent $ do
         let eventsList = toList events
 
         SQL.execute_ c "BEGIN"
@@ -472,9 +479,8 @@ instance Buffered EpochStateHandle where
     -- implementation. Therefore, this function returns an empty list.
     getStoredEvents
         :: EpochStateHandle
-        -> IO [StorableEvent EpochStateHandle]
-    getStoredEvents EpochStateHandle {} = do
-        pure []
+        -> StorableMonad EpochStateHandle [StorableEvent EpochStateHandle]
+    getStoredEvents EpochStateHandle {}  = liftSQLError CantQueryIndexer $ pure []
 
 eventToEpochSDDRows
     :: StorableEvent EpochStateHandle
@@ -509,9 +515,10 @@ instance Queryable EpochStateHandle where
         -> f (StorableEvent EpochStateHandle)
         -> EpochStateHandle
         -> StorableQuery EpochStateHandle
-        -> IO (StorableResult EpochStateHandle)
+        -> StorableMonad EpochStateHandle (StorableResult EpochStateHandle)
 
-    queryStorage _ events (EpochStateHandle _ c _ _) (SDDByEpochNoQuery epochNo) = do
+    queryStorage _ events (EpochStateHandle _ c _ _) (SDDByEpochNoQuery epochNo)
+        = liftSQLError CantQueryIndexer $ do
         case List.find (\e -> epochStateEventEpochNo e == Just epochNo) (toList events) of
           Just e ->
               pure $ SDDByEpochNoResult $ eventToEpochSDDRows e
@@ -523,7 +530,8 @@ instance Queryable EpochStateHandle where
                   |] (SQL.Only epochNo)
               pure $ SDDByEpochNoResult res
 
-    queryStorage _ events (EpochStateHandle _ c _ _) (NonceByEpochNoQuery epochNo) = do
+    queryStorage _ events (EpochStateHandle _ c _ _) (NonceByEpochNoQuery epochNo)
+        = liftSQLError CantQueryIndexer $ do
         case List.find (\e -> epochStateEventEpochNo e == Just epochNo) (toList events) of
           Just e ->
               pure $ NonceByEpochNoResult $ eventToEpochNonceRow e
@@ -535,13 +543,14 @@ instance Queryable EpochStateHandle where
                   |] (SQL.Only epochNo)
               pure $ NonceByEpochNoResult $ listToMaybe res
 
-    queryStorage _ _ EpochStateHandle {} (LedgerStateAtPointQuery C.ChainPointAtGenesis) = do
-        pure $ LedgerStateAtPointResult Nothing
+    queryStorage _ _ EpochStateHandle {} (LedgerStateAtPointQuery C.ChainPointAtGenesis)
+        = liftSQLError CantQueryIndexer $ pure $ LedgerStateAtPointResult Nothing
     queryStorage
             _
             events
             (EpochStateHandle topLevelConfig _ ledgerStateDirPath _)
-            (LedgerStateAtPointQuery (C.ChainPoint slotNo _)) = do
+            (LedgerStateAtPointQuery (C.ChainPoint slotNo _))
+        = liftSQLError CantQueryIndexer $ do
         case List.find (\e -> epochStateEventSlotNo e == slotNo) (toList events) of
             Nothing -> do
                 ledgerStateFilePaths <- listDirectory ledgerStateDirPath
@@ -560,15 +569,17 @@ instance Rewindable EpochStateHandle where
     rewindStorage
         :: C.ChainPoint
         -> EpochStateHandle
-        -> IO (Maybe EpochStateHandle)
-    rewindStorage C.ChainPointAtGenesis h@(EpochStateHandle _ c ledgerStateDirPath _) = do
+        -> StorableMonad EpochStateHandle EpochStateHandle
+    rewindStorage C.ChainPointAtGenesis h@(EpochStateHandle _ c ledgerStateDirPath _)
+        = liftSQLError CantRollback $ do
         SQL.execute_ c "DELETE FROM epoch_sdd"
         SQL.execute_ c "DELETE FROM epoch_nonce"
 
         ledgerStateFilePaths <- listDirectory ledgerStateDirPath
         forM_ ledgerStateFilePaths (\f -> removeFile $ ledgerStateDirPath </> f)
-        pure $ Just h
-    rewindStorage (C.ChainPoint sn _) h@(EpochStateHandle _ c ledgerStateDirPath _) = do
+        pure h
+    rewindStorage (C.ChainPoint sn _) h@(EpochStateHandle _ c ledgerStateDirPath _)
+        = liftSQLError CantRollback $ do
         SQL.execute c "DELETE FROM epoch_sdd WHERE slotNo > ?" (SQL.Only sn)
         SQL.execute c "DELETE FROM epoch_nonce WHERE slotNo > ?" (SQL.Only sn)
 
@@ -579,13 +590,14 @@ instance Rewindable EpochStateHandle where
               Just (_, slotNo, _, _) | slotNo > sn -> removeFile $ ledgerStateDirPath </> fp
               Just _                               -> pure ()
 
-        pure $ Just h
+        pure h
 
 instance Resumable EpochStateHandle where
     resumeFromStorage
         :: EpochStateHandle
-        -> IO [C.ChainPoint]
-    resumeFromStorage (EpochStateHandle _ c ledgerStateDirPath _) = do
+        -> StorableMonad EpochStateHandle [C.ChainPoint]
+    resumeFromStorage (EpochStateHandle _ c ledgerStateDirPath _)
+        = liftSQLError CantQueryIndexer $ do
         ledgerStateFilepaths <- listDirectory ledgerStateDirPath
         let ledgerStateChainPoints =
                 fmap (\(_, sn, bhh, _) -> (sn, bhh))
@@ -630,7 +642,7 @@ chainTipsFromLedgerStateFilePath ledgerStateFilepath =
      parseSlotNo slotNoStr = C.SlotNo <$> readMaybe (Text.unpack slotNoStr)
      parseBlockHeaderHash bhhStr = do
           bhhBs <- either (const Nothing) Just $ Base16.decode $ Text.encodeUtf8 bhhStr
-          C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bhhBs
+          either (const Nothing) Just $ C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bhhBs
      parseBlockNo blockNoStr = C.BlockNo <$> readMaybe (Text.unpack blockNoStr)
 
 open
@@ -640,11 +652,11 @@ open
   -> FilePath
   -- ^ Directory from which we will save the various 'LedgerState' as different points in time.
   -> SecurityParam
-  -> IO (State EpochStateHandle)
+  -> StorableMonad EpochStateHandle (State EpochStateHandle)
 open topLevelConfig dbPath ledgerStateDirPath securityParam = do
-    c <- SQL.open dbPath
-    SQL.execute_ c "PRAGMA journal_mode=WAL"
-    SQL.execute_ c
+    c <- liftSQLError CantStartIndexer $ SQL.open dbPath
+    lift $ SQL.execute_ c "PRAGMA journal_mode=WAL"
+    lift $ SQL.execute_ c
         [r|CREATE TABLE IF NOT EXISTS epoch_sdd
             ( epochNo INT NOT NULL
             , poolId BLOB NOT NULL
@@ -653,7 +665,7 @@ open topLevelConfig dbPath ledgerStateDirPath securityParam = do
             , blockHeaderHash BLOB NOT NULL
             , blockNo INT NOT NULL
             )|]
-    SQL.execute_ c
+    lift $ SQL.execute_ c
         [r|CREATE TABLE IF NOT EXISTS epoch_nonce
             ( epochNo INT NOT NULL
             , nonce BLOB NOT NULL
@@ -694,7 +706,7 @@ writeExtLedgerState fname codecConfig extLedgerState = BS.writeFile fname $ CBOR
 parseBlockHeaderHash :: Text.Text -> Maybe (C.Hash C.BlockHeader)
 parseBlockHeaderHash bhhStr = do
   bhhBs <- either (const Nothing) Just $ Base16.decode $ Text.encodeUtf8 bhhStr
-  C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bhhBs
+  either (const Nothing) Just $ C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bhhBs
 
 parseBlockHeaderHashString :: String -> Maybe (C.Hash C.BlockHeader)
 parseBlockHeaderHashString = parseBlockHeaderHash . Text.pack

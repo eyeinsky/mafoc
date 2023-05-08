@@ -27,13 +27,16 @@ module Marconi.ChainIndex.Indexers.MintBurn where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Cardano.Ledger.Alonzo.Data qualified as LA
 import Cardano.Ledger.Alonzo.Scripts qualified as LA
+import Cardano.Ledger.Alonzo.Scripts.Data qualified as LA
 import Cardano.Ledger.Alonzo.Tx qualified as LA
-import Cardano.Ledger.Alonzo.TxWitness qualified as LA
+import Cardano.Ledger.Alonzo.TxWits qualified as LA
 import Cardano.Ledger.Babbage.Tx qualified as LB
+import Cardano.Ledger.Conway.TxBody qualified as LC
+import Cardano.Ledger.Core qualified as Ledger
 import Cardano.Ledger.Mary.Value qualified as LM
 import Control.Lens (makeLenses, view, (&), (^.))
+import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.=))
 import Data.ByteString.Short qualified as Short
@@ -51,8 +54,11 @@ import Data.Word (Word64)
 import Database.SQLite.Simple (NamedParam ((:=)))
 import Database.SQLite.Simple qualified as SQL
 import GHC.Generics (Generic)
+import Marconi.ChainIndex.Error (IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
+                                 liftSQLError)
 import Marconi.ChainIndex.Orphans ()
 import Marconi.ChainIndex.Types (SecurityParam)
+import Marconi.Core.Storable (StorableMonad)
 import Marconi.Core.Storable qualified as RI
 import Ouroboros.Consensus.Shelley.Eras qualified as OEra
 
@@ -90,38 +96,40 @@ txbMints txb = case txb of
     C.ShelleyBasedEraAllegra -> []
     C.ShelleyBasedEraMary -> []
     C.ShelleyBasedEraAlonzo -> do
-      (policyId, assetName, quantity, index', redeemer) <- getPolicyData txb $ LA.mint shelleyTx
+      (policyId, assetName, quantity, index', redeemer) <- getPolicyData txb $ LA.atbMint shelleyTx
       pure $ MintAsset policyId assetName quantity index' redeemer
     C.ShelleyBasedEraBabbage -> do
-      (policyId, assetName, quantity, index', redeemer) <- getPolicyData txb $ LB.mint shelleyTx
+      (policyId, assetName, quantity, index', redeemer) <- getPolicyData txb $ LB.btbMint shelleyTx
+      pure $ MintAsset policyId assetName quantity index' redeemer
+    C.ShelleyBasedEraConway -> do
+      (policyId, assetName, quantity, index', redeemer) <- getPolicyData txb $ LC.ctbMint shelleyTx
       pure $ MintAsset policyId assetName quantity index' redeemer
   _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
 
 -- * Helpers
 
-txRedeemers :: C.TxBody era -> Map.Map LA.RdmrPtr (LA.Data (C.ShelleyLedgerEra era), LA.ExUnits)
-txRedeemers (C.ShelleyTxBody _ _ _ txScriptData _ _) = case txScriptData of
-  C.TxBodyScriptData _proof _datum redeemers -> LA.unRedeemers redeemers
-  C.TxBodyNoScriptData                       -> mempty
-txRedeemers _ = mempty
-
-mintRedeemers :: C.TxBody era -> [(Word64, (LA.Data (C.ShelleyLedgerEra era), LA.ExUnits))]
-mintRedeemers txb = txRedeemers txb
-  & Map.toList
-  & filter (\(LA.RdmrPtr tag _, _) -> tag == LA.Mint)
-  & map (\(LA.RdmrPtr _ w, a) -> (w, a))
-
 getPolicyData
-    :: C.TxBody era
-    -> LM.Value OEra.StandardCrypto
+    :: forall era. Ledger.Era (C.ShelleyLedgerEra era)
+    => C.TxBody era
+    -> LM.MultiAsset OEra.StandardCrypto
     -> [(C.PolicyId, C.AssetName, C.Quantity, Word64, C.ScriptData)]
-getPolicyData txb (LM.Value _ m) = do
+getPolicyData txb (LM.MultiAsset m) = do
   let
     policyIdList = Map.toList m
     getPolicyId index' = policyIdList !! fromIntegral index'
-  ((maryPolicyID, assets), index'', (redeemer, _)) <- map (\(index', data_) -> (getPolicyId index', index', data_)) $ mintRedeemers txb
+  ((maryPolicyID, assets), index'', (redeemer, _)) <- map (\(index', data_) -> (getPolicyId index', index', data_)) $ mintRedeemers
   (assetName, quantity) :: (LM.AssetName, Integer) <- Map.toList assets
   pure (fromMaryPolicyID maryPolicyID, fromMaryAssetName assetName, C.Quantity quantity, index'', fromAlonzoData redeemer)
+  where
+    mintRedeemers = txRedeemers txb
+      & Map.toList
+      & filter (\(LA.RdmrPtr tag _, _) -> tag == LA.Mint)
+      & map (\(LA.RdmrPtr _ w, a) -> (w, a))
+
+    txRedeemers (C.ShelleyTxBody _ _ _ txScriptData _ _) = case txScriptData of
+      C.TxBodyScriptData _proof _datum (LA.Redeemers redeemers) -> redeemers
+      C.TxBodyNoScriptData                                      -> mempty
+    txRedeemers _ = mempty
 
 -- ** Copy-paste
 
@@ -285,7 +293,7 @@ type MintBurnIndexer = RI.State MintBurnHandle
 
 type instance RI.StorablePoint MintBurnHandle = C.ChainPoint
 
-type instance RI.StorableMonad MintBurnHandle = IO
+type instance RI.StorableMonad MintBurnHandle = ExceptT IndexerError IO
 
 newtype instance RI.StorableEvent MintBurnHandle
   = MintBurnEvent TxMintEvent
@@ -305,8 +313,9 @@ newtype instance RI.StorableResult MintBurnHandle
   deriving (Show)
 
 instance RI.Queryable MintBurnHandle where
-  queryStorage queryInterval memoryEvents (MintBurnHandle sqlCon _k) query =
-      case query of
+  queryStorage queryInterval memoryEvents (MintBurnHandle sqlCon _k) query
+      = liftSQLError CantQueryIndexer
+      $ case query of
         QueryAllMintBurn slotNo -> do
             let slotCondition =
                     case slotNo of
@@ -352,11 +361,13 @@ instance RI.HasPoint (RI.StorableEvent MintBurnHandle) C.ChainPoint where
   getPoint (MintBurnEvent e) = C.ChainPoint (txMintEventSlotNo e) (txMintEventBlockHeaderHash e)
 
 instance RI.Buffered MintBurnHandle where
-  persistToStorage events h@(MintBurnHandle sqlCon _k) = do
+  persistToStorage events h@(MintBurnHandle sqlCon _k) = liftSQLError CantInsertEvent $ do
     sqliteInsert sqlCon defaultTableName (map coerce $ toList events)
     pure h
 
-  getStoredEvents (MintBurnHandle sqlCon k) = do
+  getStoredEvents (MintBurnHandle sqlCon k)
+    = liftSQLError CantQueryIndexer
+    $ do
     fmap MintBurnEvent . fromRows <$> SQL.query sqlCon query (SQL.Only k)
     where
       query =
@@ -374,7 +385,8 @@ instance RI.Resumable MintBurnHandle where
       getChainPoint (MintBurnEvent e) = C.ChainPoint (txMintEventSlotNo e) (txMintEventBlockHeaderHash e)
 
 instance RI.Rewindable MintBurnHandle where
-  rewindStorage cp h@(MintBurnHandle sqlCon _k) = doRewind >> pure (Just h)
+  rewindStorage cp h@(MintBurnHandle sqlCon _k)
+    = liftSQLError CantRollback $ doRewind >> pure h
     where
       doRewind = case cp of
         C.ChainPoint slotNo _ ->
@@ -385,9 +397,10 @@ instance RI.Rewindable MintBurnHandle where
 defaultTableName :: String
 defaultTableName = "minting_policy_events"
 
-open :: FilePath -> SecurityParam -> IO MintBurnIndexer
+open :: FilePath -> SecurityParam -> StorableMonad MintBurnHandle MintBurnIndexer
 open dbPath bufferSize = do
-  c <- SQL.open dbPath
-  SQL.execute_ c "PRAGMA journal_mode=WAL"
-  sqliteInit c defaultTableName
+  c <- liftSQLError CantStartIndexer $ SQL.open dbPath
+  liftIO $ do
+    SQL.execute_ c "PRAGMA journal_mode=WAL"
+    sqliteInit c defaultTableName
   RI.emptyState (fromEnum bufferSize) (MintBurnHandle c bufferSize)

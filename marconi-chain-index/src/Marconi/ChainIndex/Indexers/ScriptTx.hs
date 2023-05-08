@@ -19,17 +19,10 @@ import GHC.Generics (Generic)
 import Cardano.Api (BlockHeader, ChainPoint (ChainPoint, ChainPointAtGenesis), Hash, SlotNo)
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as Shelley
--- TODO Remove the following dependencies (and also cardano-ledger-*
--- package dependencies in cabal file) when fromShelleyBasedScript is
--- exported from cardano-node PR:
--- https://github.com/input-output-hk/cardano-node/pull/4386
-import Cardano.Ledger.Alonzo.Language qualified as Alonzo
-import Cardano.Ledger.Alonzo.Scripts qualified as Alonzo
-import Cardano.Ledger.Core qualified
-import Cardano.Ledger.Crypto qualified as LedgerCrypto
-import Cardano.Ledger.Keys qualified as LedgerShelley
-import Cardano.Ledger.Shelley.Scripts qualified as LedgerShelley
-import Cardano.Ledger.ShelleyMA.Timelocks qualified as Timelock
+import Control.Monad.Trans (MonadTrans (lift))
+import Control.Monad.Trans.Except (ExceptT)
+import Marconi.ChainIndex.Error (IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
+                                 liftSQLError)
 import Marconi.ChainIndex.Orphans ()
 import Marconi.ChainIndex.Types ()
 import Marconi.Core.Storable (Buffered (getStoredEvents, persistToStorage), HasPoint (getPoint),
@@ -63,7 +56,7 @@ data ScriptTxHandle = ScriptTxHandle
    The first type we introduce is the monad in which the database (and by extension,
    the indexer) runs. -}
 
-type instance StorableMonad ScriptTxHandle = IO
+type instance StorableMonad ScriptTxHandle = ExceptT IndexerError IO
 
 {- The next type we introduce is the type of events. Events are the data atoms that
    the indexer consumes. They depend on the `handle` because they need to eventually
@@ -125,7 +118,7 @@ instance SQL.ToField (StorableQuery ScriptTxHandle) where
   toField (ScriptTxAddress hash)  = SQL.SQLBlob . Shelley.serialiseToRawBytes $ hash
 instance SQL.FromField (StorableQuery ScriptTxHandle) where
   fromField f = SQL.fromField f >>=
-      \b -> maybe cantDeserialise (return . ScriptTxAddress) $ Shelley.deserialiseFromRawBytes Shelley.AsScriptHash b
+      \b -> either (const cantDeserialise) (return . ScriptTxAddress) $ Shelley.deserialiseFromRawBytes Shelley.AsScriptHash b
     where
       cantDeserialise = SQL.returnError SQL.ConversionFailed f "Cannot deserialise address."
 
@@ -153,7 +146,7 @@ getTxBodyScripts body = let
     hashesMaybe = case body of
       Shelley.ShelleyTxBody shelleyBasedEra _ scripts _ _ _ ->
         flip map scripts $ \script ->
-          case fromShelleyBasedScript shelleyBasedEra script of
+          case Shelley.fromShelleyBasedScript shelleyBasedEra script of
             Shelley.ScriptInEra _ script' -> Just $ C.hashScript script'
       _ -> [] -- Byron transactions have no scripts
     hashes = catMaybes hashesMaybe :: [Shelley.ScriptHash]
@@ -172,8 +165,8 @@ instance Buffered ScriptTxHandle where
     :: Foldable f
     => f (StorableEvent ScriptTxHandle)
     -> ScriptTxHandle
-    -> IO ScriptTxHandle
-  persistToStorage es h = do
+    -> StorableMonad ScriptTxHandle ScriptTxHandle
+  persistToStorage es h = liftSQLError CantInsertEvent $ do
     sqliteInsert (hdlConnection h) "script_transactions" (toList es)
     pure h
 
@@ -194,8 +187,8 @@ instance Buffered ScriptTxHandle where
 
   getStoredEvents
     :: ScriptTxHandle
-    -> IO [StorableEvent ScriptTxHandle]
-  getStoredEvents (ScriptTxHandle c sz) = do
+    -> StorableMonad ScriptTxHandle [StorableEvent ScriptTxHandle]
+  getStoredEvents (ScriptTxHandle c sz) = liftSQLError CantInsertEvent $ do
     sns :: [[Integer]] <-
       SQL.query c "SELECT slotNo FROM script_transactions GROUP BY slotNo ORDER BY slotNo DESC LIMIT ?" (SQL.Only sz)
     -- Take the slot number of the sz'th slot
@@ -237,8 +230,9 @@ instance Queryable ScriptTxHandle where
     -> f (StorableEvent ScriptTxHandle)
     -> ScriptTxHandle
     -> StorableQuery ScriptTxHandle
-    -> IO (StorableResult ScriptTxHandle)
-  queryStorage qi es (ScriptTxHandle c _) q = do
+    -> StorableMonad ScriptTxHandle (StorableResult ScriptTxHandle)
+  queryStorage qi es (ScriptTxHandle c _) q
+    = liftSQLError CantQueryIndexer $ do
     persisted :: [ScriptTxRow] <-
       case qi of
         QEverything -> SQL.query c
@@ -261,13 +255,13 @@ instance Rewindable ScriptTxHandle where
   rewindStorage
     :: ChainPoint
     -> ScriptTxHandle
-    -> IO (Maybe ScriptTxHandle)
-  rewindStorage (ChainPoint sn   _) h@(ScriptTxHandle c _) = do
+    -> StorableMonad ScriptTxHandle ScriptTxHandle
+  rewindStorage (ChainPoint sn   _) h@(ScriptTxHandle c _) = liftSQLError CantRollback $ do
      SQL.execute c "DELETE FROM script_transactions WHERE slotNo > ?" (SQL.Only sn)
-     pure $ Just h
-  rewindStorage ChainPointAtGenesis h@(ScriptTxHandle c _) = do
+     pure h
+  rewindStorage ChainPointAtGenesis h@(ScriptTxHandle c _) = liftSQLError CantRollback $ do
      SQL.execute_ c "DELETE FROM script_transactions"
-     pure $ Just h
+     pure h
 
 
 -- For resuming we need to provide a list of points where we can resume from.
@@ -280,10 +274,10 @@ instance Resumable ScriptTxHandle where
     -- first.
     pure $ map chainPoint es ++ [ChainPointAtGenesis]
 
-open :: FilePath -> Depth -> IO ScriptTxIndexer
+open :: FilePath -> Depth -> StorableMonad ScriptTxHandle ScriptTxIndexer
 open dbPath (Depth k) = do
-  c <- SQL.open dbPath
-  sqliteInit c "script_transactions"
+  c <- liftSQLError CantStartIndexer (SQL.open dbPath)
+  lift $ sqliteInit c "script_transactions"
   emptyState k (ScriptTxHandle c k)
 
 -- * Sqlite
@@ -315,75 +309,3 @@ sqliteInsert c tableName events = SQL.executeMany c
                          , blockHash     = hsh
                          }
     flatten _ = error "There should be no scripts in the genesis block."
-
--- * Copy-paste
---
--- | TODO: Remove when the following function is exported from Cardano.Api.Script
--- PR: https://github.com/input-output-hk/cardano-node/pull/4386
-fromShelleyBasedScript  :: Shelley.ShelleyBasedEra era
-                        -> Cardano.Ledger.Core.Script (Shelley.ShelleyLedgerEra era)
-                        -> Shelley.ScriptInEra era
-fromShelleyBasedScript era script =
-  case era of
-    Shelley.ShelleyBasedEraShelley ->
-      Shelley.ScriptInEra Shelley.SimpleScriptV1InShelley $
-      Shelley.SimpleScript Shelley.SimpleScriptV1 $
-      fromShelleyMultiSig script
-    Shelley.ShelleyBasedEraAllegra ->
-      Shelley.ScriptInEra Shelley.SimpleScriptV2InAllegra $
-      Shelley.SimpleScript Shelley.SimpleScriptV2 $
-      fromAllegraTimelock Shelley.TimeLocksInSimpleScriptV2 script
-    Shelley.ShelleyBasedEraMary ->
-      Shelley.ScriptInEra Shelley.SimpleScriptV2InMary $
-      Shelley.SimpleScript Shelley.SimpleScriptV2 $
-      fromAllegraTimelock Shelley.TimeLocksInSimpleScriptV2 script
-    Shelley.ShelleyBasedEraAlonzo ->
-      case script of
-        Alonzo.TimelockScript s ->
-          Shelley.ScriptInEra Shelley.SimpleScriptV2InAlonzo $
-          Shelley.SimpleScript Shelley.SimpleScriptV2 $
-          fromAllegraTimelock Shelley.TimeLocksInSimpleScriptV2 s
-        Alonzo.PlutusScript Alonzo.PlutusV1 s ->
-          Shelley.ScriptInEra Shelley.PlutusScriptV1InAlonzo $
-          Shelley.PlutusScript Shelley.PlutusScriptV1 $
-          Shelley.PlutusScriptSerialised s
-        Alonzo.PlutusScript Alonzo.PlutusV2 _ ->
-          error "fromShelleyBasedScript: PlutusV2 not supported in Alonzo era"
-    Shelley.ShelleyBasedEraBabbage ->
-      case script of
-        Alonzo.TimelockScript s ->
-          Shelley.ScriptInEra Shelley.SimpleScriptV2InBabbage $
-          Shelley.SimpleScript Shelley.SimpleScriptV2 $
-          fromAllegraTimelock Shelley.TimeLocksInSimpleScriptV2 s
-        Alonzo.PlutusScript Alonzo.PlutusV1 s ->
-          Shelley.ScriptInEra Shelley.PlutusScriptV1InBabbage $
-          Shelley.PlutusScript Shelley.PlutusScriptV1 $
-          Shelley.PlutusScriptSerialised s
-        Alonzo.PlutusScript Alonzo.PlutusV2 s ->
-          Shelley.ScriptInEra Shelley.PlutusScriptV2InBabbage $
-          Shelley.PlutusScript Shelley.PlutusScriptV2 $
-          Shelley.PlutusScriptSerialised s
-
-  where
-  fromAllegraTimelock :: Shelley.TimeLocksSupported lang
-                      -> Timelock.Timelock LedgerCrypto.StandardCrypto
-                      -> Shelley.SimpleScript lang
-  fromAllegraTimelock timelocks = go
-    where
-      go (Timelock.RequireSignature kh) = Shelley.RequireSignature
-                                            (Shelley.PaymentKeyHash (LedgerShelley.coerceKeyRole kh))
-      go (Timelock.RequireTimeExpire t) = Shelley.RequireTimeBefore timelocks t
-      go (Timelock.RequireTimeStart  t) = Shelley.RequireTimeAfter  timelocks t
-      go (Timelock.RequireAllOf      s) = Shelley.RequireAllOf (map go (toList s))
-      go (Timelock.RequireAnyOf      s) = Shelley.RequireAnyOf (map go (toList s))
-      go (Timelock.RequireMOf      i s) = Shelley.RequireMOf i (map go (toList s))
-
-  fromShelleyMultiSig :: LedgerShelley.MultiSig LedgerCrypto.StandardCrypto -> Shelley.SimpleScript lang
-  fromShelleyMultiSig = go
-    where
-      go (LedgerShelley.RequireSignature kh)
-                                  = Shelley.RequireSignature
-                                      (Shelley.PaymentKeyHash (LedgerShelley.coerceKeyRole kh))
-      go (LedgerShelley.RequireAllOf s) = Shelley.RequireAllOf (map go s)
-      go (LedgerShelley.RequireAnyOf s) = Shelley.RequireAnyOf (map go s)
-      go (LedgerShelley.RequireMOf m s) = Shelley.RequireMOf m (map go s)

@@ -8,16 +8,16 @@ license-files:
 
 author:        Markus Läll
 maintainer:    markus.lall@iohk.io
-homepage:      https://github.com/input-output-hk/plutus-apps#readme
-bug-reports:   https://github.com/input-output-hk/plutus-apps/issues
+homepage:      https://github.com/input-output-hk/marconi#readme
+bug-reports:   https://github.com/input-output-hk/marconi/issues
 description:
-  Please see the README on GitHub at <https://github.com/input-output-hk/plutus-apps#readme>
+  Please see the README on GitHub at <https://github.com/input-output-hk/marconi#readme>
 
 build-type:    Simple
 
 source-repository head
   type:     git
-  location: https://github.com/input-output-hk/plutus-apps
+  location: https://github.com/input-output-hk/marconi
 
 common lang
   default-language:   Haskell2010
@@ -46,6 +46,7 @@ library
   exposed-modules:
     Marconi.Sidechain.Api.HttpServer
     Marconi.Sidechain.Api.Query.Indexers.EpochState
+    Marconi.Sidechain.Api.Query.Indexers.MintBurn
     Marconi.Sidechain.Api.Query.Indexers.Utxo
     Marconi.Sidechain.Api.Routes
     Marconi.Sidechain.Api.Types
@@ -63,7 +64,7 @@ library
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:   cardano-api
+  build-depends:   cardano-api >=8.0
 
   ------------------------
   -- Non-IOG dependencies
@@ -73,6 +74,7 @@ library
     , base                  >=4.9 && <5
     , filepath
     , lens
+    , mtl
     , optparse-applicative
     , servant
     , servant-server
@@ -118,6 +120,7 @@ executable examples-json-rpc-server
     , base                  >=4.9 && <5
     , filepath
     , lens
+    , mtl
     , optparse-applicative
     , stm
 
@@ -151,7 +154,7 @@ library db-utils
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:   cardano-api
+  build-depends:   cardano-api >=8.0
 
   ------------------------
   -- Non-IOG dependencies
@@ -188,6 +191,7 @@ test-suite marconi-sidechain-test
   main-is:        Spec.hs
   hs-source-dirs: test
   other-modules:
+    Spec.Marconi.Sidechain.Api.Query.Indexers.MintBurn
     Spec.Marconi.Sidechain.Api.Query.Indexers.Utxo
     Spec.Marconi.Sidechain.CLI
     Spec.Marconi.Sidechain.Routes
@@ -205,7 +209,7 @@ test-suite marconi-sidechain-test
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api:{cardano-api, gen}
+    , cardano-api:{cardano-api, gen}  >=8.0
     , cardano-crypto-class
     , cardano-ledger-shelley
 
@@ -221,6 +225,7 @@ test-suite marconi-sidechain-test
     , hedgehog
     , http-client
     , lens
+    , mtl
     , optparse-applicative
     , servant
     , servant-client

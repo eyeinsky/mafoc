@@ -8,16 +8,21 @@ license-files:
 
 author:        Markus Läll
 maintainer:    markus.lall@iohk.io
-homepage:      https://github.com/input-output-hk/plutus-apps#readme
-bug-reports:   https://github.com/input-output-hk/plutus-apps/issues
+homepage:      https://github.com/input-output-hk/marconi#readme
+bug-reports:   https://github.com/input-output-hk/marconi/issues
 description:
-  Please see the README on GitHub at <https://github.com/input-output-hk/plutus-apps#readme>.
+  Please see the README on GitHub at <https://github.com/input-output-hk/marconi#readme>.
 
 build-type:    Simple
 
 source-repository head
   type:     git
-  location: https://github.com/input-output-hk/plutus-apps
+  location: https://github.com/input-output-hk/marconi
+
+flag ci
+  description: Toggle features on/off when in CI
+  manual:      True
+  default:     True
 
 common lang
   default-language:   Haskell2010
@@ -50,6 +55,7 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Marconi.ChainIndex.CLI
+    Marconi.ChainIndex.Error
     Marconi.ChainIndex.Indexers
     Marconi.ChainIndex.Indexers.AddressDatum
     Marconi.ChainIndex.Indexers.Datum
@@ -74,24 +80,27 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api
+    , cardano-api                    ^>=8.0
     , cardano-binary
     , cardano-crypto-class
     , cardano-crypto-wrapper
-    , cardano-data
-    , cardano-ledger-alonzo
-    , cardano-ledger-babbage
+    , cardano-ledger-allegra
+    , cardano-ledger-alonzo          ^>=1.1
+    , cardano-ledger-babbage         ^>=1.1
+    , cardano-ledger-binary
     , cardano-ledger-byron
+    , cardano-ledger-conway          ^>=1.1
     , cardano-ledger-core
+    , cardano-ledger-mary            ^>=1.1
     , cardano-ledger-shelley
-    , cardano-ledger-shelley-ma
-    , cardano-protocol-tpraos
+    , cardano-protocol-tpraos        ^>=1.0
     , cardano-slotting
     , iohk-monitoring
     , ouroboros-consensus
     , ouroboros-consensus-byron
-    , ouroboros-consensus-protocol
-    , ouroboros-network
+    , ouroboros-consensus-diffusion
+    , ouroboros-consensus-protocol   ^>=0.4
+    , ouroboros-network-api
 
   ------------------------
   -- Non-IOG dependencies
@@ -107,6 +116,7 @@ library
     , directory
     , filepath
     , lens
+    , mtl
     , mwc-random
     , optparse-applicative
     , ouroboros-consensus-cardano
@@ -187,14 +197,14 @@ library marconi-chain-index-test-lib
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api:{cardano-api, gen}
+    , cardano-api:{cardano-api, gen}  >=8.0
     , cardano-binary
     , cardano-crypto-class
     , cardano-ledger-core
-    , cardano-testnet
-    , ouroboros-network
+    , cardano-testnet                 ^>=8.0
+    , ouroboros-network-protocols
     , plutus-core
-    , plutus-ledger-api
+    , plutus-ledger-api               ^>=1.1
     , plutus-tx
     , plutus-tx-plugin
 
@@ -211,7 +221,7 @@ library marconi-chain-index-test-lib
     , hedgehog
     , hedgehog-extras
     , lens
-    , serialise
+    , mtl
     , streaming
     , temporary
 
@@ -238,7 +248,7 @@ benchmark marconi-chain-index-bench
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api
+    , cardano-api           >=8.0
     , cardano-ledger-byron
 
   ------------------------
@@ -289,12 +299,84 @@ test-suite marconi-chain-index-test
   -- Other IOG dependencies
   --------------------------
   build-depends:
+    , cardano-api:{cardano-api, gen}  >=8.0
+    , cardano-binary
+    , cardano-crypto-class
+    , cardano-ledger-alonzo           ^>=1.1
+    , cardano-ledger-core
+    , cardano-ledger-shelley
+    , cardano-testnet
+    , iohk-monitoring
+    , ouroboros-consensus
+    , ouroboros-consensus-cardano
+    , ouroboros-network
+    , plutus-core
+    , plutus-ledger-api               ^>=1.1
+    , plutus-tx
+    , plutus-tx-plugin
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , aeson
+    , async
+    , base                  >=4.9 && <5
+    , base16-bytestring
+    , bytestring
+    , cborg
+    , containers
+    , directory
+    , filepath
+    , hedgehog
+    , hedgehog-extras
+    , lens
+    , optparse-applicative
+    , postgresql-simple
+    , prettyprinter
+    , serialise
+    , sqlite-simple
+    , stm
+    , streaming
+    , tasty
+    , tasty-golden
+    , tasty-hedgehog
+    , text
+    , transformers
+
+test-suite marconi-chain-index-test-compare-cardano-db-sync
+  import:         lang
+  ghc-options:    -Wno-unused-packages
+  type:           exitcode-stdio-1.0
+  main-is:        Spec.hs
+  hs-source-dirs: test-compare-cardano-db-sync
+
+  if flag(ci)
+    buildable: False
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , cardano-streaming             >=1.2.0
+    , marconi-chain-index           >=1.2.0
+    , marconi-chain-index-test-lib  >=1.2.0
+    , marconi-core                  >=1.2.0
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:
     , cardano-api:{cardano-api, gen}
     , cardano-binary
     , cardano-crypto-class
     , cardano-ledger-core
+    , cardano-ledger-shelley
     , cardano-testnet
     , iohk-monitoring
+    , ouroboros-consensus
+    , ouroboros-consensus-cardano
+    , ouroboros-consensus-diffusion
     , ouroboros-network
     , plutus-core
     , plutus-ledger-api
@@ -310,6 +392,7 @@ test-suite marconi-chain-index-test
     , base                  >=4.9 && <5
     , base16-bytestring
     , bytestring
+    , cborg
     , containers
     , directory
     , filepath
@@ -317,6 +400,7 @@ test-suite marconi-chain-index-test
     , hedgehog-extras
     , lens
     , optparse-applicative
+    , postgresql-simple
     , prettyprinter
     , serialise
     , sqlite-simple
@@ -326,3 +410,4 @@ test-suite marconi-chain-index-test
     , tasty-golden
     , tasty-hedgehog
     , text
+    , transformers
