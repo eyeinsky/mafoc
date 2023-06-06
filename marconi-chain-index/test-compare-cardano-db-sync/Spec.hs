@@ -12,9 +12,11 @@
 
 3. Run this test by setting the env variables:
 
-     - CARDANO_NODE_SOCKET_PATH:
+     - CARDANO_NODE_SOCKET_PATH
      - CARDANO_NODE_CONFIG_PATH
      - MARCONI_DB_DIRECTORY_PATH
+     - DBSYNC_PGPASSWORD: The default password for cardano-db-sync's postgres database is in its repo in the file: config/secrets/postgres_password
+     - NETWORK_MAGIC: "mainnet" or number
 
    And then run the command:
 
@@ -43,6 +45,7 @@ import Database.PostgreSQL.Simple.FromField qualified as PG
 import Database.PostgreSQL.Simple.ToField qualified as PG
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
+import Text.Read (readMaybe)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -89,10 +92,12 @@ propEpochStakepoolSize = H.withTests 1 $ H.property $ do
         dbSyncResult <- liftIO $ dbSyncStakepoolSizes conn epochNo
         marconiResult <- liftIO $ indexerStakepoolSizes epochNo indexer
         liftIO $ putStr
-          $ "\nComparing random epoch " <> show epochNo
+          $ "\nComparing epoch " <> show epochNo
           <> ", number of stakepools in epoch " <> show (Map.size dbSyncResult)
-          <> ", epoch chosen from between " <> show (coerce @_ @Word64 minEpochNo) <> " and " <> show (coerce @_ @Word64 maxEpochNo) <> ")"
         dbSyncResult === marconiResult
+  liftIO $ putStrLn
+     $ "Min and max epoch in cardano-db-sync postgres: "
+    <> show (coerce @_ @Word64 minEpochNo) <> " and " <> show (coerce @_ @Word64 maxEpochNo) <> ")"
   forM_ [minEpochNo .. maxEpochNo] compareEpoch
 
 dbSyncStakepoolSizes :: PG.Connection -> C.EpochNo -> IO (Map.Map C.PoolId C.Lovelace)
@@ -115,7 +120,7 @@ dbSyncStakepoolSizes conn epochNo = do
 indexerStakepoolSizes :: C.EpochNo -> Storable.State EpochState.EpochStateHandle -> IO (Map.Map C.PoolId C.Lovelace)
 indexerStakepoolSizes epochNo indexer = do
   let query = EpochState.SDDByEpochNoQuery epochNo
-  result <- throwIndexerError $ Storable.queryStorage dummyInterval [] (indexer ^. Storable.handle) query
+  result <- throwIndexerError $ Storable.queryStorage [] (indexer ^. Storable.handle) query
   case result of
     EpochState.SDDByEpochNoResult rows -> return $ Map.fromList $ map toPair rows
     _                                  -> return undefined
@@ -146,7 +151,7 @@ propEpochNonce = H.withTests 1 $ H.property $ do
 queryIndexerEpochNonce :: C.EpochNo -> Storable.State EpochState.EpochStateHandle -> IO (Maybe Ledger.Nonce)
 queryIndexerEpochNonce epochNo indexer = do
   let query = EpochState.NonceByEpochNoQuery epochNo
-  res' <- throwIndexerError $ Storable.queryStorage dummyInterval [] (indexer ^. Storable.handle) query
+  res' <- throwIndexerError $ Storable.queryStorage [] (indexer ^. Storable.handle) query
   case res' of
     EpochState.NonceByEpochNoResult res -> return $ EpochState.epochNonceRowNonce <$> res
     _                                   -> return Nothing
@@ -156,8 +161,14 @@ openEpochStateIndexer = do
   socketPath <- envOrFail "CARDANO_NODE_SOCKET_PATH"
   nodeConfigPath <- envOrFail "CARDANO_NODE_CONFIG_PATH"
   dbDir <- envOrFail "MARCONI_DB_DIRECTORY_PATH"
+  networkMagicStr <- envOrFail "NETWORK_MAGIC"
+  networkMagic <- case networkMagicStr of
+    "mainnet" -> return C.Mainnet
+    _ -> case readMaybe networkMagicStr of
+      Nothing     -> fail $ "Can't parse network magic: " <> networkMagicStr
+      Just word32 -> return $ C.Testnet $ C.NetworkMagic word32
   liftIO $ do
-    securityParam <- throwIndexerError $ Utils.querySecurityParamEra C.BabbageEraInCardanoMode C.Mainnet socketPath
+    securityParam <- throwIndexerError $ Utils.querySecurityParamEra C.BabbageEraInCardanoMode networkMagic socketPath
     topLevelConfig <- topLevelConfigFromNodeConfig nodeConfigPath
     let dbPath = dbDir </> epochStateDbName
         ledgerStateDirPath = dbDir </> "ledgerStates"
@@ -220,6 +231,3 @@ instance PG.FromField C.PoolId where
 
 deriving newtype instance Real C.EpochNo
 deriving newtype instance Integral C.EpochNo
-
-dummyInterval :: Storable.QueryInterval C.ChainPoint
-dummyInterval = error "dummyInterval: The interval parameter will be removed in the future, don't use it!"

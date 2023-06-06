@@ -22,8 +22,11 @@ import Data.SOP.Strict (K (K), NP (Nil, (:*)), fn, type (:.:) (Comp))
 import Data.Text.Encoding qualified as Text
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.FromField qualified as SQL
+import Database.SQLite.Simple.FromRow (FromRow (fromRow))
 import Database.SQLite.Simple.Ok qualified as SQL
+import Database.SQLite.Simple.ToField (ToField (toField))
 import Database.SQLite.Simple.ToField qualified as SQL
+import Database.SQLite.Simple.ToRow (ToRow (toRow))
 import Marconi.ChainIndex.Types (SecurityParam (SecurityParam))
 import Ouroboros.Consensus.Byron.Ledger qualified as O
 import Ouroboros.Consensus.Cardano.Block qualified as O
@@ -32,6 +35,9 @@ import Ouroboros.Consensus.HardFork.Combinator.Serialisation.Common qualified as
 import Ouroboros.Consensus.Shelley.Ledger qualified as O
 import Prettyprinter (Pretty (pretty), (<+>))
 
+
+-- * ChainPoint
+
 instance Pretty C.ChainTip where
   pretty C.ChainTipAtGenesis   = "ChainTipAtGenesis"
   pretty (C.ChainTip sn ha bn) = "ChainTip(" <> pretty sn <> "," <+> pretty ha <> "," <+> pretty bn <> ")"
@@ -39,6 +45,13 @@ instance Pretty C.ChainTip where
 instance Pretty C.ChainPoint where
   pretty C.ChainPointAtGenesis = "ChainPointAtGenesis"
   pretty (C.ChainPoint sn ha)  = "ChainPoint(" <> pretty sn <> "," <+> pretty ha <> ")"
+
+instance SQL.FromRow C.ChainPoint where
+  fromRow = C.ChainPoint <$> SQL.field <*> SQL.field
+
+instance ToRow C.ChainPoint where
+  toRow C.ChainPointAtGenesis = [SQL.SQLNull]
+  toRow (C.ChainPoint sn bh)  = [toField sn, toField bh]
 
 -- * C.Hash C.BlockHeader
 
@@ -54,6 +67,14 @@ instance SQL.FromField (C.Hash C.BlockHeader) where
        case C.deserialiseFromRawBytes (C.proxyToAsType Proxy) bs of
            Left _  -> SQL.returnError SQL.ConversionFailed f "Cannot deserialise C.Hash C.BlockHeader"
            Right x -> pure x
+
+-- * Sometime we need to get a count or test if a value exist.
+
+instance ToRow Integer where
+  toRow = SQL.toRow
+
+instance FromRow Integer where
+  fromRow = SQL.field
 
 -- * C.SlotNo
 

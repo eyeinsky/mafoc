@@ -130,10 +130,10 @@ test = integration . HE.runFinallies . TN.workspace "chairman" $ \tempAbsPath ->
   -- This is the channel we wait on to know if the event has been indexed
   indexedTxs <- liftIO IO.newChan
   -- Start indexer
-  coordinator <- liftIO $ Indexers.initialCoordinator 1
+  coordinator <- liftIO $ Indexers.initialCoordinator 1 0
   ch <- liftIO $ STM.atomically . STM.dupTChan $ Indexers._channel coordinator
   let dbPath = tempAbsPath </> "epoch_stakepool_sizes.db"
-  (loop, _indexerMVar) <- liftIO $ Indexers.epochStateWorker_
+  (loop, _cp, indexerMVar) <- liftIO $ Indexers.epochStateWorker_
       (TN.configurationFile runtime)
       (STM.writeChan indexedTxs)
       10
@@ -172,8 +172,8 @@ test = integration . HE.runFinallies . TN.workspace "chairman" $ \tempAbsPath ->
   Just epochNo <- liftIO $ IO.takeMVar found
 
   -- Let's find it in the database as well
-  indexer <- liftIO $ STM.readMVar _indexerMVar
-  queryResult <- liftIO $ raiseException $ Storable.query Storable.QEverything indexer (EpochState.SDDByEpochNoQuery epochNo)
+  indexer <- liftIO $ STM.readMVar indexerMVar
+  queryResult <- liftIO $ raiseException $ Storable.query indexer (EpochState.SDDByEpochNoQuery epochNo)
   case queryResult of
       EpochState.SDDByEpochNoResult stakeMap ->
           let actualTotalStakedLovelace =

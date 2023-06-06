@@ -47,9 +47,10 @@ import Database.SQLite.Simple.ToRow (ToRow)
 import GHC.Generics (Generic)
 import Marconi.ChainIndex.Error (raiseException)
 import Marconi.ChainIndex.Indexers (runIndexers, utxoWorker)
-import Marconi.ChainIndex.Indexers.Utxo (StorableQuery (UtxoByAddress), StorableResult (UtxoResult, getUtxoResult),
-                                         UtxoHandle, UtxoIndexer)
-import Marconi.Core.Storable (QueryInterval (QEverything))
+import Marconi.ChainIndex.Indexers.Utxo (Interval (LessThanOrEqual), QueryUtxoByAddress (QueryUtxoByAddress),
+                                         StorableQuery (QueryUtxoByAddressWrapper),
+                                         StorableResult (UtxoResult, getUtxoResult), UtxoHandle, UtxoIndexer)
+import Marconi.ChainIndex.Types (IndexingDepth (MinIndexingDepth))
 import Marconi.Core.Storable qualified as Storable
 import System.Environment (getEnv)
 import System.FilePath ((</>))
@@ -107,6 +108,7 @@ runIndexerSyncing databaseDir nodeSocketPath indexerTVar = do
         nodeSocketPath
         (C.Testnet $ C.NetworkMagic 1) -- TODO Needs to be passed a CLI param
         C.ChainPointAtGenesis
+        (MinIndexingDepth 0)
         "marconi"
         indexers
 
@@ -136,9 +138,11 @@ tests databaseDir indexerTVar = do
 
     let fetchUtxoOfAddressWithMostUtxos =
             Storable.query @UtxoHandle
-                QEverything
                 utxoIndexer
-                (UtxoByAddress addressWithMostUtxos Nothing)
+                . QueryUtxoByAddressWrapper
+                . QueryUtxoByAddress addressWithMostUtxos
+                . LessThanOrEqual
+                $ C.SlotNo 2000000 -- maxBound will create SQL.Integer overflow, see PLT 5937
 
     let countRows = \case
             UtxoResult rows -> length rows

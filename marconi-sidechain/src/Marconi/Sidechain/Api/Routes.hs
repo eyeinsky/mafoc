@@ -111,38 +111,59 @@ instance FromJSON GetCurrentSyncedBlockResult where
 
 data GetUtxosFromAddressParams
     = GetUtxosFromAddressParams
-    { queryAddress       :: !String
-    , queryUnspentAtSlot :: !(Maybe Word64)
-    } deriving (Eq, Show)
+    { queryAddress             :: !String -- ^ address to query for
+    , queryCreatedAfterSlotNo  :: !(Maybe Word64) -- ^ query upper bound slotNo interval, unspent before or at this slot
+    , queryUnspentBeforeSlotNo :: !Word64 -- ^ query lower bound slotNo interval, filter out UTxO that were created during or before that slo
+    } deriving (Show, Eq)
 
 instance FromJSON GetUtxosFromAddressParams where
-    parseJSON (Object v) = GetUtxosFromAddressParams <$> (v .: "address")  <*> (v .:? "unspentBeforeSlotNo")
-    parseJSON _          = mempty
+  parseJSON (Object v) = GetUtxosFromAddressParams
+      <$> (v .: "address")
+      <*> (v .:? "createdAfterSlotNo")
+      <*> (v .: "unspentBeforeSlotNo")
+  parseJSON _ = mempty
 
 instance ToJSON GetUtxosFromAddressParams where
-    toJSON q =
-        object $ catMaybes
-           [ Just ("address" .= queryAddress q)
-           , ("unspentBeforeSlotNo" .=) <$> queryUnspentAtSlot q
-           ]
+  toJSON q =
+    object $ catMaybes
+    [ Just ("address" .= queryAddress q)
+    , ( "createdAfterSlotNo" .=) <$> queryCreatedAfterSlotNo q
+    , Just $ "unspentBeforeSlotNo" .= queryUnspentBeforeSlotNo q
+    ]
 
 newtype GetUtxosFromAddressResult = GetUtxosFromAddressResult
     { unAddressUtxosResult :: [AddressUtxoResult] }
     deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
 
+data SpentInfoResult
+    = SpentInfoResult
+    !C.SlotNo
+    !C.TxId
+    deriving (Eq, Ord, Show, Generic)
+
+instance ToJSON SpentInfoResult where
+
+    toJSON (SpentInfoResult sn txid) = object ["slot" .= sn, "txId" .= txid]
+
+instance FromJSON SpentInfoResult where
+
+    parseJSON (Object v) = SpentInfoResult <$> v.: "slot" <*> v .: "txId"
+    parseJSON _          = mempty
+
 data AddressUtxoResult = AddressUtxoResult
     !(C.Hash C.BlockHeader)
     !C.SlotNo
-    !C.TxId
-    !C.TxIx
+    !C.TxIn
     !C.AddressAny
     !(Maybe (C.Hash C.ScriptData))
     !(Maybe C.ScriptData)
+    !(Maybe SpentInfoResult)
     deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON AddressUtxoResult where
-    toJSON (AddressUtxoResult bhh slotNo txId txIx addr dath dat) =
-        object
+    toJSON (AddressUtxoResult bhh slotNo txIn addr dath dat spentBy) = let
+        C.TxIn txId txIx = txIn
+        in object
             [ "blockHeaderHash" .= bhh
             , "slotNo" .= slotNo
             , "txId" .= txId
@@ -150,6 +171,7 @@ instance ToJSON AddressUtxoResult where
             , "address" .= addr
             , "datumHash" .= dath
             , "datum" .= dat
+            , "spentBy" .= spentBy
             ]
 
 instance FromJSON AddressUtxoResult where
@@ -157,11 +179,11 @@ instance FromJSON AddressUtxoResult where
         AddressUtxoResult
             <$> v .: "blockHeaderHash"
             <*> v .: "slotNo"
-            <*> v .: "txId"
-            <*> v .: "txIx"
+            <*> (C.TxIn <$> v .: "txId" <*> v .: "txIx")
             <*> v .: "address"
             <*> v .: "datumHash"
             <*> v .: "datum"
+            <*> v .: "spentBy"
     parseJSON _ = mempty
 
 data GetTxsBurningAssetIdParams

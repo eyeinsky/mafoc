@@ -76,7 +76,8 @@ See [this automatically generated golden file](./test/Spec/Golden/Cli/marconi-si
 
 We are assuming that:
 
-* you have a local running cardano-node instance.
+* you have a local running cardano-node instance
+  * since we upgraded to v8.0.0, you need to use the config file available in the `config` directory of the `marconi` repository, or else you will get some Conway exceptions.
 * you've set the following environment variables:
   * `CARDANO_NODE_SOCKET_PATH`: socket path of your local cardano-node instance
   * `MARCONI_DB_DIRECTORY`: directory in which to create the various SQLite database files
@@ -194,7 +195,23 @@ $ curl -d '{"jsonrpc": "2.0" , "method": "getUtxosFromAddress" , "params": { "ad
 
 #### getTxsBurningAssetId
 
-Example yet to come.
+```sh
+$ curl -d '{"jsonrpc": "2.0", "method": "getTxsBurningAssetId", "params": {"policyId": "fda1b6b487bee2e7f64ecf24d24b1224342484c0195ee1b7b943db50", "assetName": "4c6f6273746572436f756e746572"}, "id": 1}' -H 'Content-Type: application/json' -X POST http://localhost:3000/json-rpc | jq
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "blockHeaderHash": "834ac116737ed735805864491626aa8eadca3a9c3be86b559c65c92fd3ddd9fa",
+      "quantity": -22411,
+      "redeemer": "80",
+      "redeemerHash": "45b0cfc220ceec5b7c1c62c4d4193d38e4eba48e8815729ce75f9c0ab0e4c1c0",
+      "slotNo": 40965760,
+      "txId": "cf944108d7130a8d53925ff9903a254d5133d5978b7e69e04c67d5b8776a6fb2"
+    }
+  ]
+}
+```
 
 #### getStakePoolDelegationByEpoch
 

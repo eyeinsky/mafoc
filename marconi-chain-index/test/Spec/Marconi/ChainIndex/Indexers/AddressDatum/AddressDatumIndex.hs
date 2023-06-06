@@ -8,7 +8,7 @@ module Spec.Marconi.ChainIndex.Indexers.AddressDatum.AddressDatumIndex
 
 import Cardano.Api qualified as C
 import Control.Lens ((^.))
-import Control.Monad (foldM, forM, forM_, when)
+import Control.Monad (foldM, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (fold)
 import Data.List qualified as List
@@ -28,7 +28,6 @@ import Marconi.ChainIndex.Indexers.AddressDatum (AddressDatumDepth (AddressDatum
                                                  StorableQuery (AddressDatumQuery, AddressDatumQuery, AllAddressesQuery),
                                                  StorableResult (AddressDatumResult, AllAddressesResult))
 import Marconi.ChainIndex.Indexers.AddressDatum qualified as AddressDatum
-import Marconi.ChainIndex.TestLib.StorableProperties qualified as StorableProperties
 import Marconi.Core.Storable qualified as Storable
 import Spec.Marconi.ChainIndex.Indexers.AddressDatum.Utils (addressInEraToAddressAny)
 import Test.Gen.Cardano.Api.Typed qualified as CGen
@@ -52,10 +51,6 @@ tests = localOption (HedgehogTestLimit $ Just 200) $
           "propAllAddressesAreQueryableInGeneratedRange"
           propAllAddressesAreQueryableInGeneratedRange
     , testPropertyNamed
-          "No addresses from generated events are queryable from the index when specifying a query range where it's lowest slot is higher than the last indexed slot"
-          "propNoAddressQueryableIfLowestSlotInQueryRangeIsHigherThanLastIndexedSlot "
-          propNoAddressQueryableIfLowestSlotInQueryRangeIsHigherThanLastIndexedSlot
-    , testPropertyNamed
           "All datums of each address in generated events are queryable from the index"
           "propAddressDatumAreQueryable"
           propAddressDatumAreQueryable
@@ -73,24 +68,16 @@ tests = localOption (HedgehogTestLimit $ Just 200) $
           "propRewindingWithOldSlotShouldBringIndexInPreviousState "
           propRewindingWithOldSlotShouldBringIndexInPreviousState
     , testPropertyNamed
-          "The points that indexer can be resumed from should return at least the genesis point"
-          "propResumingShouldReturnAtLeastTheGenesisPoint"
-          propResumingShouldReturnAtLeastTheGenesisPoint
-    , testPropertyNamed
           "The points that indexer can be resumed from should return at least non-genesis point when some data was indexed on disk"
           "propResumingShouldReturnAtLeastOneNonGenesisPointIfStoredOnDisk"
           propResumingShouldReturnAtLeastOneNonGenesisPointIfStoredOnDisk
-    , testPropertyNamed
-          "The points that indexer can be resumed from should be sorted in descending order"
-          "propResumablePointsShouldBeSortedInDescOrder"
-          propResumablePointsShouldBeSortedInDescOrder
     ]
 
 -- | The property verifies that the addresses in those generated events are all queryable from the
 -- index.
 propAllAddressesAreQueryable :: Property
 propAllAddressesAreQueryable = property $ do
-    cps <- forAll $ genChainPoints 1 5
+    cps <- forAll $ genChainPoints 2 5
     events <- forAll $ forM cps genAddressDatumStorableEvent
     depth <- forAll $ Gen.int (Range.linear 1 $ length cps)
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth depth)
@@ -99,12 +86,10 @@ propAllAddressesAreQueryable = property $ do
               $ concatMap (\(AddressDatumIndexEvent addressDatumMap _ _) ->
                   Map.keys addressDatumMap) events
     (AllAddressesResult actualAddrs) <- liftIO $ raiseException
-        $ Storable.query Storable.QEverything finalIndex AllAddressesQuery
+        $ Storable.query finalIndex AllAddressesQuery
     actualAddrs === addrs
 
--- | Property that any interval where it's highest slot is higher than the current indexed slot and
--- where it's lowest slot is lower that the last indexed slot should return the same as results as
--- QEverything.
+-- | Property that we can query for all inserted addresses
 propAllAddressesAreQueryableInGeneratedRange :: Property
 propAllAddressesAreQueryableInGeneratedRange = property $ do
     cps <- forAll $ genChainPoints 2 5
@@ -113,74 +98,19 @@ propAllAddressesAreQueryableInGeneratedRange = property $ do
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth depth)
     finalIndex <- liftIO $ raiseException $ Storable.insertMany events initialIndex
 
-    r1 <- forAll $ Gen.element cps
-    r2 <- forAll $ Gen.element (C.ChainPointAtGenesis : cps)
-
     let expectedAddrs = Set.fromList
               $ concatMap (\(AddressDatumIndexEvent addressDatumMap _ _) ->
-                  Map.keys addressDatumMap)
-              $ filter (\(AddressDatumIndexEvent _ _ cp) -> cp <= max r1 r2) events
-
-    case (min r1 r2, max r1 r2) of
-      (minCp, maxCp) -> do
-          (AllAddressesResult actualAddrs) <- liftIO $ raiseException
-              $ Storable.query
-                  (Storable.QInterval minCp maxCp)
-                  finalIndex
-                  AllAddressesQuery
-          actualAddrs === expectedAddrs
-
-          when (minCp < maxCp) $ do
-              (AllAddressesResult actualAddrs') <- liftIO $ raiseException
-                  $ Storable.query
-                      (Storable.QInterval maxCp minCp)
-                      finalIndex
-                      AllAddressesQuery
-              Hedgehog.assert $ Set.null actualAddrs'
-
--- | Property that any interval where it's lowest slot is higher than the indexed slot
--- should return no result.
-propNoAddressQueryableIfLowestSlotInQueryRangeIsHigherThanLastIndexedSlot :: Property
-propNoAddressQueryableIfLowestSlotInQueryRangeIsHigherThanLastIndexedSlot = property $ do
-    cps <- forAll $ genChainPoints 2 10
-    events <- forAll $ forM (init $ init cps) genAddressDatumStorableEvent
-    depth <- forAll $ Gen.int (Range.linear 1 $ length cps)
-    initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth depth)
-    finalIndex <- liftIO $ raiseException $ Storable.insertMany events initialIndex
+                  Map.keys addressDatumMap) events
 
     (AllAddressesResult actualAddrs) <- liftIO $ raiseException
-        $ Storable.query
-            (Storable.QInterval (last $ init cps) (last cps))
-            finalIndex
-            AllAddressesQuery
-    Hedgehog.assert $ Set.null actualAddrs
-
-    (AllAddressesResult actualAddrs'') <- liftIO $ raiseException
-        $ Storable.query
-            (Storable.QInterval (last cps) (last $ init cps))
-            finalIndex
-            AllAddressesQuery
-    Hedgehog.assert $ Set.null actualAddrs''
-
-    (AllAddressesResult actualAddrs''') <- liftIO $ raiseException
-        $ Storable.query
-            (Storable.QInterval (head cps) C.ChainPointAtGenesis)
-            finalIndex
-            AllAddressesQuery
-    Hedgehog.assert $ Set.null actualAddrs'''
-
-    (AllAddressesResult actualAddrs'''') <- liftIO $ raiseException
-        $ Storable.query
-            (Storable.QInterval C.ChainPointAtGenesis C.ChainPointAtGenesis)
-            finalIndex
-            AllAddressesQuery
-    Hedgehog.assert $ Set.null actualAddrs''''
+      $ Storable.query finalIndex AllAddressesQuery
+    actualAddrs === expectedAddrs
 
 -- | The property verifies that the datums of each address in those generated events are all
 -- queryable from the index.
 propAddressDatumAreQueryable :: Property
 propAddressDatumAreQueryable = property $ do
-    cps <- forAll $ genChainPoints 1 5
+    cps <- forAll $ genChainPoints 2 5
     events <- forAll $ forM cps genAddressDatumStorableEvent
     depth <- forAll $ Gen.int (Range.linear 1 $ length cps)
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth depth)
@@ -188,7 +118,7 @@ propAddressDatumAreQueryable = property $ do
     let addressDatumsMap = indexEventsToAddressDatumsMap events
     forM_ (Map.toList addressDatumsMap) $ \(addr, expectedDatums) -> do
         (AddressDatumResult actualDatums) <- liftIO $ raiseException $
-            Storable.query Storable.QEverything finalIndex $ AddressDatumQuery addr
+            Storable.query finalIndex $ AddressDatumQuery addr
         actualDatums === expectedDatums
  where
     indexEventsToAddressDatumsMap
@@ -218,7 +148,7 @@ propAddressDatumAreQueryable = property $ do
 -- queryable from the index given a 'C.ChainPoint' interval.
 -- propAddressDatumAreQueryableInGeneratedRange  :: Property
 -- propAddressDatumAreQueryableInGeneratedRange = property $ do
---     cps <- forAll $ genChainPoints 1 5
+--     cps <- forAll $ genChainPoints 2 5
 --     events <- forAll $ forM cps genAddressDatumStorableEvent
 --     depth <- forAll $ Gen.int (Range.linear 1 $ length cps)
 --     initialIndex <- liftIO $ AddressDatum.open ":memory:" (AddressDatumDepth depth)
@@ -278,7 +208,7 @@ propAddressDatumAreQueryable = property $ do
 -- defined in Spec.hs in marconi-core.
 propRewindingWithNewSlotShouldKeepIndexState :: Property
 propRewindingWithNewSlotShouldKeepIndexState = property $ do
-    cps <- forAll $ genChainPoints 1 5
+    cps <- forAll $ genChainPoints 2 5
     events <- forAll $ forM cps genAddressDatumStorableEvent
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth 1)
     finalIndex <- liftIO $ foldM insertAndRewind initialIndex events
@@ -286,7 +216,7 @@ propRewindingWithNewSlotShouldKeepIndexState = property $ do
               $ concatMap (\(AddressDatumIndexEvent addressDatumMap _ _) ->
                   Map.keys addressDatumMap) events
     (AllAddressesResult actualAddrs) <- liftIO $ raiseException
-        $ Storable.query Storable.QEverything finalIndex AllAddressesQuery
+        $ Storable.query finalIndex AllAddressesQuery
     actualAddrs === addrs
 
  where
@@ -298,12 +228,12 @@ propRewindingWithNewSlotShouldKeepIndexState = property $ do
 -- slot will yield an empty index.
 propRewindingWithOldSlotShouldBringIndexInPreviousState :: Property
 propRewindingWithOldSlotShouldBringIndexInPreviousState = property $ do
-    cps <- forAll $ genChainPoints 1 5
+    cps <- forAll $ genChainPoints 2 5
     events <- forAll $ forM cps genAddressDatumStorableEvent
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth 1)
     finalIndex <- liftIO $ foldM (insertAndRewindToPreviousPoint cps) initialIndex events
     (AllAddressesResult actualAddrs) <- liftIO $ raiseException $ do
-        Storable.query Storable.QEverything finalIndex AllAddressesQuery
+        Storable.query finalIndex AllAddressesQuery
     Hedgehog.assert $ List.null actualAddrs
  where
     insertAndRewindToPreviousPoint cps index e@(AddressDatumIndexEvent _ _ cp) = raiseException $ do
@@ -319,43 +249,23 @@ propRewindingWithOldSlotShouldBringIndexInPreviousState = property $ do
               ([], _)     -> C.ChainPointAtGenesis
               (before, _) -> last before
 
--- | The property verifies that the 'Storable.resumeFromStorage' call returns at least the
--- 'C.ChainPointAtGenesis' point.
---
--- TODO: ChainPointAtGenesis should always be returned by default. Don't need this property test.
-propResumingShouldReturnAtLeastTheGenesisPoint :: Property
-propResumingShouldReturnAtLeastTheGenesisPoint = property $ do
-    cps <- forAll $ genChainPoints 1 5
-    events <- forAll $ forM (init cps) genAddressDatumStorableEvent
-    indexer <- liftIO $ raiseException
-        $ AddressDatum.open ":memory:" (AddressDatumDepth 1)
-        >>= Storable.insertMany events
-    StorableProperties.propResumingShouldReturnAtLeastTheGenesisPoint indexer
-
 -- | The property verifies that the 'Storable.resumeFromStorage' call returns at least a point which
 -- is not 'C.ChainPointAtGenesis' when some events are inserted on disk.
 propResumingShouldReturnAtLeastOneNonGenesisPointIfStoredOnDisk :: Property
 propResumingShouldReturnAtLeastOneNonGenesisPointIfStoredOnDisk = property $ do
-    cps <- forAll $ genChainPoints 1 5
+    cps <- forAll $ genChainPoints 2 5
     events <- forAll $ forM (init cps) genAddressDatumStorableEvent
     initialIndex <- liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth 1)
     finalIndex <- liftIO $ raiseException $ Storable.insertMany events initialIndex
         >>= Storable.insert (AddressDatum.toAddressDatumIndexEvent Nothing [] (last cps))
 
-    resumablePoints <- liftIO $ raiseException $ Storable.resumeFromStorage $ finalIndex ^. Storable.handle
-    Hedgehog.assert $ length resumablePoints >= 2
-
--- | The property verifies that the 'Storable.resumeFromStorage' call returns a sorted list of chain
--- points in descending order.
-propResumablePointsShouldBeSortedInDescOrder :: Property
-propResumablePointsShouldBeSortedInDescOrder = property $ do
-    cps <- forAll $ genChainPoints 1 5
-    events <- forAll $ forM cps genAddressDatumStorableEvent
-    indexer <-
-        liftIO $ raiseException $ AddressDatum.open ":memory:" (AddressDatumDepth 1)
-               >>= Storable.insertMany events
-               >>= Storable.insert (AddressDatum.toAddressDatumIndexEvent Nothing [] (last cps))
-    StorableProperties.propResumablePointsShouldBeSortedInDescOrder indexer
+    resumablePoint <- liftIO $ raiseException $ Storable.resumeFromStorage $ finalIndex ^. Storable.handle
+    let penultimateOrGenesis = case reverse $ List.sort cps of
+          _ : cp' : _ -> cp' -- We return the penultimate chain point,
+                             -- this is the newest one persisted
+                             -- because one is still in memory.
+          _           -> C.ChainPointAtGenesis
+    Hedgehog.assert $ penultimateOrGenesis == resumablePoint
 
 genAddressDatumStorableEvent :: C.ChainPoint -> Gen (Storable.StorableEvent AddressDatumHandle)
 genAddressDatumStorableEvent cp = do

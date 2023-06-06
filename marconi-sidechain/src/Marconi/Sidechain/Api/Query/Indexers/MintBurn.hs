@@ -13,9 +13,10 @@ import Control.Lens ((^.))
 import Data.Word (Word64)
 
 import Control.Monad.Except (runExceptT)
-import Marconi.ChainIndex.Indexers.MintBurn (MintBurnHandle, StorableQuery (QueryByAssetId),
+import Marconi.ChainIndex.Indexers.MintBurn (MintBurnHandle, StorableQuery (QueryBurnByAssetId),
                                              StorableResult (MintBurnResult), TxMintRow, txMintRowBlockHeaderHash,
-                                             txMintRowQuantity, txMintRowRedeemerData, txMintRowSlotNo, txMintRowTxId)
+                                             txMintRowQuantity, txMintRowRedeemerData, txMintRowRedeemerHash,
+                                             txMintRowSlotNo, txMintRowTxId)
 import Marconi.Core.Storable (State)
 import Marconi.Core.Storable qualified as Storable
 import Marconi.Sidechain.Api.Routes (AssetIdTxResult (AssetIdTxResult))
@@ -61,8 +62,8 @@ queryByPolicyAndAssetId env policyId assetId slotNo = do
       Just indexer -> query indexer
     where
         query indexer = do
-            let q = QueryByAssetId policyId assetId slotNo
-            res <- runExceptT $ Storable.query Storable.QEverything indexer q
+            let q = QueryBurnByAssetId policyId assetId slotNo
+            res <- runExceptT $ Storable.query indexer q
             case res of
                 Right (MintBurnResult mintBurnRows) -> pure $ Right $ toAssetIdTxResult <$> mintBurnRows
                 _other                              -> pure $ Left $ QueryError "invalid query result"
@@ -72,7 +73,6 @@ queryByPolicyAndAssetId env policyId assetId slotNo = do
             (x ^. txMintRowBlockHeaderHash)
             (x ^. txMintRowSlotNo)
             (x ^. txMintRowTxId)
-            Nothing
+            (Just $ x ^. txMintRowRedeemerHash)
             (Just $ x ^. txMintRowRedeemerData)
             (x ^. txMintRowQuantity)
-

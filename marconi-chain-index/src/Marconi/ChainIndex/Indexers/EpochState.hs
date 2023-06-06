@@ -42,22 +42,25 @@
 --
 -- We assume that the construction of 'LedgerState' is done outside of this indexer (this module).
 --
---   * the 'Storable.insert' function is called with the *last* event of an epoch (therefore, the
---   last 'LedgerState' before starting a new epoch). We do that because we only care about the SDD
---   (Stake Pool Delegation) from the last block before a new epoch.
+--   * the 'Storable.insert' function is called with the *first* event of an epoch (therefore, the
+--   first 'LedgerState' when starting a new epoch). We do that because we only care about the SDD
+--   (Stake Pool Delegation Distribution) of the snapshot of the previous epoch.
 --
 -- Once the 'Storable.StorableEvent' is stored on disk, we perform various steps:
 --
 --   1. we save the SDD for the current epoch in the `epoch_sdd` table
---   2. we save the 'LedgerState's in the filesystem as binary files (the ledger state file path has
+--   2. we save the Nonce for the current epoch in the `epoch_nonce` table
+--   3. we save the 'LedgerState's in the filesystem as binary files (the ledger state file path has
 --   the format: `ledgerState_<SLOT_NO>_<BLOCK_HEADER_HASH>_<BLOCK_NO>.bin`). We only store a
 --   'LedgerState' if it's rollbackable or if the last one of a given epoch. This step is necessary
 --   for resuming the indexer.
---   3. we delete immutable 'LedgerState' binary files expect latest one (this step is necessary for
+--   4. we delete immutable 'LedgerState' binary files expect latest one (this step is necessary for
+--   keeping the disk usage as low as possible).
 --
 -- The indexer provides the following queries:
 --
---   * C.EpochNo -> SDD (the actualy query that clients will be interested in)
+--   * C.EpochNo -> Nonce
+--   * C.EpochNo -> SDD
 --   * C.ChainPoint -> LedgerState (query that is necessary for resuming)
 module Marconi.ChainIndex.Indexers.EpochState
   ( -- * EpochStateIndex
@@ -124,9 +127,9 @@ import Marconi.ChainIndex.Node.Client.GenesisConfig (GenesisConfig, NetworkConfi
                                                      renderGenesisConfigError)
 import Marconi.ChainIndex.Orphans ()
 import Marconi.ChainIndex.Types (SecurityParam)
-import Marconi.ChainIndex.Utils (isBlockRollbackable)
-import Marconi.Core.Storable (Buffered (persistToStorage), HasPoint (getPoint), QueryInterval, Queryable (queryStorage),
-                              Resumable, Rewindable (rewindStorage), State, StorableEvent, StorableMonad, StorablePoint,
+import Marconi.ChainIndex.Utils (chainPointOrGenesis, getBlockNoFromChainTip, isBlockRollbackable)
+import Marconi.Core.Storable (Buffered (persistToStorage), HasPoint (getPoint), Queryable (queryStorage), Resumable,
+                              Rewindable (rewindStorage), State, StorableEvent, StorableMonad, StorablePoint,
                               StorableQuery, StorableResult, emptyState)
 import Marconi.Core.Storable qualified as Storable
 import Ouroboros.Consensus.Cardano.Block qualified as O
@@ -192,10 +195,12 @@ toStorableEvent
     -> C.BlockNo
     -> C.ChainTip
     -> SecurityParam
-    -> Bool -- ^ Is the last event of the current epoch
+    -> Bool -- ^ Is the first event of the current epoch
     -> StorableEvent EpochStateHandle
 toStorableEvent extLedgerState slotNo bhh bn chainTip securityParam isFirstEventOfEpoch = do
-    let doesStoreLedgerState = isBlockRollbackable securityParam bn chainTip || isFirstEventOfEpoch
+    let doesStoreLedgerState =
+            isBlockRollbackable securityParam bn (getBlockNoFromChainTip chainTip)
+            || isFirstEventOfEpoch
     EpochStateEvent
         (if doesStoreLedgerState then Just extLedgerState else Nothing)
         (getEpochNo extLedgerState)
@@ -353,6 +358,19 @@ instance ToJSON EpochNonceRow where
         , "blockNo" .= blockNo
         ]
 
+data LedgerStateFileMetadata = LedgerStateFileMetadata
+    { lsfMetaSlotNo          :: !C.SlotNo
+    , lsfMetaBlockHeaderHash :: !(C.Hash C.BlockHeader)
+    , lsfMetaBlockNo         :: !C.BlockNo
+    , lsfMetaChainTipBlockNo :: !C.BlockNo
+    }
+
+isLedgerStateFileRollbackable :: SecurityParam -> LedgerStateFileMetadata -> Bool
+isLedgerStateFileRollbackable
+        securityParam
+        LedgerStateFileMetadata { lsfMetaBlockNo, lsfMetaChainTipBlockNo } =
+    isBlockRollbackable securityParam lsfMetaBlockNo lsfMetaChainTipBlockNo
+
 instance Buffered EpochStateHandle where
     -- We should only store on disk SDD from the last slot of each epoch.
     persistToStorage
@@ -392,15 +410,16 @@ instance Buffered EpochStateHandle where
         -- We store the LedgerState if one of following conditions hold:
         --   * the LedgerState cannot be rollbacked and is the last of an epoch
         --   * the LedgerState can be rollbacked
-        let writeLedgerState ledgerState (C.SlotNo slotNo) blockHeaderHash (C.BlockNo blockNo) isRollbackable = do
+        let writeLedgerState ledgerState (C.SlotNo slotNo) blockHeaderHash (C.BlockNo blockNo) (C.BlockNo nodeTipBlockNo) = do
                 let fname = ledgerStateDirPath
                         </> "ledgerState_"
-                         <> (if isRollbackable then "volatile_" else "")
                          <> show slotNo
                          <> "_"
                          <> Text.unpack (C.serialiseToRawBytesHexText blockHeaderHash)
                          <> "_"
                          <> show blockNo
+                         <> "_"
+                         <> show nodeTipBlockNo
                          <> ".bin"
                 -- TODO We should delete the file is the write operation was interrumpted by the
                 -- user. Tried using something like `onException`, but it doesn't run the cleanup
@@ -420,9 +439,14 @@ instance Buffered EpochStateHandle where
                     isFirstEventOfEpoch) -> do
             case (maybeEpochNo, maybeLedgerState) of
               (Just _, Just ledgerState) -> do
-                  let isRollbackable = isBlockRollbackable securityParam blockNo chainTip
+                  let isRollbackable = isBlockRollbackable securityParam blockNo (getBlockNoFromChainTip chainTip)
                   when (isRollbackable || isFirstEventOfEpoch) $ do
-                    writeLedgerState ledgerState slotNo blockHeaderHash blockNo isRollbackable
+                    writeLedgerState
+                        ledgerState
+                        slotNo
+                        blockHeaderHash
+                        blockNo
+                        (getBlockNoFromChainTip chainTip)
               -- We don't store any 'LedgerState' if the era doesn't have epochs (Byron era) or if
               -- we don't have access to the 'LedgerState'.
               _noLedgerStateOrEpochNo -> pure ()
@@ -441,20 +465,13 @@ instance Buffered EpochStateHandle where
                       $ fmap epochStateEventChainTip nonEmptyEvents
 
               ledgerStateFilePaths <-
-                  mapMaybe (\fp -> fmap (fp,) $ chainTipsFromLedgerStateFilePath fp)
+                  mapMaybe (\fp -> fmap (fp,) $ readLedgerStateFileMetadata fp)
                   <$> listDirectory ledgerStateDirPath
-
-              -- Delete volatile LedgerState which have become immutable.
-              let oldVolatileLedgerStateFilePaths =
-                      fmap fst
-                      $ filter (\(_, (isVolatile, _, _, blockNo)) ->
-                          isVolatile && not (isBlockRollbackable securityParam blockNo chainTip))
-                      ledgerStateFilePaths
-              forM_ oldVolatileLedgerStateFilePaths $ \fp -> removeFile $ ledgerStateDirPath </> fp
 
               -- Delete all immutable LedgerStates expect the latest one
               let immutableLedgerStateFilePaths =
-                      filter (\(_, (isVolatile, _, _, _)) -> not isVolatile) ledgerStateFilePaths
+                      filter (\(_, lsfm) ->
+                          not $ isLedgerStateFileRollbackable securityParam lsfm) ledgerStateFilePaths
               case NE.nonEmpty immutableLedgerStateFilePaths of
                 Nothing -> pure ()
                 Just nonEmptyLedgerStateFilePaths -> do
@@ -464,10 +481,10 @@ instance Buffered EpochStateHandle where
                           $ NE.tail
                           $ NE.sortWith (\(_, (_, _, blockNo), isImmutableBlock) ->
                               Down (blockNo, isImmutableBlock))
-                          $ fmap (\(fp, (_, slotNo, bhh, blockNo)) ->
+                          $ fmap (\(fp, LedgerStateFileMetadata { lsfMetaSlotNo, lsfMetaBlockHeaderHash, lsfMetaBlockNo }) ->
                               ( fp
-                              , (slotNo, bhh, blockNo)
-                              , not $ isBlockRollbackable securityParam blockNo chainTip)
+                              , (lsfMetaSlotNo, lsfMetaBlockHeaderHash, lsfMetaBlockNo )
+                              , not $ isBlockRollbackable securityParam lsfMetaBlockNo (getBlockNoFromChainTip chainTip))
                               )
                           nonEmptyLedgerStateFilePaths
                   forM_ oldImmutableLedgerStateFilePaths
@@ -511,13 +528,12 @@ eventToEpochNonceRow (EpochStateEvent _ maybeEpochNo nonce _ slotNo blockHeaderH
 instance Queryable EpochStateHandle where
     queryStorage
         :: Foldable f
-        => QueryInterval C.ChainPoint
-        -> f (StorableEvent EpochStateHandle)
+        => f (StorableEvent EpochStateHandle)
         -> EpochStateHandle
         -> StorableQuery EpochStateHandle
         -> StorableMonad EpochStateHandle (StorableResult EpochStateHandle)
 
-    queryStorage _ events (EpochStateHandle _ c _ _) (SDDByEpochNoQuery epochNo)
+    queryStorage events (EpochStateHandle _ c _ _) (SDDByEpochNoQuery epochNo)
         = liftSQLError CantQueryIndexer $ do
         case List.find (\e -> epochStateEventEpochNo e == Just epochNo) (toList events) of
           Just e ->
@@ -530,7 +546,7 @@ instance Queryable EpochStateHandle where
                   |] (SQL.Only epochNo)
               pure $ SDDByEpochNoResult res
 
-    queryStorage _ events (EpochStateHandle _ c _ _) (NonceByEpochNoQuery epochNo)
+    queryStorage events (EpochStateHandle _ c _ _) (NonceByEpochNoQuery epochNo)
         = liftSQLError CantQueryIndexer $ do
         case List.find (\e -> epochStateEventEpochNo e == Just epochNo) (toList events) of
           Just e ->
@@ -543,10 +559,9 @@ instance Queryable EpochStateHandle where
                   |] (SQL.Only epochNo)
               pure $ NonceByEpochNoResult $ listToMaybe res
 
-    queryStorage _ _ EpochStateHandle {} (LedgerStateAtPointQuery C.ChainPointAtGenesis)
+    queryStorage _ EpochStateHandle {} (LedgerStateAtPointQuery C.ChainPointAtGenesis)
         = liftSQLError CantQueryIndexer $ pure $ LedgerStateAtPointResult Nothing
     queryStorage
-            _
             events
             (EpochStateHandle topLevelConfig _ ledgerStateDirPath _)
             (LedgerStateAtPointQuery (C.ChainPoint slotNo _))
@@ -556,13 +571,14 @@ instance Queryable EpochStateHandle where
                 ledgerStateFilePaths <- listDirectory ledgerStateDirPath
                 let ledgerStateFilePath =
                         List.find
-                            (\fp -> fmap (\(_, sn, _, _) -> sn)
-                                         (chainTipsFromLedgerStateFilePath fp) == Just slotNo
+                            (\fp -> fmap lsfMetaSlotNo (readLedgerStateFileMetadata fp) == Just slotNo
                             )
                             ledgerStateFilePaths
                 case ledgerStateFilePath of
                   Nothing -> pure $ LedgerStateAtPointResult Nothing
-                  Just fp -> LedgerStateAtPointResult . either (const Nothing) (Just . snd) <$> loadExtLedgerState (O.configCodec topLevelConfig) (ledgerStateDirPath </> fp)
+                  Just fp -> do
+                      ledgerState <- readLedgerStateFromDisk (ledgerStateDirPath </> fp) topLevelConfig
+                      pure $ LedgerStateAtPointResult ledgerState
             Just event -> pure $ LedgerStateAtPointResult $ epochStateEventLedgerState event
 
 instance Rewindable EpochStateHandle where
@@ -585,58 +601,73 @@ instance Rewindable EpochStateHandle where
 
         ledgerStateFilePaths <- listDirectory ledgerStateDirPath
         forM_ ledgerStateFilePaths $ \fp -> do
-            case chainTipsFromLedgerStateFilePath fp of
-              Nothing                              -> pure ()
-              Just (_, slotNo, _, _) | slotNo > sn -> removeFile $ ledgerStateDirPath </> fp
-              Just _                               -> pure ()
+            case readLedgerStateFileMetadata fp of
+              Nothing                           -> pure ()
+              Just lsm | lsfMetaSlotNo lsm > sn -> removeFile $ ledgerStateDirPath </> fp
+              Just _                            -> pure ()
 
         pure h
 
 instance Resumable EpochStateHandle where
     resumeFromStorage
         :: EpochStateHandle
-        -> StorableMonad EpochStateHandle [C.ChainPoint]
-    resumeFromStorage (EpochStateHandle _ c ledgerStateDirPath _)
-        = liftSQLError CantQueryIndexer $ do
-        ledgerStateFilepaths <- listDirectory ledgerStateDirPath
-        let ledgerStateChainPoints =
-                fmap (\(_, sn, bhh, _) -> (sn, bhh))
-                $ mapMaybe chainTipsFromLedgerStateFilePath ledgerStateFilepaths
+        -> StorableMonad EpochStateHandle C.ChainPoint
+    resumeFromStorage (EpochStateHandle topLevelConfig c ledgerStateDirPath securityParam) =
+        liftSQLError CantQueryIndexer $ do
+            -- We only want (and support) resuming from immutable LedgerStates.
+            -- After identifying immutable LedgerStates, we try to deserialise them to ensure that
+            -- we correctly serialised it in a previous application run. If the file is not
+            -- deserialisable, we delete it.
+            ledgerStateFilepaths <- listDirectory ledgerStateDirPath
+            let immutableLedgerStateFilePathsWithMetadata =
+                    filter (not . isLedgerStateFileRollbackable securityParam . snd)
+                    $ mapMaybe (\fp -> fmap (fp,) $ readLedgerStateFileMetadata fp) ledgerStateFilepaths
+            readableLedgerStateFilePaths <- flip filterM immutableLedgerStateFilePathsWithMetadata $ \(ledgerStateFilePath, _) -> do
+                let ledgerStateFullPath = ledgerStateDirPath </> ledgerStateFilePath
+                lsM <- readLedgerStateFromDisk ledgerStateFullPath topLevelConfig
+                case lsM of
+                  Nothing -> do
+                      removeFile ledgerStateFullPath
+                      pure False
+                  Just _  ->
+                      pure True
+            let ledgerStateChainPoints =
+                    fmap (\(_, LedgerStateFileMetadata { lsfMetaSlotNo, lsfMetaBlockHeaderHash }) ->
+                        (lsfMetaSlotNo, lsfMetaBlockHeaderHash)) readableLedgerStateFilePaths
 
-        epochSDDChainPoints <- flip filterM ledgerStateChainPoints $ \(slotNo, _) -> do
-            result :: [[C.SlotNo]] <- SQL.query c
-                [r|SELECT slotNo
-                   FROM epoch_sdd
-                   WHERE slotNo = ? LIMIT 1 |] (SQL.Only slotNo)
-            pure $ not $ null result
+            -- We only keep the LedgerState chain points which can be found in the epoch_sdd table.
+            epochSDDChainPoints <- flip filterM ledgerStateChainPoints $ \(slotNo, _) -> do
+                result :: [[C.SlotNo]] <- SQL.query c
+                    [r|SELECT slotNo
+                       FROM epoch_sdd
+                       WHERE slotNo = ? LIMIT 1 |] (SQL.Only slotNo)
+                pure $ not $ null result
 
-        epochNonceChainPoints <- flip filterM ledgerStateChainPoints $ \(slotNo, _) -> do
-            result :: [[C.SlotNo]] <- SQL.query c
-                [r|SELECT slotNo
-                   FROM epoch_nonce
-                   WHERE slotNo = ? LIMIT 1 |] (SQL.Only slotNo)
-            pure $ not $ null result
+            -- We only keep the LedgerState chain points which can be found in the epoch_nonce table.
+            epochNonceChainPoints <- flip filterM ledgerStateChainPoints $ \(slotNo, _) -> do
+                result :: [[C.SlotNo]] <- SQL.query c
+                    [r|SELECT slotNo
+                       FROM epoch_nonce
+                       WHERE slotNo = ? LIMIT 1 |] (SQL.Only slotNo)
+                pure $ not $ null result
 
-        let resumablePoints = Set.toList
-                            $ Set.intersection (Set.fromList epochSDDChainPoints)
-                                               (Set.fromList epochNonceChainPoints)
-        pure
-            $ List.sortOn Down
-            $ fmap (uncurry C.ChainPoint) resumablePoints ++ [C.ChainPointAtGenesis]
+            -- We return the latest resumable chain point.
+            let resumablePoints = List.sortOn Down
+                                $ fmap (uncurry C.ChainPoint)
+                                $ Set.toList
+                                $ Set.intersection (Set.fromList epochSDDChainPoints)
+                                                   (Set.fromList epochNonceChainPoints)
+            pure $ chainPointOrGenesis resumablePoints
 
-chainTipsFromLedgerStateFilePath :: FilePath -> Maybe (Bool, C.SlotNo, C.Hash C.BlockHeader, C.BlockNo)
-chainTipsFromLedgerStateFilePath ledgerStateFilepath =
+readLedgerStateFileMetadata :: FilePath -> Maybe LedgerStateFileMetadata
+readLedgerStateFileMetadata ledgerStateFilepath =
     case Text.splitOn "_" (Text.pack $ dropExtension ledgerStateFilepath) of
-      [_, slotNoStr, bhhStr, blockNoStr] -> do
-          (False,,,)
+      [_, slotNoStr, bhhStr, blockNoStr, chainTipBlockNoStr] -> do
+          LedgerStateFileMetadata
             <$> parseSlotNo slotNoStr
             <*> parseBlockHeaderHash bhhStr
             <*> parseBlockNo blockNoStr
-      [_, "volatile", slotNoStr, bhhStr, blockNoStr] -> do
-          (True,,,)
-            <$> parseSlotNo slotNoStr
-            <*> parseBlockHeaderHash bhhStr
-            <*> parseBlockNo blockNoStr
+            <*> parseBlockNo chainTipBlockNoStr
       _anyOtherFailure -> Nothing
  where
      parseSlotNo slotNoStr = C.SlotNo <$> readMaybe (Text.unpack slotNoStr)
@@ -721,3 +752,20 @@ loadExtLedgerState codecConfig fp = do
 
 type ExtLedgerState_ = O.ExtLedgerState (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
 type ExtLedgerCfg_ = O.ExtLedgerCfg (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
+
+readLedgerStateFromDisk
+    :: FilePath
+    -> O.TopLevelConfig (O.CardanoBlock O.StandardCrypto)
+    -> IO (Maybe (O.ExtLedgerState (O.CardanoBlock O.StandardCrypto)))
+readLedgerStateFromDisk fp topLevelConfig = do
+    ledgerStateBs <- BS.readFile fp
+    let codecConfig = O.configCodec topLevelConfig
+    pure $
+        either
+          (const Nothing)
+          (Just . snd)
+          $ CBOR.deserialiseFromBytes
+              ( O.decodeExtLedgerState (O.decodeDisk codecConfig)
+                                       (O.decodeDisk codecConfig)
+                                       (O.decodeDisk codecConfig)
+              ) ledgerStateBs

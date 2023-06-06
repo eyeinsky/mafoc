@@ -127,9 +127,9 @@ propEndToEndScriptTx = integration $ (liftIO TN.setDarwinTmpdir >>) $ HE.runFina
   let sqliteDb = tempAbsPath </> "script-tx.db"
   indexer <- liftIO $ do
 
-    coordinator <- M.initialCoordinator 1
+    coordinator <- M.initialCoordinator 1 0
     ch <- IO.atomically . IO.dupTChan $ M._channel coordinator
-    (loop, indexer) <- M.scriptTxWorker_ (\update -> writeScriptUpdate update $> []) (ScriptTx.Depth 1) coordinator ch sqliteDb
+    (loop, _, indexer) <- M.scriptTxWorker_ (\update -> writeScriptUpdate update $> []) (ScriptTx.Depth 1) coordinator ch sqliteDb
 
     -- Receive ChainSyncEvents and pass them on to indexer's channel
     void $ IO.forkIO $ do
@@ -278,7 +278,7 @@ propEndToEndScriptTx = integration $ (liftIO TN.setDarwinTmpdir >>) $ HE.runFina
   queriedTx2 :: C.Tx C.BabbageEra <- do
     ScriptTx.ScriptTxResult (ScriptTx.TxCbor txCbor : _) <- liftIO $ do
       ix <- IO.readMVar indexer
-      raiseException $ Storable.query Storable.QEverything ix (ScriptTx.ScriptTxAddress plutusScriptHash)
+      raiseException $ Storable.query ix (ScriptTx.ScriptTxAddress plutusScriptHash)
     H.leftFail $ C.deserialiseFromCBOR (C.AsTx C.AsBabbageEra) txCbor
 
   tx2 === queriedTx2

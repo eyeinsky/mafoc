@@ -12,14 +12,12 @@ module Marconi.Core.Storable
   , cursor
   , getMemoryEvents
   , getEvents
-  , filterWithQueryInterval
   , StorableEvent
   , StorablePoint
   , StorableQuery
   , StorableResult
   , StorableMonad
     -- * API
-  , QueryInterval(..)
   , SyntheticEvent(..)
   , Buffered(..)
   , Queryable(..)
@@ -43,10 +41,10 @@ import Control.Monad.Primitive (PrimMonad, PrimState)
 import Data.Foldable (foldl', foldlM)
 import Data.Function ((&))
 import Data.Functor ((<&>))
+import Data.Kind (Type)
 import Data.Vector qualified as V
 import Data.Vector.Generic qualified as VG
 import Data.Vector.Mutable qualified as VM
-import GHC.Generics (Generic)
 
 {-
    The extensible parts of the indexers are the way data is stored into some form
@@ -74,19 +72,8 @@ data family StorableQuery h
 
 data family StorableResult h
 
-type family StorableMonad h :: * -> *
+type family StorableMonad h :: Type -> Type
 
-{-
-   Query intervals are a necessary tool to make the queries a little safer. As we can
-   assume that there will be multiple concurrent indexers running there is no guarantee
-   that they are all synchronised upto the same block, so specifying a query validity
-   will ensure that the queries data is acceptably synchronised across all queried
-   indexers.
--}
-data QueryInterval p =
-    QEverything
-  | QInterval p p
-  deriving (Show, Eq, Generic)
 
 {-
    The first, `Buffered` class explains what it means for an indexer to be accumulating
@@ -148,8 +135,7 @@ class Buffered h where
 class Queryable h where
   queryStorage
     :: Foldable f
-    => QueryInterval (StorablePoint h)
-    -> f (StorableEvent h)
+    => f (StorableEvent h)
     -> h
     -> StorableQuery h
     -> StorableMonad h (StorableResult h)
@@ -181,7 +167,7 @@ class Rewindable h where
 -}
 class Resumable h where
   resumeFromStorage
-    :: h -> StorableMonad h [StorablePoint h]
+    :: h -> StorableMonad h (StorablePoint h)
 
 {-
    The next class is witnessing the fact that events contain enough information to
@@ -378,47 +364,15 @@ rewind p s = if s ^. storage . cursor == 0
 resume
   :: Resumable h
   => State h
-  -> StorableMonad h [StorablePoint h]
+  -> StorableMonad h (StorablePoint h)
 resume s = resumeFromStorage (s ^. handle)
 
-{-
-   This function is a bit non-trivial to think about. The question it is trying to
-   answer is: Which events are valid for a given query interval.
-
-   The answer is quite a bit more complicated than it seems at first sight. We would
-   like to select the latest event within the interval and everything that goes
-   before it (so we get a proper history). If we can't find any event less than the
-   end, that means that the query interval has filtered all existing events.
-
-   This functionality is important, because it should also be implemented at the
-   database level to filter the on-disk events.
--}
-filterWithQueryInterval
-  :: forall h.
-     HasPoint (StorableEvent h) (StorablePoint h)
-  => Ord (StorablePoint h)
-  => QueryInterval (StorablePoint h)
-  -> [StorableEvent h]
-  -> [StorableEvent h]
-filterWithQueryInterval QEverything es = es
-filterWithQueryInterval (QInterval start end) es =
-  let es' = takeWhile (withPoint (\p -> p <= end)) es
-   in if not (null es') && withPoint (\p -> p >= start) (last es')
-      then es'
-      else []
-  where
-    withPoint :: (StorablePoint h -> Bool) -> StorableEvent h -> Bool
-    withPoint f e = let p = getPoint e in f p
-
 query
-  :: HasPoint (StorableEvent h) (StorablePoint h)
-  => Ord (StorablePoint h)
-  => Queryable h
+  :: Queryable h
   => PrimMonad (StorableMonad h)
-  => QueryInterval (StorablePoint h)
-  -> State h
+  => State h
   -> StorableQuery h
   -> StorableMonad h (StorableResult h)
-query qi s q = do
+query s q = do
   es  <- getMemoryEvents (s ^. storage) & V.freeze <&> foldEvents . V.toList
-  queryStorage qi (filterWithQueryInterval qi es) (s ^. handle) q
+  queryStorage es (s ^. handle) q
