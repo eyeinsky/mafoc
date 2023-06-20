@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+
 module Mafoc.Speed where
 
 import Control.Concurrent (MVar, modifyMVar_, newMVar)
@@ -18,30 +19,29 @@ import Mafoc.Core qualified as Mafoc
 import Marconi.ChainIndex.Indexers qualified as Marconi
 import Marconi.Core.Storable qualified as RI
 
-
 -- * Measuer local chainsync speed
 
 data BlockSource
   = Callback
-      { callbackOptionsSocketPath     :: String
+      { callbackOptionsSocketPath :: String
       , callbackOptionsNodeConfigPath :: String
-      , callbackOptionsStart          :: Maybe C.ChainPoint
-      , callbackOptionsEnd            :: Maybe C.SlotNo
+      , callbackOptionsStart :: Maybe C.ChainPoint
+      , callbackOptionsEnd :: Maybe C.SlotNo
       }
   | CallbackPipelined
-      { callbackPipelinedOptionsSocketPath     :: String
+      { callbackPipelinedOptionsSocketPath :: String
       , callbackPipelinedOptionsNodeConfigPath :: String
-      , callbackPipelinedOptionsStart          :: Maybe C.ChainPoint
-      , callbackPipelinedOptionsEnd            :: Maybe C.SlotNo
-      , callbackPipelinedPipelineSize          :: Word32
+      , callbackPipelinedOptionsStart :: Maybe C.ChainPoint
+      , callbackPipelinedOptionsEnd :: Maybe C.SlotNo
+      , callbackPipelinedPipelineSize :: Word32
       }
   | RewindableIndex
       { rewindableIndexOptionsSocketPath :: String
-      , rewindableIndexOptionsStart      :: Maybe C.ChainPoint
-      , rewindableIndexOptionsEnd        :: Maybe C.SlotNo
-      , rewindableIndexNetworkId         :: C.NetworkId
+      , rewindableIndexOptionsStart :: Maybe C.ChainPoint
+      , rewindableIndexOptionsEnd :: Maybe C.SlotNo
+      , rewindableIndexNetworkId :: C.NetworkId
       }
-  deriving Show
+  deriving (Show)
 
 mkCallback
   :: (C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint -> (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ()) -> IO b)
@@ -52,20 +52,19 @@ mkCallback
   -> IO b
 mkCallback f socketPath nodeConfig cpFromCli maybeEnd = do
   (env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
-  let
-    from = fromMaybe C.ChainPointAtGenesis cpFromCli
-    io g = f (CS.mkConnectInfo env socketPath) from $ \case
-      CS.RollForward bim _ct -> g bim
-      CS.RollBackward{}      -> pure ()
+  let from = fromMaybe C.ChainPointAtGenesis cpFromCli
+      io g = f (CS.mkConnectInfo env socketPath) from $ \case
+        CS.RollForward bim _ct -> g bim
+        CS.RollBackward{} -> pure ()
 
   case maybeEnd of
     Just end -> io $ \bim -> printAndDieWhenEnd end bim
     _ -> do
       putStrLn "No end"
-      io $ \bim -> let
-        slotNo = CS.bimSlotNo bim
-        w = coerce slotNo :: Word64
-        in when (w `mod` 10000 == 0) $ print slotNo
+      io $ \bim ->
+        let slotNo = CS.bimSlotNo bim
+            w = coerce slotNo :: Word64
+         in when (w `mod` 10000 == 0) $ print slotNo
 
 -- * Rewindable index
 
@@ -83,7 +82,7 @@ type NoopIndexer = RI.State NoopHandler
 
 rewindableIndex :: FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
 rewindableIndex socketPath cpFromCli maybeEnd networkId = do
-  coordinator <- Marconi.initialCoordinator 1
+  coordinator <- Marconi.initialCoordinator 1 2160
   workerChannel <- atomically . dupTChan $ Marconi._channel coordinator
   indexer :: NoopIndexer <- RI.emptyState 10 NoopHandler
   mIndexer <- newMVar indexer
@@ -104,19 +103,21 @@ rewindableIndex socketPath cpFromCli maybeEnd networkId = do
 
       void $ IO.withAsync (loop mIndexer) $ \a -> do
         IO.link a
-        CS.withChainSyncEventStream socketPath networkId [fromMaybe C.ChainPointAtGenesis cpFromCli]
+        CS.withChainSyncEventStream
+          socketPath
+          networkId
+          [fromMaybe C.ChainPointAtGenesis cpFromCli]
           (Marconi.mkIndexerStream coordinator)
-
     _ -> putStrLn "Must specify final slot!"
 
 -- * Exit loops with exception
 
 printAndDieWhenEnd :: C.SlotNo -> C.BlockInMode C.CardanoMode -> IO ()
-printAndDieWhenEnd end bim = let
-  slotNo = CS.bimSlotNo bim
-  w = coerce slotNo :: Word64
-  in do
-  when (w `mod` 10000 == 0) $ print slotNo
-  when (slotNo >= end) $ do
-    putStrLn $ "Reached the requested end slot: " <> show end
-    undefined
+printAndDieWhenEnd end bim =
+  let slotNo = CS.bimSlotNo bim
+      w = coerce slotNo :: Word64
+   in do
+        when (w `mod` 10000 == 0) $ print slotNo
+        when (slotNo >= end) $ do
+          putStrLn $ "Reached the requested end slot: " <> show end
+          undefined

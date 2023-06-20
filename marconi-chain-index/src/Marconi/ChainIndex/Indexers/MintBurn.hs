@@ -1,13 +1,12 @@
-{-# LANGUAGE DerivingStrategies  #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeFamilies        #-}
-
-{-# OPTIONS_GHC -Wno-orphans     #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 {- | Mint/burn event indexer, the result of which is an sqlite database
    'mintburn.db' which has a table 'minting_policy_events' with the
@@ -16,19 +15,17 @@
      - slotNo          INT NOT NULL
      - blockHeaderHash INT NOT NULL
      - txId            BLOB NOT NULL
+     - txIndexInBlock  INT NOT NULL
      - policyId        BLOB NOT NULL
      - assetName       TEXT NOT NULL
      - quantity        INT NOT NULL
-     - redeemerIx      INT NOT NULL
      - redeemerData    BLOB NOT NULL
      - redeemerHash    BLOB NOT NULL
 -}
-
 module Marconi.ChainIndex.Indexers.MintBurn where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Cardano.Ledger.Alonzo.Scripts qualified as LA
 import Cardano.Ledger.Alonzo.Scripts.Data qualified as LA
 import Cardano.Ledger.Alonzo.Tx qualified as LA
 import Cardano.Ledger.Alonzo.TxWits qualified as LA
@@ -36,30 +33,37 @@ import Cardano.Ledger.Api.Scripts.Data qualified as Ledger.Api
 import Cardano.Ledger.Babbage.Tx qualified as LB
 import Cardano.Ledger.Conway.TxBody qualified as LC
 import Cardano.Ledger.Core qualified as Ledger
+import Cardano.Ledger.Mary.Value qualified as LA
 import Cardano.Ledger.Mary.Value qualified as LM
 import Control.Lens (makeLenses, view, (&), (^.))
 import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.=))
+import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.:?), (.=))
+import Data.Aeson.Types (Pair)
 import Data.ByteString.Short qualified as Short
 import Data.Coerce (coerce)
 import Data.Foldable (toList)
 import Data.Function (on)
 import Data.List (groupBy, sort)
+import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.String (IsString (fromString))
 import Data.Text qualified as Text
-import Data.Word (Word64)
 import Database.SQLite.Simple (NamedParam ((:=)))
 import Database.SQLite.Simple qualified as SQL
+import Database.SQLite.Simple.FromField qualified as SQL
+import Database.SQLite.Simple.FromRow qualified as SQL
+import Database.SQLite.Simple.ToField qualified as SQL
 import GHC.Generics (Generic)
-import Marconi.ChainIndex.Error (IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
-                                 liftSQLError)
+import Marconi.ChainIndex.Error (
+  IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
+  liftSQLError,
+ )
 import Marconi.ChainIndex.Orphans ()
-import Marconi.ChainIndex.Types (SecurityParam)
+import Marconi.ChainIndex.Types (SecurityParam, TxIndexInBlock)
 import Marconi.ChainIndex.Utils (chainPointOrGenesis)
 import Marconi.Core.Storable (StorableMonad)
 import Marconi.Core.Storable qualified as RI
@@ -67,31 +71,61 @@ import Ouroboros.Consensus.Shelley.Eras qualified as OEra
 
 -- * Event
 
+-- | The info about the tx that does the minting
+data TxMintInfo = TxMintInfo
+  { txMintTxId :: C.TxId
+  , txMintIndexInBlock :: TxIndexInBlock
+  , txMintAsset :: NE.NonEmpty MintAsset
+  }
+  deriving (Show, Eq, Ord)
+
+-- | Gather all the relevant minting in a block
 data TxMintEvent = TxMintEvent
-  { txMintEventSlotNo          :: !C.SlotNo
+  { txMintEventSlotNo :: !C.SlotNo
   , txMintEventBlockHeaderHash :: !(C.Hash C.BlockHeader)
-  , txMintEventTxAssets        :: !(NE.NonEmpty (C.TxId, NE.NonEmpty MintAsset))
-  } deriving (Show, Eq, Ord)
+  , txMintEventBlockNo :: !C.BlockNo
+  , txMintEventTxAssets :: ![TxMintInfo]
+  }
+  deriving (Show, Eq, Ord)
+
+data MintAssetRedeemer = MintAssetRedeemer
+  { mintAssetRedeemerData :: !C.ScriptData
+  , mintAssetRedeemerHash :: !(C.Hash C.ScriptData)
+  }
+  deriving (Eq, Ord, Show, Generic, SQL.FromRow, SQL.ToRow)
 
 data MintAsset = MintAsset
-  { mintAssetPolicyId     :: !C.PolicyId
-  , mintAssetAssetName    :: !C.AssetName
-  , mintAssetQuantity     :: !C.Quantity
-  , mintAssetRedeemerIdx  :: !Word64
-  , mintAssetRedeemerData :: !C.ScriptData
-  , mintAssetRedeemerHash :: !(C.Hash C.ScriptData)
-  } deriving (Show, Eq, Ord)
+  { mintAssetPolicyId :: !C.PolicyId
+  , mintAssetAssetName :: !C.AssetName
+  , mintAssetQuantity :: !C.Quantity
+  , mintAssetRedeemer :: !(Maybe MintAssetRedeemer)
+  -- ^ Nothing if  the policyId is a simple script
+  }
+  deriving (Show, Eq, Ord)
 
-toUpdate :: C.BlockInMode C.CardanoMode -> Maybe TxMintEvent
-toUpdate (C.BlockInMode (C.Block (C.BlockHeader slotNo blockHeaderHash _blockNo) txs) _) =
-  case mapMaybe txMints txs of
-    x : xs -> Just $ TxMintEvent slotNo blockHeaderHash (x NE.:| xs)
-    []     -> Nothing
+-- | Extract the mint events from a block
+toUpdate
+  :: Maybe (NonEmpty (C.PolicyId, Maybe C.AssetName))
+  -> C.BlockInMode C.CardanoMode
+  -> TxMintEvent
+toUpdate mAssets (C.BlockInMode (C.Block (C.BlockHeader slotNo blockHeaderHash blockNo) txs) _) =
+  let assets = mapMaybe (uncurry $ txMints mAssets) $ zip [0 ..] txs
+   in TxMintEvent slotNo blockHeaderHash blockNo assets
 
-txMints :: C.Tx era -> Maybe (C.TxId, NE.NonEmpty MintAsset)
-txMints (C.Tx txb _) = case txbMints txb of
-  x : xs -> Just (C.getTxId txb, x NE.:| xs )
-  []     -> Nothing
+-- | Extracs TxMintInfo from a Tx
+txMints :: Maybe (NonEmpty (C.PolicyId, Maybe C.AssetName)) -> TxIndexInBlock -> C.Tx era -> Maybe TxMintInfo
+txMints mAssets ix (C.Tx txb _) =
+  let isTargetOf token pId an =
+        mintAssetPolicyId token == pId
+          && maybe True (mintAssetAssetName token ==) an
+      isTarget m = case mAssets of
+        Just xs -> any (uncurry (isTargetOf m)) xs
+        Nothing -> True
+      assets = txbMints txb
+      txid = C.getTxId txb
+   in case filter isTarget assets of
+        x : xs -> Just $ TxMintInfo txid ix (x NE.:| xs)
+        [] -> Nothing
 
 txbMints :: C.TxBody era -> [MintAsset]
 txbMints txb = case txb of
@@ -99,45 +133,37 @@ txbMints txb = case txb of
     C.ShelleyBasedEraShelley -> []
     C.ShelleyBasedEraAllegra -> []
     C.ShelleyBasedEraMary -> []
-    C.ShelleyBasedEraAlonzo -> do
-      (policyId, assetName, quantity, index', redeemer, redeemerHash) <- getPolicyData txb $ LA.atbMint shelleyTx
-      pure $ MintAsset policyId assetName quantity index' redeemer redeemerHash
-    C.ShelleyBasedEraBabbage -> do
-      (policyId, assetName, quantity, index', redeemer, redeemerHash) <- getPolicyData txb $ LB.btbMint shelleyTx
-      pure $ MintAsset policyId assetName quantity index' redeemer redeemerHash
-    C.ShelleyBasedEraConway -> do
-      (policyId, assetName, quantity, index', redeemer, redeemerHash) <- getPolicyData txb $ LC.ctbMint shelleyTx
-      pure $ MintAsset policyId assetName quantity index' redeemer redeemerHash
+    C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
+    C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
+    C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
   _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
 
 -- * Helpers
 
 getPolicyData
-    :: forall era. ( Ledger.Era (C.ShelleyLedgerEra era), OEra.EraCrypto (C.ShelleyLedgerEra era) ~ OEra.StandardCrypto)
-    => C.TxBody era
-    -> LM.MultiAsset OEra.StandardCrypto
-    -> [(C.PolicyId, C.AssetName, C.Quantity, Word64, C.ScriptData, C.Hash C.ScriptData)]
-getPolicyData txb (LM.MultiAsset m) = do
-  let
-    policyIdList = Map.toList m
-    getPolicyId index' = policyIdList !! fromIntegral index'
-
-  ((maryPolicyID, assets), index'', (redeemer, _)) <- map (\(index', data_) -> (getPolicyId index', index', data_)) mintRedeemers
-  let redeemerHash = C.ScriptDataHash $ Ledger.Api.hashData redeemer
-  (assetName, quantity) :: (LM.AssetName, Integer) <- Map.toList assets
-  pure (fromMaryPolicyID maryPolicyID, fromMaryAssetName assetName, C.Quantity quantity, index'', fromAlonzoData redeemer, redeemerHash)
-  where
-    mintRedeemers :: [(Word64, (LB.Data (C.ShelleyLedgerEra era), LA.ExUnits))]
-    mintRedeemers = txRedeemers txb
-      & Map.toList
-      & filter (\(LA.RdmrPtr tag _, _) -> tag == LA.Mint)
-      & map (\(LA.RdmrPtr _ w, a) -> (w, a))
-
-    txRedeemers :: C.TxBody era -> Map.Map LA.RdmrPtr (LB.Data (C.ShelleyLedgerEra era), LA.ExUnits)
-    txRedeemers (C.ShelleyTxBody _ _ _ txScriptData _ _) = case txScriptData of
-      C.TxBodyScriptData _proof _datum (LA.Redeemers redeemers) -> redeemers
-      C.TxBodyNoScriptData                                      -> mempty
-    txRedeemers _ = mempty
+  :: forall era
+   . (Ledger.Era (C.ShelleyLedgerEra era), OEra.EraCrypto (C.ShelleyLedgerEra era) ~ OEra.StandardCrypto)
+  => C.TxBody era
+  -> LM.MultiAsset OEra.StandardCrypto
+  -> [MintAsset]
+getPolicyData txb m = do
+  let txRedeemers :: C.TxBody era -> [(LA.RdmrPtr, LB.Data (C.ShelleyLedgerEra era))]
+      txRedeemers (C.ShelleyTxBody _ _ _ txScriptData _ _) = case txScriptData of
+        C.TxBodyScriptData _proof _datum (LA.Redeemers redeemers) -> Map.toList $ fmap fst redeemers
+        C.TxBodyNoScriptData -> mempty
+      txRedeemers _ = mempty
+      findRedeemerByIndex ix (LA.RdmrPtr _ w, _) = w == ix
+      findRedeemer ix = snd <$> List.find (findRedeemerByIndex ix) (txRedeemers txb)
+      redeemerHash = C.ScriptDataHash . Ledger.Api.hashData
+      toAssetRedeemer r = MintAssetRedeemer (fromAlonzoData r) (redeemerHash r)
+  (ix, (policyId', assetName, quantity)) <- zip [0 ..] $ LA.flattenMultiAsset m
+  let redeemer = findRedeemer ix
+  pure $
+    MintAsset
+      (fromMaryPolicyID policyId')
+      (fromMaryAssetName assetName)
+      (C.Quantity quantity)
+      (toAssetRedeemer <$> redeemer)
 
 -- ** Copy-paste
 
@@ -153,138 +179,218 @@ fromAlonzoData = C.fromPlutusData . LA.getPlutusData -- from cardano-api:src/Car
 -- * Sqlite
 
 data TxMintRow = TxMintRow
-    { _txMintRowSlotNo          :: !C.SlotNo
-    , _txMintRowBlockHeaderHash :: !(C.Hash C.BlockHeader)
-    , _txMintRowTxId            :: !C.TxId
-    , _txMintRowPolicyId        :: !C.PolicyId
-    , _txMintRowAssetName       :: !C.AssetName
-    , _txMintRowQuantity        :: !C.Quantity
-    , _txMintRowRedeemerIdx     :: !Word64
-    , _txMintRowRedeemerData    :: !C.ScriptData
-    , _txMintRowRedeemerHash    :: !(C.Hash C.ScriptData)
-    }
-    deriving (Eq, Ord, Show, Generic, SQL.FromRow, SQL.ToRow)
+  { _txMintRowSlotNo :: !C.SlotNo
+  , _txMintRowBlockHeaderHash :: !(C.Hash C.BlockHeader)
+  , _txMintRowBlockNo :: !C.BlockNo
+  , _txMintRowTxIx :: !TxIndexInBlock
+  , _txMintRowTxId :: !C.TxId
+  , _txMintRowPolicyId :: !C.PolicyId
+  , _txMintRowAssetName :: !C.AssetName
+  , _txMintRowQuantity :: !C.Quantity
+  , _txMintRowRedeemer :: !(Maybe MintAssetRedeemer)
+  }
+  deriving (Eq, Ord, Show, Generic)
 
 makeLenses 'TxMintRow
 
+instance SQL.FromRow TxMintRow where
+  fromRow = do
+    let redeemerFromRow (Just d) (Just h) = pure $ Just $ MintAssetRedeemer d h
+        redeemerFromRow Nothing Nothing = pure Nothing
+        redeemerFromRow _ _ =
+          SQL.fieldWith $ \field' ->
+            SQL.returnError
+              SQL.UnexpectedNull
+              field'
+              "Invalid redeemer: Some fields are null, other aren't"
+    slotNo <- SQL.field
+    blockHeaderHash <- SQL.field
+    blockNo <- SQL.field
+    txIx <- SQL.field
+    txId <- SQL.field
+    policyId' <- SQL.field
+    assetName <- SQL.field
+    qty <- SQL.field
+    redeemerData <- SQL.field
+    redeemerHash <- SQL.field
+    redeemer <- redeemerFromRow redeemerData redeemerHash
+    pure $ TxMintRow slotNo blockHeaderHash blockNo txIx txId policyId' assetName qty redeemer
+
+instance FromJSON MintAssetRedeemer where
+  parseJSON (Object v) = do
+    redeemerData <- v .:? "redeemerData"
+    redeemerHash <- v .:? "redeemerHash"
+    case MintAssetRedeemer <$> redeemerData <*> redeemerHash of
+      Just x -> pure x
+      Nothing -> fail "invalid object for asset redeemer"
+  parseJSON _ = mempty
+
 instance FromJSON TxMintRow where
-    parseJSON (Object v) =
-        TxMintRow
-            <$> v .: "slotNo"
-            <*> v .: "blockHeaderHash"
-            <*> v .: "txId"
-            <*> v .: "policyId"
-            <*> v .: "assetName"
-            <*> v .: "quantity"
-            <*> v .: "redeemerIdx"
-            <*> v .: "redeemerData"
-            <*> v .: "redeemerHash"
-    parseJSON _ = mempty
+  parseJSON (Object v) = do
+    redeemerData <- v .:? "redeemerData"
+    redeemerHash <- v .:? "redeemerHash"
+    let redeemer = case (redeemerData, redeemerHash) of
+          (Nothing, Nothing) -> Nothing
+          (Just d, Just h) -> pure $ MintAssetRedeemer d h
+          _ -> fail "Redeemer is partially encoded"
+    TxMintRow
+      <$> v .: "slotNo"
+      <*> v .: "blockHeaderHash"
+      <*> v .: "blockNo"
+      <*> v .: "txIndexInBlock"
+      <*> v .: "txId"
+      <*> v .: "policyId"
+      <*> v .: "assetName"
+      <*> v .: "quantity"
+      <*> pure redeemer
+  parseJSON _ = mempty
+
+instance SQL.ToRow TxMintRow where
+  toRow m =
+    SQL.toRow
+      [ SQL.toField $ m ^. txMintRowSlotNo
+      , SQL.toField $ m ^. txMintRowBlockHeaderHash
+      , SQL.toField $ m ^. txMintRowBlockNo
+      , SQL.toField $ m ^. txMintRowTxIx
+      , SQL.toField $ m ^. txMintRowTxId
+      , SQL.toField $ m ^. txMintRowPolicyId
+      , SQL.toField $ m ^. txMintRowAssetName
+      , SQL.toField $ m ^. txMintRowQuantity
+      , SQL.toField $ mintAssetRedeemerData <$> m ^. txMintRowRedeemer
+      , SQL.toField $ mintAssetRedeemerHash <$> m ^. txMintRowRedeemer
+      ]
+
+mintAssetRedeemerPairs :: MintAssetRedeemer -> [Pair]
+mintAssetRedeemerPairs row =
+  [ "redeemerData" .= mintAssetRedeemerData row
+  , "redeemerHash" .= mintAssetRedeemerHash row
+  ]
+
+instance ToJSON MintAssetRedeemer where
+  toJSON = object . mintAssetRedeemerPairs
 
 instance ToJSON TxMintRow where
-  toJSON (TxMintRow slotNo bhh txId policyId assetName qty redIdx redData redHash) = object
-    [ "slotNo" .= slotNo
-    , "blockHeaderHash" .= bhh
-    , "txId" .= txId
-    , "policyId" .= policyId
-    , "assetName" .= assetName
-    , "quantity" .= qty
-    , "redeemerIdx" .= redIdx
-    , "redeemerData" .= redData
-    , "redeemerHash" .= redHash
-    ]
+  toJSON row =
+    object $
+      [ "slotNo" .= _txMintRowSlotNo row
+      , "blockHeaderHash" .= _txMintRowBlockHeaderHash row
+      , "blockNo" .= _txMintRowBlockNo row
+      , "txIndexInBlock" .= _txMintRowTxIx row
+      , "txId" .= _txMintRowTxId row
+      , "policyId" .= _txMintRowPolicyId row
+      , "assetName" .= _txMintRowAssetName row
+      , "quantity" .= _txMintRowQuantity row
+      ]
+        <> maybe [] mintAssetRedeemerPairs (_txMintRowRedeemer row)
 
 sqliteInit :: SQL.Connection -> String -> IO ()
 sqliteInit c tableName = liftIO $ do
   let tableName' = fromString tableName
   SQL.execute_ c $
     " CREATE TABLE IF NOT EXISTS        \
-    \ " <> tableName' <> "              \
-    \   ( slotNo          INT NOT NULL  \
-    \   , blockHeaderHash INT NOT NULL  \
-    \   , txId            BLOB NOT NULL \
-    \   , policyId        BLOB NOT NULL \
-    \   , assetName       TEXT NOT NULL \
-    \   , quantity        INT NOT NULL  \
-    \   , redeemerIx      INT NOT NULL  \
-    \   , redeemerData    BLOB NOT NULL \
-    \   , redeemerHash    BLOB NOT NULL)"
-
+    \ "
+      <> tableName'
+      <> "              \
+         \   ( slotNo          INT NOT NULL  \
+         \   , blockHeaderHash INT NOT NULL  \
+         \   , blockNo         INT NOT NULL  \
+         \   , txId            BLOB NOT NULL \
+         \   , txIndexInBlock  BLOB NOT NULL \
+         \   , policyId        BLOB NOT NULL \
+         \   , assetName       TEXT NOT NULL \
+         \   , quantity        INT NOT NULL  \
+         \   , redeemerIx      INT           \
+         \   , redeemerData    BLOB          \
+         \   , redeemerHash    BLOB          )"
   SQL.execute_ c $
     " CREATE INDEX IF NOT EXISTS               \
     \    minting_policy_events__txId_policyId  \
-    \ ON " <> tableName' <> " (txId, policyId) "
+    \ ON "
+      <> tableName'
+      <> " (txId, policyId) "
 
 sqliteInsert :: SQL.Connection -> String -> [TxMintEvent] -> IO ()
 sqliteInsert c tableName es = SQL.executeMany c template $ toRows =<< toList es
   where
     template =
-      "INSERT INTO " <> fromString tableName <> " \
-      \ ( slotNo, blockHeaderHash, txId    \
-      \ , policyId, assetName, quantity    \
-      \ , redeemerIx, redeemerData         \
-      \ , redeemerHash )                   \
-      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+      "INSERT INTO "
+        <> fromString tableName
+        <> " \
+           \ ( slotNo, blockHeaderHash, blockNo        \
+           \ , txIndexInBlock, txId                    \
+           \ , policyId, assetName, quantity           \
+           \ , redeemerData, redeemerHash              \
+           \ )                                         \
+           \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)     "
 
 toRows :: TxMintEvent -> [TxMintRow]
 toRows e = do
-  (txId, txMintAssets) <- NE.toList $ txMintEventTxAssets e
+  TxMintInfo txId txIx txMintAssets <- txMintEventTxAssets e
   mintAsset <- NE.toList txMintAssets
-  pure $ TxMintRow
-    (txMintEventSlotNo e)
-    (txMintEventBlockHeaderHash e)
-    txId
-    (mintAssetPolicyId mintAsset)
-    (mintAssetAssetName mintAsset)
-    (mintAssetQuantity mintAsset)
-    (mintAssetRedeemerIdx mintAsset)
-    (mintAssetRedeemerData mintAsset)
-    (mintAssetRedeemerHash mintAsset)
+  pure $
+    TxMintRow
+      (txMintEventSlotNo e)
+      (txMintEventBlockHeaderHash e)
+      (txMintEventBlockNo e)
+      txIx
+      txId
+      (mintAssetPolicyId mintAsset)
+      (mintAssetAssetName mintAsset)
+      (mintAssetQuantity mintAsset)
+      (mintAssetRedeemer mintAsset)
 
 -- | Input rows must be sorted by C.SlotNo.
 fromRows :: [TxMintRow] -> [TxMintEvent]
-fromRows rows =  do
+fromRows rows = do
   rs@(r :| _) <- NE.groupBy ((==) `on` slotNo) rows -- group by SlotNo
-  pure $ TxMintEvent (slotNo r) (hash r) $ do
-    rs' <- NE.groupBy1 ((==) `on` txId) rs -- group by TxId
-    pure (txId r, rowToMintAsset <$> rs')
+  pure $ TxMintEvent (slotNo r) (hash r) (blockNo r) $ do
+    rs' <- NE.groupBy ((==) `on` assetKey) rs
+    pure $ TxMintInfo (txId r) (txIx r) (rowToMintAsset <$> rs')
   where
-    slotNo = view txMintRowSlotNo :: TxMintRow -> C.SlotNo
-    hash = view txMintRowBlockHeaderHash :: TxMintRow -> C.Hash C.BlockHeader
-    txId = view txMintRowTxId :: TxMintRow -> C.TxId
+    assetKey row = (txId row, txIx row)
+    txId = view txMintRowTxId
+    txIx = view txMintRowTxIx
+    slotNo = view txMintRowSlotNo
+    blockNo = view txMintRowBlockNo
+    hash = view txMintRowBlockHeaderHash
     rowToMintAsset :: TxMintRow -> MintAsset
     rowToMintAsset row =
-        MintAsset
-            (row ^. txMintRowPolicyId)
-            (row ^. txMintRowAssetName)
-            (row ^. txMintRowQuantity)
-            (row ^. txMintRowRedeemerIdx)
-            (row ^. txMintRowRedeemerData)
-            (row ^. txMintRowRedeemerHash)
+      MintAsset
+        (row ^. txMintRowPolicyId)
+        (row ^. txMintRowAssetName)
+        (row ^. txMintRowQuantity)
+        (row ^. txMintRowRedeemer)
 
 queryStoredTxMintEvents
-    :: SQL.Connection
-    -> ([SQL.Query], [NamedParam])
-    -> IO [TxMintEvent]
+  :: SQL.Connection
+  -> ([SQL.Query], [NamedParam])
+  -> IO [TxMintEvent]
 queryStoredTxMintEvents sqlCon (conditions, params) =
   fmap fromRows $ SQL.queryNamed sqlCon (SQL.Query query) params
   where
     allConditions = Text.intercalate " AND " $ fmap SQL.fromQuery conditions
     whereClause = if allConditions == "" then "" else "WHERE " <> allConditions
     query =
-          " SELECT slotNo, blockHeaderHash, txId, policyId       \
-          \      , assetName, quantity, redeemerIx, redeemerData \
-          \      , redeemerHash                                  \
-          \   FROM minting_policy_events                         \
-          \   " <> whereClause <> "                              \
-          \  ORDER BY slotNo, txId                               "
+      " SELECT slotNo, blockHeaderHash, blockNo, txIndexInBlock, txId,   \
+      \        policyId, assetName, quantity, redeemerData, redeemerHash \
+      \ FROM minting_policy_events                                       \
+      \   "
+        <> whereClause
+        <> "                                        \
+           \ ORDER BY blockNo ASC, txIndexInBlock ASC"
 
 groupBySlotAndHash :: [TxMintEvent] -> [TxMintEvent]
-groupBySlotAndHash events = events
-  & sort
-  & groupBy (\e1 e2 -> txMintEventSlotNo e1 == txMintEventSlotNo e2 && txMintEventBlockHeaderHash e1 == txMintEventBlockHeaderHash e2)
-  & concatMap (\case e : es -> [ TxMintEvent (txMintEventSlotNo e) (txMintEventBlockHeaderHash e) $ txMintEventTxAssets =<< (e :| es) ]
-                     []     -> [])
+groupBySlotAndHash events =
+  events
+    & sort
+    & groupBy (\e1 e2 -> txMintEventSlotNo e1 == txMintEventSlotNo e2 && txMintEventBlockHeaderHash e1 == txMintEventBlockHeaderHash e2)
+    & mapMaybe buildTxMintEvent
+  where
+    buildTxMintEvent [] = Nothing
+    buildTxMintEvent (e : es) =
+      Just $
+        TxMintEvent (txMintEventSlotNo e) (txMintEventBlockHeaderHash e) (txMintEventBlockNo e) $
+          txMintEventTxAssets =<< (e : es)
 
 -- * Indexer
 
@@ -304,18 +410,18 @@ newtype instance RI.StorableEvent MintBurnHandle
   deriving (Show)
 
 data instance RI.StorableQuery MintBurnHandle
-  = QueryByAssetId C.PolicyId C.AssetName (Maybe C.SlotNo)
-  -- ^ Query all transactions that minted a specific 'AssetId' until an upper bound slot in the
-  -- blockchain. If the upper bound slot is 'Nothing', then we return everything.
-  | QueryAllMintBurn (Maybe C.SlotNo)
-  -- ^ Query all transactions that minted 'AssetId's until an upper bound slot in the blockchain. If
-  -- the upper bound slot is 'Nothing', then we return everything.
-  | QueryBurnByAssetId C.PolicyId C.AssetName (Maybe C.SlotNo)
-  -- ^ Query all transactions that burned a specific 'AssetId' until an upper bound slot in the
-  -- blockchain. If the upper bound slot is 'Nothing', then we return everything.
-  | QueryAllBurn (Maybe C.SlotNo)
-  -- ^ Query all transactions that burned 'AssetId's until an upper bound slot in the blockchain. If
-  -- the upper bound slot is 'Nothing', then we return everything.
+  = -- | Query all transactions that minted a specific 'AssetId' until an upper bound slot in the
+    -- blockchain. If the upper bound slot is 'Nothing', then we return everything.
+    QueryByAssetId C.PolicyId (Maybe C.AssetName) (Maybe C.SlotNo)
+  | -- | Query all transactions that minted 'AssetId's until an upper bound slot in the blockchain. If
+    -- the upper bound slot is 'Nothing', then we return everything.
+    QueryAllMintBurn (Maybe C.SlotNo)
+  | -- | Query all transactions that burned a specific 'AssetId' until an upper bound slot in the
+    -- blockchain. If the upper bound slot is 'Nothing', then we return everything.
+    QueryBurnByAssetId C.PolicyId (Maybe C.AssetName) (Maybe C.SlotNo)
+  | -- | Query all transactions that burned 'AssetId's until an upper bound slot in the blockchain. If
+    -- the upper bound slot is 'Nothing', then we return everything.
+    QueryAllBurn (Maybe C.SlotNo)
   deriving (Show)
 
 newtype instance RI.StorableResult MintBurnHandle
@@ -326,20 +432,20 @@ instance RI.Queryable MintBurnHandle where
   queryStorage memoryEvents (MintBurnHandle sqlCon _k) query = liftSQLError CantQueryIndexer $ do
     storedEvents <- queryStoredTxMintEvents sqlCon $ mkSqliteConditions query
     pure $ MintBurnResult $ do
-      TxMintEvent slotNo blockHeaderHash txAssets <- filteredMemoryEvents <> storedEvents
-      (txId, mintAssets) <- NE.toList txAssets
-      MintAsset policyId assetName quantity redeemerIx redeemerData redeemerHash <- NE.toList mintAssets
-      pure $ TxMintRow
-        slotNo
-        blockHeaderHash
-        txId
-        policyId
-        assetName
-        quantity
-        redeemerIx
-        redeemerData
-        redeemerHash
-
+      TxMintEvent slotNo blockHeaderHash blockNo txAssets <- storedEvents <> filteredMemoryEvents
+      TxMintInfo txId txIx mintAssets <- txAssets
+      MintAsset policyId assetName quantity redeemer <- NE.toList mintAssets
+      pure $
+        TxMintRow
+          slotNo
+          blockHeaderHash
+          blockNo
+          txIx
+          txId
+          policyId
+          assetName
+          quantity
+          redeemer
     where
       filteredMemoryEvents :: [TxMintEvent]
       filteredMemoryEvents = coerce $ fromRows $ filter rowFilter $ toRows =<< (coerce $ toList memoryEvents)
@@ -348,16 +454,16 @@ instance RI.Queryable MintBurnHandle where
       rowFilter :: TxMintRow -> Bool
       rowFilter row = let filters = mkRowPredicates query in all ($ row) filters
 
-      -- * Filter in-memory events
+      -- \* Filter in-memory events
 
       upToSlot :: Maybe C.SlotNo -> [TxMintRow -> Bool]
       upToSlot = \case
         Just slotNo -> [\row -> _txMintRowSlotNo row <= slotNo]
-        Nothing     -> []
+        Nothing -> []
 
-      matchesAssetId :: C.PolicyId -> C.AssetName -> TxMintRow -> Bool
+      matchesAssetId :: C.PolicyId -> Maybe C.AssetName -> TxMintRow -> Bool
       matchesAssetId policyId assetName row =
-        _txMintRowPolicyId row == policyId && _txMintRowAssetName row == assetName
+        _txMintRowPolicyId row == policyId && maybe True (_txMintRowAssetName row ==) assetName
 
       isBurn :: TxMintRow -> Bool
       isBurn row = _txMintRowQuantity row < 0
@@ -365,11 +471,11 @@ instance RI.Queryable MintBurnHandle where
       mkRowPredicates :: RI.StorableQuery MintBurnHandle -> [TxMintRow -> Bool]
       mkRowPredicates = \case
         QueryAllMintBurn maybeSlotNo -> upToSlot maybeSlotNo
-        QueryAllBurn     maybeSlotNo -> upToSlot maybeSlotNo <> [isBurn]
-        QueryByAssetId policyId assetName maybeSlotNo     -> upToSlot maybeSlotNo <> [matchesAssetId policyId assetName]
+        QueryAllBurn maybeSlotNo -> upToSlot maybeSlotNo <> [isBurn]
+        QueryByAssetId policyId assetName maybeSlotNo -> upToSlot maybeSlotNo <> [matchesAssetId policyId assetName]
         QueryBurnByAssetId policyId assetName maybeSlotNo -> upToSlot maybeSlotNo <> [matchesAssetId policyId assetName, isBurn]
 
-      -- * Filter sqlite events
+      -- \* Filter sqlite events
 
       mkSqliteConditions :: RI.StorableQuery MintBurnHandle -> ([SQL.Query], [NamedParam])
       mkSqliteConditions = \case
@@ -377,57 +483,61 @@ instance RI.Queryable MintBurnHandle where
           mkUpperBoundCondition slotNo
         QueryByAssetId policyId assetName slotNo ->
           mkUpperBoundCondition slotNo
-          <> mkAssetIdCondition policyId assetName
+            <> mkAssetIdCondition policyId assetName
         QueryAllBurn slotNo ->
           mkUpperBoundCondition slotNo
-          <> (["quantity < 0"], [])
+            <> (["quantity < 0"], [])
         QueryBurnByAssetId policyId assetName slotNo ->
           mkUpperBoundCondition slotNo
-          <> mkAssetIdCondition policyId assetName
-          <> (["quantity < 0"], [])
+            <> mkAssetIdCondition policyId assetName
+            <> (["quantity < 0"], [])
 
-      mkAssetIdCondition :: C.PolicyId -> C.AssetName -> ([SQL.Query], [NamedParam])
+      mkAssetIdCondition :: C.PolicyId -> Maybe C.AssetName -> ([SQL.Query], [NamedParam])
       mkAssetIdCondition policyId assetName =
-        ( ["policyId = :policyId", "assetName = :assetName"]
-        , [":policyId" := policyId, ":assetName" := assetName]
-        )
+        unzip $
+          [("policyId = :policyId", ":policyId" := policyId)]
+            <> maybe [] (\name -> [("assetName = :assetName", ":assetName" := name)]) assetName
 
       mkUpperBoundCondition :: Maybe C.SlotNo -> ([SQL.Query], [NamedParam])
       mkUpperBoundCondition = \case
         Nothing -> ([], [])
-        Just s  -> (["slotNo <= :slotNo"] , [":slotNo" := s])
+        Just s -> (["slotNo <= :slotNo"], [":slotNo" := s])
 
 instance RI.HasPoint (RI.StorableEvent MintBurnHandle) C.ChainPoint where
   getPoint (MintBurnEvent e) = C.ChainPoint (txMintEventSlotNo e) (txMintEventBlockHeaderHash e)
 
 instance RI.Buffered MintBurnHandle where
-  persistToStorage events h@(MintBurnHandle sqlCon _k) = liftSQLError CantInsertEvent $ do
-    sqliteInsert sqlCon defaultTableName (map coerce $ toList events)
-    pure h
+  persistToStorage events h@(MintBurnHandle sqlCon _k) =
+    liftSQLError CantInsertEvent $
+      do
+        sqliteInsert sqlCon defaultTableName (map coerce $ toList events)
+        pure h
 
-  getStoredEvents (MintBurnHandle sqlCon k)
-    = liftSQLError CantQueryIndexer
-    $ do
-    fmap MintBurnEvent . fromRows <$> SQL.query sqlCon query (SQL.Only k)
+  getStoredEvents (MintBurnHandle sqlCon k) =
+    liftSQLError CantQueryIndexer $
+      do
+        fmap MintBurnEvent . fromRows <$> SQL.query sqlCon query (SQL.Only k)
     where
       query =
-        " SELECT slotNo, blockHeaderHash, txId, policyId, assetName, quantity, \
-        \        redeemerIx, redeemerData                                      \
+        " SELECT slotNo, blockHeaderHash, blockNo, txIndexInBlock, txId,       \
+        \        policyId, assetName, quantity, redeemerIx, redeemerData       \
         \   FROM minting_policy_events                                         \
         \  WHERE slotNo >= (SELECT MAX(slotNo) - ? FROM minting_policy_events) \
         \  ORDER BY slotNo DESC, txId                                          "
 
 instance RI.Resumable MintBurnHandle where
-  resumeFromStorage (MintBurnHandle c _) = liftSQLError CantQueryIndexer $ fmap chainPointOrGenesis $
-    SQL.query_ c "SELECT slotNo, blockHeaderHash FROM minting_policy_events ORDER BY slotNo DESC LIMIT 1"
+  resumeFromStorage (MintBurnHandle c _) =
+    liftSQLError CantQueryIndexer $
+      fmap chainPointOrGenesis $
+        SQL.query_ c "SELECT slotNo, blockHeaderHash FROM minting_policy_events ORDER BY slotNo DESC LIMIT 1"
 
 instance RI.Rewindable MintBurnHandle where
-  rewindStorage cp h@(MintBurnHandle sqlCon _k)
-    = liftSQLError CantRollback $ doRewind >> pure h
+  rewindStorage cp h@(MintBurnHandle sqlCon _k) =
+    liftSQLError CantRollback $ doRewind >> pure h
     where
       doRewind = case cp of
         C.ChainPoint slotNo _ ->
-          SQL.execute  sqlCon ("DELETE FROM " <> fromString defaultTableName <> " WHERE slotNo > ?") (SQL.Only slotNo)
+          SQL.execute sqlCon ("DELETE FROM " <> fromString defaultTableName <> " WHERE slotNo > ?") (SQL.Only slotNo)
         C.ChainPointAtGenesis ->
           SQL.execute_ sqlCon $ "DELETE FROM " <> fromString defaultTableName
 

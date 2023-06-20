@@ -1,18 +1,20 @@
--- | Defines REST and JSON-RPC routes
-
-{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators     #-}
+{-# LANGUAGE TypeOperators #-}
 
+-- | Defines REST and JSON-RPC routes
 module Marconi.Sidechain.Api.Routes where
 
 import Cardano.Api qualified as C
+import Cardano.Slotting.Slot (WithOrigin (At, Origin), withOriginFromMaybe)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), Value (Object), object, (.:), (.:?), (.=))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
 import Marconi.ChainIndex.Indexers.EpochState qualified as EpochState
+import Marconi.ChainIndex.Indexers.Utxo (BlockInfo (BlockInfo))
+import Marconi.ChainIndex.Types (TxIndexInBlock)
 import Network.JsonRpc.Types (JsonRpc, RawJsonRpc)
 import Servant.API (Get, JSON, PlainText, (:<|>), (:>))
 
@@ -28,47 +30,53 @@ type API = JsonRpcAPI :<|> RestAPI
 type JsonRpcAPI = "json-rpc" :> RawJsonRpc RpcAPI
 
 -- | RPC routes
-type RpcAPI = RpcEchoMethod
-         :<|> RpcTargetAddressesMethod
-         :<|> RpcCurrentSyncedBlockMethod
-         :<|> RpcPastAddressUtxoMethod
-         :<|> RpcMintingPolicyHashTxMethod
-         :<|> RpcEpochStakePoolDelegationMethod
-         :<|> RpcEpochNonceMethod
+type RpcAPI =
+  RpcEchoMethod
+    :<|> RpcTargetAddressesMethod
+    :<|> RpcCurrentSyncedBlockMethod
+    :<|> RpcPastAddressUtxoMethod
+    :<|> RpcGetBurnTokenEventsMethod
+    :<|> RpcEpochActiveStakePoolDelegationMethod
+    :<|> RpcEpochNonceMethod
 
 type RpcEchoMethod = JsonRpc "echo" String String String
 
 type RpcTargetAddressesMethod = JsonRpc "getTargetAddresses" String String [Text]
 
 type RpcCurrentSyncedBlockMethod =
-    JsonRpc "getCurrentSyncedBlock"
-            String
-            String
-            GetCurrentSyncedBlockResult
+  JsonRpc
+    "getCurrentSyncedBlock"
+    String
+    String
+    GetCurrentSyncedBlockResult
 
 type RpcPastAddressUtxoMethod =
-    JsonRpc "getUtxosFromAddress"
-            GetUtxosFromAddressParams
-            String
-            GetUtxosFromAddressResult
+  JsonRpc
+    "getUtxosFromAddress"
+    GetUtxosFromAddressParams
+    String
+    GetUtxosFromAddressResult
 
-type RpcMintingPolicyHashTxMethod =
-    JsonRpc "getTxsBurningAssetId"
-            GetTxsBurningAssetIdParams
-            String
-            GetTxsBurningAssetIdResult
+type RpcGetBurnTokenEventsMethod =
+  JsonRpc
+    "getBurnTokenEvents"
+    GetBurnTokenEventsParams
+    String
+    GetBurnTokenEventsResult
 
-type RpcEpochStakePoolDelegationMethod =
-    JsonRpc "getStakePoolDelegationByEpoch"
-            Word64
-            String
-            GetEpochStakePoolDelegationResult
+type RpcEpochActiveStakePoolDelegationMethod =
+  JsonRpc
+    "getActiveStakePoolDelegationByEpoch"
+    Word64
+    String
+    GetEpochActiveStakePoolDelegationResult
 
 type RpcEpochNonceMethod =
-    JsonRpc "getNonceByEpoch"
-            Word64
-            String
-            GetEpochNonceResult
+  JsonRpc
+    "getNonceByEpoch"
+    Word64
+    String
+    GetEpochNonceResult
 
 --------------------
 -- REST related ---
@@ -85,39 +93,47 @@ type GetTargetAddresses = "addresses" :> Get '[JSON] [Text]
 -- Query and Result types
 --------------------------
 
-newtype GetCurrentSyncedBlockResult =
-    GetCurrentSyncedBlockResult
-        C.ChainPoint
-    deriving (Eq, Ord, Generic, Show)
+newtype GetCurrentSyncedBlockResult
+  = GetCurrentSyncedBlockResult (WithOrigin BlockInfo)
+  deriving (Eq, Ord, Generic, Show)
 
 instance ToJSON GetCurrentSyncedBlockResult where
-    toJSON (GetCurrentSyncedBlockResult chainPoint) =
-        let chainPointObj = case chainPoint of
-                              C.ChainPointAtGenesis ->
-                                  []
-                              (C.ChainPoint (C.SlotNo slotNo) bhh) ->
-                                  [ "blockHeaderHash" .= bhh, "slotNo" .= slotNo ]
-         in object chainPointObj
+  toJSON (GetCurrentSyncedBlockResult blockInfoM) =
+    let chainPointObj = case blockInfoM of
+          (At (BlockInfo sn bhh bn bt en)) ->
+            [ "blockNo" .= bn
+            , "blockTimestamp" .= bt
+            , "blockHeaderHash" .= bhh
+            , "slotNo" .= sn
+            , "epochNo" .= en
+            ]
+          Origin -> []
+     in object chainPointObj
 
 instance FromJSON GetCurrentSyncedBlockResult where
-    parseJSON (Object v) = do
-        (slotNoM :: Maybe C.SlotNo) <- v .:? "slotNo"
-        (bhhM :: Maybe (C.Hash C.BlockHeader)) <- v .:? "blockHeaderHash"
-        cp <- case (slotNoM, bhhM) of
-          (Just slotNo, Just bhh) -> pure $ C.ChainPoint slotNo bhh
-          _ifOneIsNothing         -> pure C.ChainPointAtGenesis
-        pure $ GetCurrentSyncedBlockResult cp
-    parseJSON _ = mempty
+  parseJSON (Object v) = do
+    slotNoM <- v .:? "slotNo"
+    bhhM <- v .:? "blockHeaderHash"
+    bnM <- v .:? "blockNo"
+    blockTimestampM <- v .:? "blockTimestamp"
+    epochNoM <- v .:? "epochNo"
+    let blockInfoM = withOriginFromMaybe $ BlockInfo <$> slotNoM <*> bhhM <*> bnM <*> blockTimestampM <*> epochNoM
+    pure $ GetCurrentSyncedBlockResult blockInfoM
+  parseJSON _ = mempty
 
-data GetUtxosFromAddressParams
-    = GetUtxosFromAddressParams
-    { queryAddress             :: !String -- ^ address to query for
-    , queryCreatedAfterSlotNo  :: !(Maybe Word64) -- ^ query upper bound slotNo interval, unspent before or at this slot
-    , queryUnspentBeforeSlotNo :: !Word64 -- ^ query lower bound slotNo interval, filter out UTxO that were created during or before that slo
-    } deriving (Show, Eq)
+data GetUtxosFromAddressParams = GetUtxosFromAddressParams
+  { queryAddress :: !String
+  -- ^ address to query for
+  , queryCreatedAfterSlotNo :: !(Maybe Word64)
+  -- ^ query upper bound slotNo interval, unspent before or at this slot
+  , queryUnspentBeforeSlotNo :: !Word64
+  -- ^ query lower bound slotNo interval, filter out UTxO that were created during or before that slo
+  }
+  deriving (Show, Eq)
 
 instance FromJSON GetUtxosFromAddressParams where
-  parseJSON (Object v) = GetUtxosFromAddressParams
+  parseJSON (Object v) =
+    GetUtxosFromAddressParams
       <$> (v .: "address")
       <*> (v .:? "createdAfterSlotNo")
       <*> (v .: "unspentBeforeSlotNo")
@@ -125,128 +141,169 @@ instance FromJSON GetUtxosFromAddressParams where
 
 instance ToJSON GetUtxosFromAddressParams where
   toJSON q =
-    object $ catMaybes
-    [ Just ("address" .= queryAddress q)
-    , ( "createdAfterSlotNo" .=) <$> queryCreatedAfterSlotNo q
-    , Just $ "unspentBeforeSlotNo" .= queryUnspentBeforeSlotNo q
-    ]
+    object $
+      catMaybes
+        [ Just ("address" .= queryAddress q)
+        , ("createdAfterSlotNo" .=) <$> queryCreatedAfterSlotNo q
+        , Just $ "unspentBeforeSlotNo" .= queryUnspentBeforeSlotNo q
+        ]
 
 newtype GetUtxosFromAddressResult = GetUtxosFromAddressResult
-    { unAddressUtxosResult :: [AddressUtxoResult] }
-    deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
+  {unAddressUtxosResult :: [AddressUtxoResult]}
+  deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
 
 data SpentInfoResult
-    = SpentInfoResult
-    !C.SlotNo
-    !C.TxId
-    deriving (Eq, Ord, Show, Generic)
+  = SpentInfoResult
+      !C.SlotNo
+      !C.TxId
+  deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON SpentInfoResult where
-
-    toJSON (SpentInfoResult sn txid) = object ["slot" .= sn, "txId" .= txid]
+  toJSON (SpentInfoResult sn txid) = object ["slotNo" .= sn, "txId" .= txid]
 
 instance FromJSON SpentInfoResult where
+  parseJSON (Object v) = SpentInfoResult <$> v .: "slotNo" <*> v .: "txId"
+  parseJSON _ = mempty
 
-    parseJSON (Object v) = SpentInfoResult <$> v.: "slot" <*> v .: "txId"
-    parseJSON _          = mempty
-
-data AddressUtxoResult = AddressUtxoResult
-    !(C.Hash C.BlockHeader)
-    !C.SlotNo
-    !C.TxIn
-    !C.AddressAny
-    !(Maybe (C.Hash C.ScriptData))
-    !(Maybe C.ScriptData)
-    !(Maybe SpentInfoResult)
-    deriving (Eq, Ord, Show, Generic)
+data AddressUtxoResult
+  = AddressUtxoResult
+      !C.SlotNo
+      !(C.Hash C.BlockHeader)
+      !C.BlockNo
+      !TxIndexInBlock
+      !C.TxIn
+      !C.AddressAny
+      !(Maybe (C.Hash C.ScriptData))
+      !(Maybe C.ScriptData)
+      !(Maybe SpentInfoResult)
+      ![UtxoTxInput] -- List of inputs that were used in the transaction that created this UTxO.
+  deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON AddressUtxoResult where
-    toJSON (AddressUtxoResult bhh slotNo txIn addr dath dat spentBy) = let
-        C.TxIn txId txIx = txIn
-        in object
-            [ "blockHeaderHash" .= bhh
-            , "slotNo" .= slotNo
-            , "txId" .= txId
-            , "txIx" .= txIx
-            , "address" .= addr
-            , "datumHash" .= dath
-            , "datum" .= dat
-            , "spentBy" .= spentBy
-            ]
+  toJSON (AddressUtxoResult slotNo bhh bn txIndexInBlock txIn addr dath dat spentBy txInputs) =
+    let C.TxIn txId txIx = txIn
+     in object
+          [ "slotNo" .= slotNo
+          , "blockHeaderHash" .= bhh
+          , "blockNo" .= bn
+          , "txIndexInBlock" .= txIndexInBlock
+          , "txId" .= txId
+          , "txIx" .= txIx
+          , "address" .= addr
+          , "datumHash" .= dath
+          , "datum" .= dat
+          , "spentBy" .= spentBy
+          , "txInputs" .= txInputs
+          ]
 
 instance FromJSON AddressUtxoResult where
-    parseJSON (Object v) = do
-        AddressUtxoResult
-            <$> v .: "blockHeaderHash"
-            <*> v .: "slotNo"
-            <*> (C.TxIn <$> v .: "txId" <*> v .: "txIx")
-            <*> v .: "address"
-            <*> v .: "datumHash"
-            <*> v .: "datum"
-            <*> v .: "spentBy"
-    parseJSON _ = mempty
+  parseJSON (Object v) = do
+    AddressUtxoResult
+      <$> v .: "slotNo"
+      <*> v .: "blockHeaderHash"
+      <*> v .: "blockNo"
+      <*> v .: "txIndexInBlock"
+      <*> (C.TxIn <$> v .: "txId" <*> v .: "txIx")
+      <*> v .: "address"
+      <*> v .: "datumHash"
+      <*> v .: "datum"
+      <*> v .: "spentBy"
+      <*> v .: "txInputs"
+  parseJSON _ = mempty
 
-data GetTxsBurningAssetIdParams
-    = GetTxsBurningAssetIdParams
-    { policyId     :: !C.PolicyId
-    , assetName    :: !C.AssetName
-    , mintBurnSlot :: !(Maybe Word64)
-    } deriving (Eq, Show)
+newtype UtxoTxInput = UtxoTxInput C.TxIn
+  deriving (Eq, Ord, Show, Generic)
 
+instance ToJSON UtxoTxInput where
+  toJSON (UtxoTxInput (C.TxIn txId txIx)) =
+    object
+      [ "txId" .= txId
+      , "txIx" .= txIx
+      ]
 
-instance FromJSON GetTxsBurningAssetIdParams where
+instance FromJSON UtxoTxInput where
+  parseJSON (Object v) = do
+    txIn <-
+      C.TxIn
+        <$> v .: "txId"
+        <*> v .: "txIx"
+    pure $ UtxoTxInput txIn
+  parseJSON _ = mempty
 
-    parseJSON (Object v) = GetTxsBurningAssetIdParams <$> (v .: "policyId") <*> (v .: "assetName") <*> (v .:? "slotNo")
-    parseJSON _          = mempty
+data GetBurnTokenEventsParams = GetBurnTokenEventsParams
+  { policyId :: !C.PolicyId
+  , assetName :: !(Maybe C.AssetName)
+  , beforeSlotNo :: !(Maybe Word64)
+  , afterTx :: !(Maybe C.TxId)
+  }
+  deriving (Eq, Show)
 
-instance ToJSON GetTxsBurningAssetIdParams where
-    toJSON q =
-        object $ catMaybes
-           [ Just ("policyId" .= policyId q)
-           , Just ("assetName" .= assetName q)
-           , ("slotNo" .=) <$> mintBurnSlot q
-           ]
+instance FromJSON GetBurnTokenEventsParams where
+  parseJSON (Object v) =
+    GetBurnTokenEventsParams
+      <$> (v .: "policyId")
+      <*> (v .:? "assetName")
+      <*> (v .:? "slotNo")
+      <*> (v .:? "afterTx")
+  parseJSON _ = mempty
 
-newtype GetTxsBurningAssetIdResult =
-    GetTxsBurningAssetIdResult [AssetIdTxResult]
-    deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
+instance ToJSON GetBurnTokenEventsParams where
+  toJSON q =
+    object $
+      catMaybes
+        [ Just ("policyId" .= policyId q)
+        , ("assetName" .=) <$> assetName q
+        , ("slotNo" .=) <$> beforeSlotNo q
+        , ("afterTx" .=) <$> afterTx q
+        ]
 
-data AssetIdTxResult = AssetIdTxResult
-    !(C.Hash C.BlockHeader)
-    !C.SlotNo
-    !C.TxId
-    !(Maybe (C.Hash C.ScriptData))
-    !(Maybe C.ScriptData)
-    !C.Quantity
-    deriving (Eq, Ord, Show, Generic)
+newtype GetBurnTokenEventsResult
+  = GetBurnTokenEventsResult [AssetIdTxResult]
+  deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
+
+data AssetIdTxResult
+  = AssetIdTxResult
+      !C.SlotNo
+      !(C.Hash C.BlockHeader)
+      !C.BlockNo
+      !C.TxId
+      !(Maybe (C.Hash C.ScriptData))
+      !(Maybe C.ScriptData)
+      !C.Quantity
+  deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON AssetIdTxResult where
-    toJSON (AssetIdTxResult bhh slotNo txId redh red qty) =
-        object
-            [ "blockHeaderHash" .= bhh
-            , "slotNo" .= slotNo
-            , "txId" .= txId
-            , "redeemerHash" .= redh
-            , "redeemer" .= red
-            , "quantity" .= qty
-            ]
+  toJSON (AssetIdTxResult slotNo bhh bn txId redh red qty) =
+    object
+      [ "slotNo" .= slotNo
+      , "blockHeaderHash" .= bhh
+      , "blockNo" .= bn
+      , "txId" .= txId
+      , "redeemerHash" .= redh
+      , "redeemer" .= red
+      , "burnAmount" .= qty
+      ]
 
 instance FromJSON AssetIdTxResult where
-    parseJSON (Object v) = do
-        AssetIdTxResult
-            <$> v .: "blockHeaderHash"
-            <*> v .: "slotNo"
-            <*> v .: "txId"
-            <*> v .: "redeemerHash"
-            <*> v .: "redeemer"
-            <*> v .: "quantity"
-    parseJSON _ = mempty
+  parseJSON (Object v) = do
+    AssetIdTxResult
+      <$> v .: "slotNo"
+      <*> v .: "blockHeaderHash"
+      <*> v .: "blockNo"
+      <*> v .: "txId"
+      <*> v .: "redeemerHash"
+      <*> v .: "redeemer"
+      <*> v .: "burnAmount"
+  parseJSON _ = mempty
 
+newtype GetEpochStakePoolDelegationResult
+  = GetEpochStakePoolDelegationResult [EpochState.EpochSDDRow]
+  deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
 
-newtype GetEpochStakePoolDelegationResult =
-    GetEpochStakePoolDelegationResult [EpochState.EpochSDDRow]
-    deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
+newtype GetEpochActiveStakePoolDelegationResult
+  = GetEpochActiveStakePoolDelegationResult [EpochState.EpochSDDRow]
+  deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
 
-newtype GetEpochNonceResult =
-    GetEpochNonceResult (Maybe EpochState.EpochNonceRow)
-    deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)
+newtype GetEpochNonceResult
+  = GetEpochNonceResult (Maybe EpochState.EpochNonceRow)
+  deriving (Eq, Ord, Show, Generic, ToJSON, FromJSON)

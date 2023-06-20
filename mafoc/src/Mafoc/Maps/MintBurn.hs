@@ -1,5 +1,5 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NamedFieldPuns    #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Indexer for mint and burn events.
@@ -8,50 +8,57 @@ The implementation for converting blocks to events and persisting
 these into sqlite is outsourced from marconi.
 
 This just provides the CLI interface and a streaming runtime.
-
 -}
-
 module Mafoc.Maps.MintBurn where
 
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Options.Applicative qualified as Opt
 
-import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, initialize, persist, persistMany, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite,
-                   setCheckpointSqlite)
+import Mafoc.Core (
+  DbPathAndTableName,
+  Indexer (Event, Runtime, State, checkpoint, initialize, persist, persistMany, toEvent),
+  LocalChainsyncConfig,
+  defaultTableName,
+  initializeLocalChainsync,
+  initializeSqlite,
+  setCheckpointSqlite,
+ )
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
--- | Configuration data type which does double-duty as the tag for the
--- indexer.
+{- | Configuration data type which does double-duty as the tag for the
+ indexer.
+-}
 data MintBurn = MintBurn
-  { chainsync          :: LocalChainsyncConfig
+  { chainsync :: LocalChainsyncConfig
   , dbPathAndTableName :: DbPathAndTableName
-  } deriving (Show)
+  }
+  deriving (Show)
 
 parseCli :: Opt.ParserInfo MintBurn
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "mintburn"
-  <> Opt.header "mintburn - Index mint and burn events"
+parseCli =
+  Opt.info (Opt.helper <*> cli) $
+    Opt.fullDesc
+      <> Opt.progDesc "mintburn"
+      <> Opt.header "mintburn - Index mint and burn events"
   where
     cli :: Opt.Parser MintBurn
-    cli = MintBurn
-      <$> Opt.commonLocalChainsyncConfig
-      <*> Opt.commonDbPathAndTableName
+    cli =
+      MintBurn
+        <$> Opt.commonLocalChainsyncConfig
+        <*> Opt.commonDbPathAndTableName
 
 instance Indexer MintBurn where
-
   data Runtime MintBurn = Runtime
     { sqlConnection :: SQL.Connection
-    , tableName     :: String
+    , tableName :: String
     }
 
   type Event MintBurn = Marconi.MintBurn.TxMintEvent
 
   data State MintBurn = EmptyState
 
-  toEvent _runtime _state blockInMode = pure (EmptyState, Marconi.MintBurn.toUpdate blockInMode)
+  toEvent _runtime _state blockInMode = pure (EmptyState, Just $ Marconi.MintBurn.toUpdate Nothing blockInMode)
 
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
