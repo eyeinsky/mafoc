@@ -15,20 +15,21 @@ also simpler to create as no input state is needed.
 
 Pseoudocode type signatures:
 
-type Map = Block -> Data
-type Fold = Block -> State -> Data
+```haskell
+type Map = Block -> Event
+type Fold = Block -> State -> (Event, State)
+```
 
 Examples of a mapping indexer:
-- at which transactions was my smart contract (plutus script) executed
-- how many transaction
+- extract at which transactions was my smart contract (plutus script) executed
+- how many transaction are in a block
 
 Examples of a folding indexer:
-- how much ADA does a stakepool have staked: to know the absolute
-  amount one would need to know how much was staked previously, and
-  how much did it change with the current transaction;
-- address balance: how much ADA did an address have before and how
-  much did it change with the current transaction;
 
-Current:
-- block transaction count: count transactions for every block
-  - database block_tx_count()
+- address balance
+
+  It's a fold, because to know the absolute amount of ADA for any
+  given addres, one would need to know both the received-or-spent
+  amount, and how much did it have previously (= _state_)
+
+Difference being, with a fold there is a state to be carried.
