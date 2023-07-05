@@ -1,0 +1,110 @@
+* Mafoc vs Marconi
+
+These are the most important design points in Mafoc, and below
+respectively how these are done in Marconi.
+
+Mafoc:
+
+1. The overarching theme of Mafoc is the fold over blocks, it's
+   directly manifest in the [[https://github.com/eyeinsky/mafoc/blob/1537d4c26657c86b98a7f0ffde582447c410d716/mafoc/src/Mafoc/Core.hs#L142][toEvent]] where it takes the previous state,
+   a new block, and produces a new state and events(s).
+
+   An example of an indexer would is the "wallet balance" indexer
+   which describes how much ADA a wallet has. The state here is the
+   UTxO set for that wallet, event is the sum of ADA in those, each
+   block either doesn't change that wallet, or spends or adds UTxOs to
+   that wallet.
+
+2. The "events" that Mafoc emits are strictly "something that the
+   business needs" -- they are not required for indexer operation.
+
+   Only a chain point and the fold state for that chain point are
+   required to resume an indexer (= resume the fold).
+
+3. Mafoc runs a single indexer and parallelizes work (extracting and
+   persisting events, and checkpointing) within that single
+   indexer.
+
+   This makes checkpointing easy as all the required state is
+   at hand.
+
+   It also makes possible to share the extraction of events for
+   indexers where that is applicable.
+
+4. Persisting state (checkpointing) and persisting events are entirely
+   separate from one another: all events are persisted (they are why
+   we index after all), but checkpointing happens "off beat" from that
+   -- to happen on any amount of "work time" one is willing to loose.
+
+5. Mafoc framework strives to be as simple as possible _but no simpler_.
+
+    There is currently just one type class which describes
+   (1) how to extract the event from a block (=toEvent=) (2) how/where
+   to store them (=persistMany=) (3) how to persist state
+   (=checkpoint=) (4) how to start/resume (=initialize=).
+
+   Simple things are easy to explain, understand and use, and will
+   have a likelier uptake in the open source world.
+
+Marconi:
+
+1. As far as I can tell, Marconi follows no principle that is explicit
+   in code. There is a set of classes that supposedly models an
+   indexer but there is no clear fold nor a step function for the
+   fold. Though, implicitly it must contain the fold anyway, it's just
+   spread out and hard to reason about.
+
+2. Marconi conflates events and the fold state, causing a problem for resume
+   for indexers that have few or long-apart events.
+
+   For example the mintburn indexer doesn't have events in eras with
+   no custom tokens, so if the program dies during one of those
+   earlier eras then no events have been created, the indexer doesn't
+   have any data on how far it got, and so it starts from genesis
+   again.
+
+   Similar for epoch stakepool size indexer, as staking came in the
+   Shelley era.
+
+3. Marconi runs its indexers each in their separate threads as if they
+   were separate programs, but the threads are fed blocks in lockstep
+   by yet another thread (called the coordinator).
+
+   This adds complexity as the coordinator needs to be consulted to
+   perform operations that need to happen on a higher level across
+   all sub-indexers (like checkpointing), yet that doesn't have the
+   states of the indexers in scope.
+
+   It also makes querying difficult because a query across more than
+   one indexer need to know that they are up to date at the the same
+   slot, otherwise the response can be inconsistent.
+
+   Yet, this design doesn't add any performance benefit: all indexer
+   threads wait on the slowest one before they receive new block.
+
+4. Similar to point 2, state and events are conflated, thus persisting
+   events and checkpointing is the same operation.
+
+   Consequence of this is that now they can't be controlled
+   separately. E.g you want to persist all events (that's why we are
+   indexing), but maybe write a checkpoint every 30 minutes. Being
+   forced to write the ledger state often (a ~2GB file, it's the state
+   for the epoch stakepool size indexer) is not good.
+
+5. The current iteration of Marconi has five type classes.
+
+   Due to struggles with not being able to fix resume, there is a
+   rewrite of the framework incoming, the "Experimental indexer" [[https://github.com/search?q=repo%3Ainput-output-hk%2Fmarconi+path%3A%22marconi-core%2Fsrc%2FMarconi%2FCore%2FExperiment%2F%22+%2F%5Eclass+%2F&type=code][and
+   this has twenty]] (!) type classes (not to mention number of files,
+   lines of code). It's unlikely that there will be many people who
+   will want to reverse back into its desingers mind and understand
+   for what all that is for.
+
+   Type classes are not bad in themselves, but they should pay for the
+   mental overhead they add.
+
+---
+
+The desing of an indexer is essentially a fold, or map for indexers
+which don't need state. Mafoc will make this explicit and provide
+infrastructure around it.
