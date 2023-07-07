@@ -1,35 +1,72 @@
-# Mafoc
+* Mafoc
 
-*Maps and folds over Cardano blockchain*
+/Maps and folds over Cardano blockchain/
 
-To make information on a blockchain readily accessible, it's required
-to create auxiliary data structures, i.e *indexes*, to store just the
-data needed. *Indexers* are programs that create these indexes.
+---
 
-As a blockchain is literally a sequence of blocks, which itself is a
-sequesce of transactions, it's simplest to model indexers as maps or
-folds from transactions to indexer-specific states. Compared with
-folds, maps are simply a degenerate form of folds where no state needs
-to be carried over. As no input state is needed, map type indexes are
-also simpler to create as no input state is needed.
+NOTE: although you can already run various indexers then this is very
+much work in progress.
 
-Pseoudocode type signatures:
+NOTE: This is fork of [[https://github.com/input-output-hk/marconi][marconi]], piggibacking on its nix
+configuration. The meat of this project is within the [[mafoc/src/Mafoc/Maps/BlockBasics.hs][mafoc folder]].
 
-```haskell
-type Map = Block -> Event
-type Fold = Block -> State -> (Event, State)
-```
+---
 
-Examples of a mapping indexer:
-- extract at which transactions was my smart contract (plutus script) executed
-- how many transaction are in a block
+** Why does this exist?
 
-Examples of a folding indexer:
+- indexer framework that is as simple as possible /but no simpler/
 
-- address balance
+- model the indexer as an explicit fold. Fold has a state (indexer
+  dependent) and a sequence of elements it consumes (blocks). It also
+  produces events ("what the business needs")
 
-  It's a fold, because to know the absolute amount of ADA for any
-  given addres, one would need to know both the received-or-spent
-  amount, and how much did it have previously (= _state_)
+- Using fold as conceptual model will make implementation simple. It
+  will also be familiar to use for external developers.
 
-Difference being, with a fold there is a state to be carried.
+- Composable: compose larger indexers from more specific ones, perhaps
+  even mechanically if all turns out well. :)
+
+- Keep orthogonal things orthogonal, "what business needs" doesn't
+  have anything to do with the fold state, which is required for
+  checkpointing and resuming.
+
+** Run
+
+You can already run quite a few indexers, e.g the following extracts
+"block basics":
+
+#+begin_src bash
+  nix develop # Need to enter nix shell currently
+
+  cabal run mafoc:exe:mafoc -- blockbasics \
+        --socket-path /home/markus/mainnet/socket/node.socket \
+        --mainnet \
+        --security-param 2160 \
+        --batch-size 50000
+#+end_src
+
+This by default will create an sqlite database =default.db= with
+=blockbasics= table with fields =slot_no=, =block_header_hash= and
+=tx_count=.
+
+You can tune parameters such as =--batch-size= (persist to disk) and
+=--pipeline-size= (read from chainsync) to try to make it go
+faster. (Though, framework design will get priority before performance
+tuning. Do send in the best numbers though if you find them.)
+
+Some of these implement Marconi indexers but within Mafoc framework.
+
+** Framework
+
+Any indexer should implement the [[./mafoc/src/Mafoc/Core.hs#L125-L159][Indexer type class]] which specifies:
+1. =toEvent=: how to get the data you need:
+2. =persistMany=: how to store it
+3. =initialize=: how to start, i.g turn input configuration into runtime
+   configuration (approximately, how to turn the cli into a reader)
+4. =checkpoint=: how to store the fold state
+
+The parameter for the Indexer type class instance is the name ("tag")
+of the indexer. It also doubles as input configuration (usually read
+from cli).
+
+For an examlple, [[./mafoc/src/Mafoc/Maps/BlockBasics.hs][see how the blockbasics indexer]] is implemented.
