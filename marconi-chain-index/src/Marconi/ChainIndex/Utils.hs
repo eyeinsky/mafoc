@@ -10,6 +10,8 @@ module Marconi.ChainIndex.Utils (
   querySecurityParam,
   querySecurityParamEra,
   chainPointOrGenesis,
+  shelleyBasedToCardanoEra,
+  toShelleyEraInCardanoMode,
 ) where
 
 import Cardano.Api qualified as C
