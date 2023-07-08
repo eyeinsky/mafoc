@@ -17,7 +17,7 @@ import Options.Applicative qualified as Opt
 
 import Mafoc.Core (
   DbPathAndTableName,
-  Indexer (Event, Runtime, State, checkpoint, initialize, persist, persistMany, toEvent),
+  Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
   LocalChainsyncConfig,
   defaultTableName,
   initializeLocalChainsync,
@@ -65,9 +65,6 @@ instance Indexer MintBurn where
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.MintBurn.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
-
-  persist Runtime{sqlConnection, tableName} event = do
-    Marconi.MintBurn.sqliteInsert sqlConnection tableName [event]
 
   persistMany Runtime{sqlConnection, tableName} events = do
     Marconi.MintBurn.sqliteInsert sqlConnection tableName events

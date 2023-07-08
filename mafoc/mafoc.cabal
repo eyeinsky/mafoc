@@ -74,7 +74,6 @@ library
     , cardano-api
     , iohk-monitoring
     , ouroboros-consensus
-    , ouroboros-consensus-cardano
 
   ------------------------
   -- Non-IOG dependencies

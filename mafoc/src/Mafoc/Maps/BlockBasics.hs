@@ -67,15 +67,27 @@ blockToRow (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (coer
 sqliteInsert :: SQL.Connection -> String -> Row -> IO ()
 sqliteInsert sqlCon tableName row = SQL.executeMany sqlCon template [row]
   where
-    template = "INSERT INTO " <> fromString tableName <> " (slot_no, block_header_hash, tx_count) VALUES (?, ?, ?)"
+    template = "INSERT INTO " <> fromString tableName <> " \
+               \ ( slot_no           \
+               \ , block_header_hash \
+               \ , tx_count          \
+               \ ) VALUES (?, ?, ?)  "
 
 sqliteInit :: SQL.Connection -> String -> IO ()
 sqliteInit sqlCon tableName = SQL.execute_ sqlCon $
-  "CREATE TABLE IF NOT EXISTS " <> fromString tableName <> " (slot_no INT NOT NULL, block_header_hash BLOB NOT NULL, tx_count INT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS         \
+  \ " <> fromString tableName <> "    \
+  \ ( slot_no INT NOT NULL            \
+  \ , block_header_hash BLOB NOT NULL \
+  \ , tx_count INT NOT NULL )         "
 
-lastCp :: SQL.Connection -> IO (Maybe C.ChainPoint)
-lastCp sqlCon = do
-  rows :: [Row] <- SQL.query_ sqlCon "SELECT slot_no, block_header_hash, tx_count FROM block_basics ORDER BY slot_no DESC LIMIT 1"
+lastCp :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
+lastCp sqlCon tableName = do
+  rows :: [Row] <- SQL.query_ sqlCon $
+    "   SELECT slot_no, block_header_hash, tx_count \
+    \     FROM " <> fromString tableName <> "       \
+    \ ORDER BY slot_no DESC                         \
+    \    LIMIT 1"
   pure $ case rows of
     ((slotNo, hash,_) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
     _                      -> Nothing
