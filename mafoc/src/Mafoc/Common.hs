@@ -3,6 +3,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Common where
 
+import Control.Exception (throwIO, Exception)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Coerce (coerce)
 import Data.Word (Word64)
@@ -10,8 +11,12 @@ import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
+import Cardano.Api.Shelley qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
+import Marconi.ChainIndex.Types qualified as Marconi
+import Marconi.ChainIndex.Utils qualified as Marconi
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 
 -- * Additions to cardano-api
 
@@ -36,6 +41,48 @@ tipDistance blk ct = let
     C.ChainTipAtGenesis     -> 0
     C.ChainTip _ _ blockNo' -> blockNo'
   in blockNoToNatural tipBlockNo - blockNoToNatural (blockNo blk)
+
+-- ** Query node
+
+deriving instance Exception C.AcquiringFailure
+deriving instance Exception O.EraMismatch
+newtype UnspecifiedException = UnspecifiedException String deriving Show
+instance Exception UnspecifiedException
+
+-- | Query the current era of the local node's current state.
+queryCurrentEra :: C.LocalNodeConnectInfo C.CardanoMode -> IO C.AnyCardanoEra
+queryCurrentEra localNodeConnectInfo =
+ C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode >>= \case
+  Left acquiringFailure -> throwIO acquiringFailure
+  Right anyCardanoEra -> return anyCardanoEra
+
+ where
+  queryInMode :: C.QueryInMode C.CardanoMode C.AnyCardanoEra
+  queryInMode = C.QueryCurrentEra C.CardanoModeIsMultiEra
+
+-- | Query security param from the local node given a Shelley based era.
+querySecurityParamEra :: C.LocalNodeConnectInfo C.CardanoMode -> C.ShelleyBasedEra era -> IO Marconi.SecurityParam
+querySecurityParamEra localNodeConnectInfo shelleyBasedEra = do
+  C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode >>= \case
+    Left acquiringFailure -> throwIO acquiringFailure
+    Right rest -> case rest of
+      Left eraMismatch -> throwIO eraMismatch
+      Right genesisParams -> return $ getSecurityParam genesisParams
+  where
+    queryInMode :: C.QueryInMode C.CardanoMode (Either O.EraMismatch C.GenesisParameters)
+    queryInMode =
+      C.QueryInEra (Marconi.toShelleyEraInCardanoMode shelleyBasedEra) $
+        C.QueryInShelleyBasedEra shelleyBasedEra C.QueryGenesisParameters
+
+    getSecurityParam :: C.GenesisParameters -> Marconi.SecurityParam
+    getSecurityParam = fromIntegral . C.protocolParamSecurity
+
+querySecurityParam :: C.LocalNodeConnectInfo C.CardanoMode -> IO Marconi.SecurityParam
+querySecurityParam localNodeConnectInfo = do
+  C.AnyCardanoEra era <- queryCurrentEra localNodeConnectInfo
+  case Marconi.shelleyBasedToCardanoEra era of
+    Nothing -> throwIO $ UnspecifiedException "The security parameter can only be queried in shelley based era."
+    Just shelleyBasedEra -> querySecurityParamEra localNodeConnectInfo shelleyBasedEra
 
 -- ** Block accessors
 
