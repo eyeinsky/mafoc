@@ -48,26 +48,27 @@
 --     which was included in the transaction body
 --
 
--- | Module for indexing the datums for all addresses in the Cardano blockchain.
-module Marconi.ChainIndex.Indexers.AddressDatum (
-  -- * AddressDatumIndex
-  AddressDatumIndex,
-  AddressDatumHandle,
-  StorableEvent (..),
-  StorableQuery (..),
-  StorableResult (..),
-  toAddressDatumIndexEvent,
-  AddressDatumQuery,
-  AddressDatumResult,
-  AddressDatumDepth (..),
-  open,
-) where
+module Marconi.ChainIndex.Indexers.AddressDatum
+  ( -- * AddressDatumIndex
+    AddressDatumIndex
+  , AddressDatumHandle
+  , StorableEvent(..)
+  , StorableQuery(..)
+  , StorableResult(..)
+  , toAddressDatumIndexEvent
+  , AddressDatumQuery
+  , AddressDatumResult
+  , AddressDatumDepth (..)
+  , open
+  , sqliteInit
+  , sqliteInsert
+  ) where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_)
+import Control.Monad (forM)
 import Control.Monad.Trans.Class (MonadTrans (lift))
 import Control.Monad.Trans.Except (ExceptT)
 import Data.Foldable (Foldable (foldl'), fold, toList)
@@ -78,6 +79,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
 import GHC.Generics (Generic)
@@ -268,43 +270,13 @@ instance Buffered AddressDatumHandle where
     => f (StorableEvent AddressDatumHandle)
     -> AddressDatumHandle
     -> StorableMonad AddressDatumHandle AddressDatumHandle
-  persistToStorage es h =
-    liftSQLError CantInsertEvent $ do
-      let addressDatumHashRows = foldl' (\ea e -> ea ++ toAddressDatumHashRow e) [] es
-          datumRows = foldl' (\ea e -> ea ++ toDatumRow e) [] es
-          c = addressDatumHandleConnection h
-      SQL.execute_ c "BEGIN"
-      forM_ addressDatumHashRows $
-        SQL.execute
-          c
-          [r|INSERT INTO address_datums
-              ( address
-              , datum_hash
-              , slot_no
-              , block_hash
-              )
-             VALUES (?, ?, ?, ?)|]
-      forM_ datumRows $
-        -- We ignore inserts that introduce duplicate datum hashes in the table
-        SQL.execute
-          c
-          [r|INSERT OR IGNORE INTO datumhash_datum
-            ( datum_hash
-            , datum
-            )
-           VALUES (?, ?)|]
-      SQL.execute_ c "COMMIT"
-      pure h
-    where
-      toAddressDatumHashRow :: StorableEvent AddressDatumHandle -> [AddressDatumHashRow]
-      toAddressDatumHashRow (AddressDatumIndexEvent _ _ C.ChainPointAtGenesis) = []
-      toAddressDatumHashRow (AddressDatumIndexEvent addressDatumHashMap _ (C.ChainPoint sl bh)) = do
-        (addr, dhs) <- Map.toList addressDatumHashMap
-        dh <- Set.toList dhs
-        pure $ AddressDatumHashRow addr dh sl bh
-      toDatumRow :: StorableEvent AddressDatumHandle -> [DatumRow]
-      toDatumRow (AddressDatumIndexEvent _ datumMap _) =
-        fmap (uncurry DatumRow) $ Map.toList datumMap
+  persistToStorage es h
+    = liftSQLError CantInsertEvent $ do
+    let c = addressDatumHandleConnection h
+    SQL.execute_ c "BEGIN"
+    sqliteInsert c "" $ toList es
+    SQL.execute_ c "COMMIT"
+    pure h
 
   getStoredEvents
     :: AddressDatumHandle
@@ -496,26 +468,57 @@ open
 open dbPath (AddressDatumDepth k) = do
   c <- liftSQLError CantStartIndexer (SQL.open dbPath)
   lift $ SQL.execute_ c "PRAGMA journal_mode=WAL"
-  lift $
-    SQL.execute_
-      c
-      [r|CREATE TABLE IF NOT EXISTS address_datums
-            ( address TEXT NOT NULL
-            , datum_hash BLOB NOT NULL
-            , slot_no INT NOT NULL
-            , block_hash BLOB NOT NULL
-            )|]
-  lift $
-    SQL.execute_
-      c
-      [r|CREATE TABLE IF NOT EXISTS datumhash_datum
-            ( datum_hash BLOB PRIMARY KEY
-            , datum BLOB
-            )|]
-  lift $
-    SQL.execute_
-      c
+  lift $ sqliteInit c ""
+  lift $ SQL.execute_ c
       [r|CREATE INDEX IF NOT EXISTS address_datums_index
-           ON address_datums (address)|]
+         ON address_datums (address)|]
 
   emptyState k (AddressDatumHandle c k)
+
+sqliteInit :: SQL.Connection -> String -> IO ()
+sqliteInit c tablePrefix = do
+  SQL.execute_ c $
+    "CREATE TABLE IF NOT EXISTS " <> mkAddressDatumTableName tablePrefix <> " \
+    \   ( address TEXT NOT NULL      \
+    \   , datum_hash BLOB NOT NULL   \
+    \   , slot_no INT NOT NULL       \
+    \   , block_hash BLOB NOT NULL ) "
+
+  SQL.execute_ c
+    $ "CREATE TABLE IF NOT EXISTS "
+    <> mkDatumTableName tablePrefix
+    <> " (datum_hash BLOB PRIMARY KEY, datum BLOB)"
+
+sqliteInsert :: SQL.Connection -> String -> [StorableEvent AddressDatumHandle] -> IO ()
+sqliteInsert c tablePrefix events = do
+  SQL.executeMany c
+    ("INSERT INTO " <> mkAddressDatumTableName tablePrefix <> " (address, datum_hash, slot_no, block_hash) VALUES (?, ?, ?, ?)")
+    addressDatumHashRows
+  SQL.executeMany c
+    -- We ignore inserts that introduce duplicate datum hashes in the table
+    ("INSERT OR IGNORE INTO " <> mkDatumTableName tablePrefix <> " (datum_hash, datum) VALUES (?, ?)")
+    datumRows
+
+  where
+    addressDatumHashRows :: [AddressDatumHashRow]
+    addressDatumHashRows = foldl' (\ea e -> ea ++ toAddressDatumHashRow e) [] events
+
+    datumRows :: [DatumRow]
+    datumRows = foldl' (\ea e -> ea ++ toDatumRow e) [] events
+
+    toAddressDatumHashRow :: StorableEvent AddressDatumHandle -> [AddressDatumHashRow]
+    toAddressDatumHashRow (AddressDatumIndexEvent _ _ C.ChainPointAtGenesis) = []
+    toAddressDatumHashRow (AddressDatumIndexEvent addressDatumHashMap _ (C.ChainPoint sl bh)) = do
+        (addr, dhs) <- Map.toList addressDatumHashMap
+        dh <- Set.toList dhs
+        pure $ AddressDatumHashRow addr dh sl bh
+
+    toDatumRow :: StorableEvent AddressDatumHandle -> [DatumRow]
+    toDatumRow (AddressDatumIndexEvent _ datumMap _) =
+        fmap (uncurry DatumRow) $ Map.toList datumMap
+
+mkAddressDatumTableName :: String -> SQL.Query
+mkAddressDatumTableName prefix = fromString $ prefix <> "address_datums"
+
+mkDatumTableName :: String -> SQL.Query
+mkDatumTableName prefix = fromString $ prefix <> "datumhash_datum"
