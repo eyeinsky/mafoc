@@ -11,8 +11,9 @@ import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
 import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval),
-                   LocalChainsyncConfig (LocalChainsyncConfig), NodeFolderOrSecurityParamOrNodeConfig,
-                   SecurityParamOrNodeConfig, UpTo (CurrentTip, Infinity, SlotNo))
+                   LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig, NodeInfo,
+                   UpTo (CurrentTip, Infinity, SlotNo))
+import Marconi.ChainIndex.Types qualified as Marconi
 
 -- * Options
 
@@ -74,18 +75,26 @@ commonNetworkId = mainnet <|> C.Testnet <$> testnet
          <> O.metavar "NATURAL"
          <> O.help "Specify a testnet magic id.")
 
-commonSecurityParam :: O.Parser Natural
+commonSecurityParam :: O.Parser Marconi.SecurityParam
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
-commonSecurityParamEither :: O.Parser SecurityParamOrNodeConfig
-commonSecurityParamEither =
-      Left <$> ((,) <$> commonSecurityParam <*> commonNetworkId)
-  <|> Right <$> commonNodeConfig
+commonSecurityParamEither :: O.Parser (Either C.NetworkId NodeConfig)
+commonSecurityParamEither = Left <$> commonNetworkId <|> Right <$> commonNodeConfig
 
-commonNetwork :: O.Parser NodeFolderOrSecurityParamOrNodeConfig
-commonNetwork =
-      Left  <$> O.strArgument (O.metavar "NODE-FOLDER" <> O.help "Path to cardano-node's folder. The program will figure out socket path, security parameter, network and node config path from it.")
+commonNodeFolder :: O.Mod O.ArgumentFields NodeConfig
+commonNodeFolder =
+     O.metavar "NODE-FOLDER"
+  <> O.help "Path to cardano-node's folder. The program will figure out socket path, security parameter, network and node config path from it."
+
+commonNodeConnection :: O.Parser (NodeInfo (Either C.NetworkId NodeConfig))
+commonNodeConnection =
+      Left  <$> O.strArgument commonNodeFolder
   <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
+
+commonNodeConnectionAndConfig :: O.Parser (NodeInfo NodeConfig)
+commonNodeConnectionAndConfig =
+      Left  <$> O.strArgument commonNodeFolder
+  <|> Right <$> ((,) <$> commonSocketPath <*> commonNodeConfig)
 
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither)
@@ -100,9 +109,14 @@ commonBatchSize = O.option O.auto
   $ longOpt "batch-size" "Batche size for persisting events"
   <> O.value 1
 
-commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig
-commonLocalChainsyncConfig = LocalChainsyncConfig
-  <$> commonNetwork
+commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig_
+commonLocalChainsyncConfig = mkCommonLocalChainsyncConfig commonNodeConnection
+
+mkCommonLocalChainsyncConfig
+  :: O.Parser (NodeInfo a)
+  -> O.Parser (LocalChainsyncConfig a)
+mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
+  <$> commonNodeConnection_
   <*> commonInterval
   <*> commonLogging
   <*> commonPipelineSize

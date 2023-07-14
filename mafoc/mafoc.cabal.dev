@@ -114,6 +114,9 @@ library
     , async
     , base                  >=4.9 && <5
     , bytestring
+    , containers
+    , directory
+    , mtl
     , optparse-applicative
     , sqlite-simple
     , stm

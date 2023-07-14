@@ -6,11 +6,11 @@ import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, initializeSqlite,
                    setCheckpointSqlite)
 
 data NoOp = NoOp
-  { chainsync          :: LocalChainsyncConfig
+  { chainsync          :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 

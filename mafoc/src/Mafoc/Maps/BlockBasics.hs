@@ -16,13 +16,13 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persist, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, initializeSqlite,
                    setCheckpointSqlite)
 
 -- * Block transaction count indexer
 
 data BlockBasics = BlockBasics
-  { chainsync          :: LocalChainsyncConfig
+  { chainsync          :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
   } deriving (Show)
 

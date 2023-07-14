@@ -22,10 +22,14 @@ import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 
 type SlotNoBhh = (C.SlotNo, C.Hash C.BlockHeader)
 
-getSecurityParamAndNetworkId :: FilePath -> IO (Natural, C.NetworkId)
+getSecurityParamAndNetworkId :: FilePath -> IO (Marconi.SecurityParam, C.NetworkId)
 getSecurityParamAndNetworkId nodeConfig = do
   (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
-  pure (fromIntegral $ C.envSecurityParam env, CS.envNetworkId env)
+  let securityParam' = C.envSecurityParam env :: Word64
+  pure (Marconi.SecurityParam securityParam', CS.envNetworkId env)
+
+getNetworkId :: FilePath -> IO C.NetworkId
+getNetworkId nodeConfig = CS.envNetworkId . fst <$> CS.getEnvAndInitialLedgerStateHistory nodeConfig
 
 instance Ord C.ChainTip where
   compare C.ChainTipAtGenesis C.ChainTipAtGenesis = EQ

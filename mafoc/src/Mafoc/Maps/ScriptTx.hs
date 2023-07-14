@@ -7,13 +7,13 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig, blockChainPoint, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync, initializeSqlite,
                    setCheckpointSqlite)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi.ScriptTx
 import Marconi.Core.Storable qualified as Marconi
 
 data ScriptTx = ScriptTx
-  { chainsync          :: LocalChainsyncConfig
+  { chainsync          :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 

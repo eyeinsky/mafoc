@@ -9,6 +9,7 @@ module Mafoc.Core
   , module Mafoc.Common
   ) where
 
+import Control.Monad.Except (runExceptT)
 import Control.Monad.Trans.Class (lift)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
@@ -30,11 +31,12 @@ import Cardano.Streaming qualified as CS
 import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Logging qualified as Marconi
+import Marconi.ChainIndex.Types qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
-import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
-                     getSecurityParamAndNetworkId, tipDistance)
+import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield, getNetworkId,
+                     getSecurityParamAndNetworkId, tipDistance, querySecurityParam)
 
 -- * Interval
 
@@ -163,36 +165,42 @@ class Indexer a where
 type NodeFolder = FilePath
 type NodeConfig = FilePath
 type SocketPath = FilePath
-type SecurityParamOrNodeConfig = Either (Natural, C.NetworkId) NodeConfig
-type NodeFolderOrSecurityParamOrNodeConfig = Either NodeFolder (SocketPath, SecurityParamOrNodeConfig)
+type NodeInfo a = Either NodeFolder (SocketPath, a)
 
 -- | Configuration for local chainsync streaming setup.
-data LocalChainsyncConfig = LocalChainsyncConfig
-  { nodeFolderOrSecurityParamOrNodeConfig :: NodeFolderOrSecurityParamOrNodeConfig
-  , interval_                             :: Interval
-  , logging_                              :: Bool
-  , pipelineSize_                         :: Word32
-  , batchSize_                            :: Natural
+data LocalChainsyncConfig a = LocalChainsyncConfig
+  { nodeInfo      :: NodeInfo a
+  , interval_     :: Interval
+  , logging_      :: Bool
+  , pipelineSize_ :: Word32
+  , batchSize_    :: Natural
   } deriving Show
+
+type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
+
+nodeFolderToConfigPath :: NodeFolder -> NodeConfig
+nodeFolderToConfigPath nodeFolder = nodeFolder </> "config" </> "config.json"
+
+nodeFolderToSocketPath :: NodeFolder -> SocketPath
+nodeFolderToSocketPath nodeFolder = nodeFolder </> "socket" </> "node.socket"
+
+nodeInfoSocketPath :: Either NodeFolder (SocketPath, a) -> SocketPath
+nodeInfoSocketPath nodeInfo_ = either nodeFolderToSocketPath fst nodeInfo_
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
 -- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
 -- config which can be used to generate a stream of blocks.
-initializeLocalChainsync :: LocalChainsyncConfig -> IO LocalChainsyncRuntime
+initializeLocalChainsync :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
 initializeLocalChainsync config = do
-  let interval' = interval_ config
-  (socketPath, k, networkId'') <- case nodeFolderOrSecurityParamOrNodeConfig config of
-    Left nodeFolder -> let
-      nodeConfig = nodeFolder </> "config" </> "config.json"
-      socketPath = nodeFolder </> "socket" </> "node.socket"
-      in do
-      (k, networkId') <- getSecurityParamAndNetworkId nodeConfig
-      pure (socketPath, k, networkId')
-    Right (socketPath, securityParamOrNodeConfig) -> do
-      (k, networkId') <- either pure getSecurityParamAndNetworkId securityParamOrNodeConfig
-      pure (socketPath, k, networkId')
-  let localNodeCon = CS.mkLocalNodeConnectInfo networkId'' socketPath
-  return $ LocalChainsyncRuntime localNodeCon interval' k (logging_ config) (pipelineSize_ config) (batchSize_ config)
+  let nodeInfo' = nodeInfo config
+  let socketPath = nodeInfoSocketPath nodeInfo'
+  networkId <- case nodeInfo' of
+    Left nodeFolder -> getNetworkId $ nodeFolderToConfigPath nodeFolder
+    Right (_socketPath, networkIdOrNodeConfig) -> do
+      either pure getNetworkId networkIdOrNodeConfig
+  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath
+  securityParam' <- querySecurityParam localNodeCon
+  return $ LocalChainsyncRuntime localNodeCon (interval_ config) securityParam' (logging_ config) (pipelineSize_ config) (batchSize_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create
 -- destination table), create checkpoints database if doesn't exist,
@@ -230,7 +238,7 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
 data LocalChainsyncRuntime = LocalChainsyncRuntime
   { localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
   , interval            :: Interval
-  , securityParam       :: Natural
+  , securityParam       :: Marconi.SecurityParam
   , logging             :: Bool
   , pipelineSize        :: Word32
   , batchSize           :: Natural
@@ -243,7 +251,7 @@ blockSource cc trace = blocks' (localNodeConnection cc) from'
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
-  & RB.rollbackRingBuffer (securityParam cc)
+  & RB.rollbackRingBuffer (fromIntegral $ securityParam cc)
        tipDistance
        blockSlotNoBhh
   where

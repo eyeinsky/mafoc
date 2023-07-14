@@ -18,7 +18,7 @@ import Options.Applicative qualified as Opt
 import Mafoc.Core (
   DbPathAndTableName,
   Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-  LocalChainsyncConfig,
+  LocalChainsyncConfig_,
   defaultTableName,
   initializeLocalChainsync,
   initializeSqlite,
@@ -30,7 +30,7 @@ import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
  indexer.
 -}
 data MintBurn = MintBurn
-  { chainsync :: LocalChainsyncConfig
+  { chainsync          :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
   }
   deriving (Show)

@@ -16,15 +16,18 @@ import Ouroboros.Consensus.Cardano.Block qualified as O
 import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 
+import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
+import Mafoc.Common (getNetworkId)
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, initializeSqlite)
+                   LocalChainsyncConfig (batchSize_, interval_, logging_, nodeInfo, pipelineSize_),
+                   LocalChainsyncRuntime (LocalChainsyncRuntime), NodeConfig, defaultTableName, initializeSqlite,
+                   nodeFolderToConfigPath, nodeInfoSocketPath)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
-
+import Marconi.ChainIndex.Utils qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
-  { chainsync          :: LocalChainsyncConfig
-  , nodeConfig         :: FilePath
+  { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 
@@ -35,8 +38,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
   where
     cli :: Opt.Parser EpochStakepoolSize
     cli = EpochStakepoolSize
-      <$> Opt.commonLocalChainsyncConfig
-      <*> Opt.commonNodeConfig
+      <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
       <*> Opt.commonDbPathAndTableName
 
 data EpochStakepoolSizeEvent = EpochStakepoolSizeEvent
@@ -85,9 +87,22 @@ instance Indexer EpochStakepoolSize where
         -- era continues.
         _                   -> Nothing
 
+  initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
+    let nodeInfo' = nodeInfo chainsyncConfig
+        nodeConfig = case nodeInfo' of
+          Left nodeFolder                  -> nodeFolderToConfigPath nodeFolder
+          Right (_socketPath, nodeConfig') -> nodeConfig'
+        socketPath = nodeInfoSocketPath nodeInfo'
+    networkId <- getNetworkId nodeConfig
+    securityParam' <- Marconi.querySecurityParam networkId socketPath
+    let chainsyncRuntime = LocalChainsyncRuntime
+          (CS.mkLocalNodeConnectInfo networkId socketPath)
+          (interval_ chainsyncConfig)
+          securityParam'
+          (logging_ chainsyncConfig)
+          (pipelineSize_ chainsyncConfig)
+          (batchSize_ chainsyncConfig)
 
-  initialize EpochStakepoolSize{chainsync, nodeConfig, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     (ledgerConfig, extLedgerState) <- liftIO $ Marconi.getInitialExtLedgerState nodeConfig

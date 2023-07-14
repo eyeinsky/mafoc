@@ -84,6 +84,7 @@ library
     , bytestring
     , containers
     , filepath
+    , mtl
     , optparse-applicative
     , prettyprinter
     , primitive
