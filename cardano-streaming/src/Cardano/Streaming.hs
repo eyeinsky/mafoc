@@ -6,20 +6,21 @@ module Cardano.Streaming (
   CS.ChainSyncEventException (..),
   --
   CS.mkConnectInfo,
-  CS.mkLocalNodeConnectInfo,
+  CS.mkLocalNodeConnectInfo
 
   -- * Stream blocks and ledger states
-  blocks,
-  blocksPipelined,
-  ledgerStates,
-  ledgerStatesPipelined,
-  foldLedgerState,
-  foldLedgerStateEvents,
-  getEnvAndInitialLedgerStateHistory,
-  CS.ignoreRollbacks,
-  applyBlockThrow,
-  getLastLedgerState,
-) where
+  , blocks, blocksPrim
+  , blocksPipelined
+  , ledgerStates
+  , ledgerStatesPipelined
+  , foldLedgerState
+  , foldLedgerStateEvents
+  , getEnvAndInitialLedgerStateHistory
+  , CS.ignoreRollbacks
+  , applyBlockThrow
+  , getLastLedgerState
+  )
+where
 
 import Control.Concurrent qualified as IO
 import Control.Concurrent.Async (ExceptionInLinkedThread (ExceptionInLinkedThread), link, withAsync)
@@ -149,10 +150,23 @@ blocks
   :: C.LocalNodeConnectInfo C.CardanoMode
   -> C.ChainPoint
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-blocks con chainPoint = do
-  chan <- liftIO IO.newChan
-  void $ liftIO $ CS.linkedAsync $ CS.blocksCallback con chainPoint $ IO.writeChan chan
-  S.repeatM $ IO.readChan chan
+blocks = blocksPrim IO.newChan IO.writeChan IO.readChan
+
+-- | Create stream of @ChainSyncEvent (BlockInMode CardanoMode)@ from
+-- connection @con@ starting at @point@.
+--
+-- Parametrise over creating, writing to, and reading from a
+-- concurrent variable.
+blocksPrim
+  :: IO chan
+  -> (chan -> CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
+  -> (chan -> IO (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode)))
+  -> C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+blocksPrim init_ write read_ con chainPoint = do
+  chan <- liftIO init_
+  void $ liftIO $ CS.linkedAsync $ CS.blocksCallback con chainPoint $ write chan
+  S.repeatM $ read_ chan
 
 blocksPipelined
   :: Word32
