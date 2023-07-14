@@ -22,6 +22,10 @@ import Streaming qualified as S
 import Streaming.Prelude qualified as S
 import System.FilePath ((</>))
 
+import Control.Concurrent qualified as IO
+import Control.Concurrent.STM qualified as STM
+import Control.Concurrent.STM.TChan qualified as TChan
+
 import Cardano.Api qualified as C
 -- import Cardano.BM.Data.Trace
 import Cardano.BM.Setup (withTrace)
@@ -83,6 +87,14 @@ takeUpTo trace upTo' source = case upTo' of
     getTipPoint = \case
       CS.RollForward _blk ct -> C.chainTipToChainPoint ct
       CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
+
+-- * Internal
+
+data ConcurrencyPrimitive
+  = MVar
+  | Chan
+  | TChan
+  deriving (Show, Read, Enum, Bounded)
 
 -- * Sqlite
 
@@ -169,11 +181,12 @@ type NodeInfo a = Either NodeFolder (SocketPath, a)
 
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig a = LocalChainsyncConfig
-  { nodeInfo      :: NodeInfo a
-  , interval_     :: Interval
-  , logging_      :: Bool
-  , pipelineSize_ :: Word32
-  , batchSize_    :: Natural
+  { nodeInfo              :: NodeInfo a
+  , interval_             :: Interval
+  , logging_              :: Bool
+  , pipelineSize_         :: Word32
+  , batchSize_            :: Natural
+  , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
   } deriving Show
 
 type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
@@ -200,7 +213,14 @@ initializeLocalChainsync config = do
       either pure getNetworkId networkIdOrNodeConfig
   let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath
   securityParam' <- querySecurityParam localNodeCon
-  return $ LocalChainsyncRuntime localNodeCon (interval_ config) securityParam' (logging_ config) (pipelineSize_ config) (batchSize_ config)
+  return $ LocalChainsyncRuntime
+    localNodeCon
+    (interval_ config)
+    securityParam'
+    (logging_ config)
+    (pipelineSize_ config)
+    (batchSize_ config)
+    (concurrencyPrimitive_ config)
 
 -- | Initialize sqlite: create connection, run init (e.g create
 -- destination table), create checkpoints database if doesn't exist,
@@ -236,16 +256,19 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
 
 -- | Static configuration for block source
 data LocalChainsyncRuntime = LocalChainsyncRuntime
-  { localNodeConnection :: C.LocalNodeConnectInfo C.CardanoMode
-  , interval            :: Interval
-  , securityParam       :: Marconi.SecurityParam
-  , logging             :: Bool
-  , pipelineSize        :: Word32
-  , batchSize           :: Natural
+  { localNodeConnection  :: C.LocalNodeConnectInfo C.CardanoMode
+  , interval             :: Interval
+  , securityParam        :: Marconi.SecurityParam
+  , logging              :: Bool
+  , pipelineSize         :: Word32
+  , batchSize            :: Natural
+
+  -- * Internal
+  , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
   }
 
 blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource cc trace = blocks' (localNodeConnection cc) from'
+blockSource cc trace = blocks'
   & (if logging cc then Marconi.logging trace else id)
   & takeUpTo trace upTo'
   & S.drop 1 -- The very first event from local chainsync is always a
@@ -255,16 +278,26 @@ blockSource cc trace = blocks' (localNodeConnection cc) from'
        tipDistance
        blockSlotNoBhh
   where
-    Interval from' upTo' = interval cc
-    blocks'
-      :: C.LocalNodeConnectInfo C.CardanoMode
-      -> C.ChainPoint
-      -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-    blocks' = let
-      pipelineSize' = pipelineSize cc
-      in if pipelineSize' > 1
-      then CS.blocks
-      else CS.blocksPipelined pipelineSize'
+    lnc = localNodeConnection cc
+    Interval fromCp upTo' = interval cc
+    blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+    blocks' = do
+      let pipelineSize' = pipelineSize cc
+      if pipelineSize' > 1
+        then CS.blocksPipelined pipelineSize' lnc fromCp
+        else case concurrencyPrimitive cc of
+        Just a -> do
+          let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
+          lift $ traceInfo trace msg
+          case a of
+            MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
+            Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+            TChan -> CS.blocksPrim
+              TChan.newTChanIO
+              (\chan e -> STM.atomically $ STM.writeTChan chan e)
+              (STM.atomically . STM.readTChan)
+              lnc fromCp
+        Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
 
 runIndexer :: forall a . (Indexer a, Show a) => a -> IO ()
 runIndexer cli = do

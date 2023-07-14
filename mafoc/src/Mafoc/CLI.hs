@@ -10,7 +10,7 @@ import Options.Applicative qualified as O
 import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
-import Mafoc.Core (DbPathAndTableName (DbPathAndTableName), Interval (Interval),
+import Mafoc.Core (ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig, NodeInfo,
                    UpTo (CurrentTip, Infinity, SlotNo))
 import Marconi.ChainIndex.Types qualified as Marconi
@@ -121,6 +121,7 @@ mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
   <*> commonLogging
   <*> commonPipelineSize
   <*> commonBatchSize
+  <*> commonConcurrencyPrimitive
 
 -- * String parsers
 
@@ -162,6 +163,33 @@ parseUpTo str = case str of
     _   -> SlotNo <$> parseSlotNo_ rest
   "" -> Right Infinity
   _ -> leftError "Can't read slot interval end" str
+
+-- * Block channel
+
+commonConcurrencyPrimitive :: O.Parser (Maybe ConcurrencyPrimitive)
+commonConcurrencyPrimitive = O.option reader $
+  O.long "concurrency-primitive"
+    <> O.help helpText
+    <> O.hidden
+    <> O.value Nothing
+  where
+    values :: String
+    values = L.intercalate ", " (map show [minBound .. maxBound :: ConcurrencyPrimitive])
+
+    helpText :: String
+    helpText =
+        "Choose between concurrency primitives for passing blocks from local\
+        \ chainsync thread to the indexer. The choice currently is: "
+      <> values
+
+    readStr :: String -> Maybe (Maybe ConcurrencyPrimitive)
+    readStr str = case Read.readMaybe str :: Maybe ConcurrencyPrimitive of
+      Just (cp :: ConcurrencyPrimitive) -> Just (Just cp)
+      _                                 -> Nothing
+
+    reader :: O.ReadM (Maybe ConcurrencyPrimitive)
+    reader = O.maybeReader readStr
+      <|> O.readerError ("Can't parse concurrency primitive, must be one of: " <> values)
 
 -- * Helpers
 
