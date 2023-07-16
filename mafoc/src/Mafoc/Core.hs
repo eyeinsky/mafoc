@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 module Mafoc.Core
   ( module Mafoc.Core
-  , module Mafoc.Common
+  , module Mafoc.Upstream
   ) where
 
 import Control.Monad.Except (runExceptT)
@@ -39,100 +39,8 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
-import Mafoc.Common (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield, getNetworkId,
-                     getSecurityParamAndNetworkId, tipDistance, querySecurityParam)
-
--- * Interval
-
-data UpTo
-  = SlotNo C.SlotNo
-  | Infinity
-  | CurrentTip
-  deriving (Show)
-
-data Interval = Interval
-  { from :: C.ChainPoint
-  , upTo :: UpTo
-  } deriving (Show)
-
-chainPointLaterThanFrom :: C.ChainPoint -> Interval -> Bool
-chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
-
-takeUpTo
-  :: Trace.Trace IO TS.Text
-  -> UpTo
-  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
-  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
-takeUpTo trace upTo' source = case upTo' of
-  SlotNo slotNo -> do
-    lift $ traceDebug trace $ "Will index up to " <> show slotNo
-    flip S.takeWhile source $ \case
-      CS.RollForward blk _ -> blockSlotNo blk <= slotNo
-      CS.RollBackward{}    -> True
-  Infinity -> source
-  CurrentTip -> S.lift (S.next source) >>= \case
-    Left r -> return r
-    Right (event, source') -> do
-      let tip = getTipPoint event :: C.ChainPoint
-      lift $ traceDebug trace $ "Will index up to current tip, which is: " <> show tip
-      S.yield event -- We can always yield the current event, as that
-                    -- is the source for the upper bound anyway.
-      flip S.takeWhile source' $ \case
-        CS.RollForward blk _ct -> blockChainPoint blk <= tip
-        CS.RollBackward{}      -> True -- We skip rollbacks as these can ever only to an earlier point
-      lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <> show (getTipPoint event) <> ")"
-
-  where
-    getTipPoint :: CS.ChainSyncEvent a -> C.ChainPoint
-    getTipPoint = \case
-      CS.RollForward _blk ct -> C.chainTipToChainPoint ct
-      CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
-
--- * Internal
-
-data ConcurrencyPrimitive
-  = MVar
-  | Chan
-  | TChan
-  deriving (Show, Read, Enum, Bounded)
-
--- * Sqlite
-
--- ** Checkpoint
-
-sqliteInitCheckpoints :: SQL.Connection -> IO ()
-sqliteInitCheckpoints sqlCon = do
-  SQL.execute_ sqlCon
-    " CREATE TABLE IF NOT EXISTS checkpoints \
-    \   ( indexer TEXT NOT NULL              \
-    \   , slot_no INT NOT NULL               \
-    \   , block_header_hash BLOB NOT NULL    \
-    \   , PRIMARY KEY (indexer))             "
-
-
-setCheckpointSqlite :: SQL.Connection -> String -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
-setCheckpointSqlite c name (slotNo, bhh) = SQL.execute c
-  "INSERT OR REPLACE INTO checkpoints (indexer, slot_no, block_header_hash) values (?, ?, ?)"
-  (name, slotNo, bhh)
-
--- | Get checkpoint (the place where we left off) for an indexer with @name@
-getCheckpointSqlite :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
-getCheckpointSqlite sqlCon name = do
-  list <- SQL.query sqlCon "SELECT slot_no, block_header_hash FROM checkpoints WHERE indexer = ?" (SQL.Only name)
-  case list of
-    [(slotNo, bhh)] -> return $ Just $ C.ChainPoint slotNo bhh
-    []              -> return Nothing
-    _               -> error "getCheckpointSqlite: this should never happen!!"
-
--- ** Database path and table(s)
-
-data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
-  deriving (Show)
-
-defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
-defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
-
--- * Streaming
+import Mafoc.Upstream (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
+                       getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
 
 -- * Indexer class
 
@@ -172,132 +80,6 @@ class Indexer a where
   -- time has passed.
   checkpoint :: Runtime a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
--- * Local chainsync config
-
-type NodeFolder = FilePath
-type NodeConfig = FilePath
-type SocketPath = FilePath
-type NodeInfo a = Either NodeFolder (SocketPath, a)
-
--- | Configuration for local chainsync streaming setup.
-data LocalChainsyncConfig a = LocalChainsyncConfig
-  { nodeInfo              :: NodeInfo a
-  , interval_             :: Interval
-  , logging_              :: Bool
-  , pipelineSize_         :: Word32
-  , batchSize_            :: Natural
-  , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
-  } deriving Show
-
-type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
-
-nodeFolderToConfigPath :: NodeFolder -> NodeConfig
-nodeFolderToConfigPath nodeFolder = nodeFolder </> "config" </> "config.json"
-
-nodeFolderToSocketPath :: NodeFolder -> SocketPath
-nodeFolderToSocketPath nodeFolder = nodeFolder </> "socket" </> "node.socket"
-
-nodeInfoSocketPath :: Either NodeFolder (SocketPath, a) -> SocketPath
-nodeInfoSocketPath nodeInfo_ = either nodeFolderToSocketPath fst nodeInfo_
-
--- | Resolve @LocalChainsyncConfig@ that came from e.g command line
--- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
--- config which can be used to generate a stream of blocks.
-initializeLocalChainsync :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
-initializeLocalChainsync config = do
-  let nodeInfo' = nodeInfo config
-  let socketPath = nodeInfoSocketPath nodeInfo'
-  networkId <- case nodeInfo' of
-    Left nodeFolder -> getNetworkId $ nodeFolderToConfigPath nodeFolder
-    Right (_socketPath, networkIdOrNodeConfig) -> do
-      either pure getNetworkId networkIdOrNodeConfig
-  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath
-  securityParam' <- querySecurityParam localNodeCon
-  return $ LocalChainsyncRuntime
-    localNodeCon
-    (interval_ config)
-    securityParam'
-    (logging_ config)
-    (pipelineSize_ config)
-    (batchSize_ config)
-    (concurrencyPrimitive_ config)
-
--- | Initialize sqlite: create connection, run init (e.g create
--- destination table), create checkpoints database if doesn't exist,
--- update interval in runtime config by whether there is anywhere to
--- resume from.
-initializeSqlite
-  :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> IO (SQL.Connection, LocalChainsyncRuntime)
-initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
-  sqlCon <- SQL.open dbPath
-  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
-  sqliteInit sqlCon tableName
-  sqliteInitCheckpoints sqlCon
-
-  -- Find ChainPoint from checkpoints table and update chainsync
-  -- runtime configuration if that is later than what was passed in
-  -- from cli configuration.
-  let cliInterval = interval chainsyncRuntime
-  maybeChainPoint <- getCheckpointSqlite sqlCon tableName
-  newInterval <- case maybeChainPoint of
-    Just cp -> if chainPointLaterThanFrom cp cliInterval
-      then do
-      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> show cp
-      return $ cliInterval { from = cp }
-      else do
-      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> show cp <> ", cli: " <> show (from cliInterval)
-      return cliInterval
-    _ -> do
-      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> show (from cliInterval)
-      return cliInterval
-  let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
-
-  return (sqlCon, chainsyncRuntime')
-
--- | Static configuration for block source
-data LocalChainsyncRuntime = LocalChainsyncRuntime
-  { localNodeConnection  :: C.LocalNodeConnectInfo C.CardanoMode
-  , interval             :: Interval
-  , securityParam        :: Marconi.SecurityParam
-  , logging              :: Bool
-  , pipelineSize         :: Word32
-  , batchSize            :: Natural
-
-  -- * Internal
-  , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
-  }
-
-blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource cc trace = blocks'
-  & (if logging cc then Marconi.logging trace else id)
-  & takeUpTo trace upTo'
-  & S.drop 1 -- The very first event from local chainsync is always a
-             -- rewind. We skip this because we don't have anywhere to
-             -- rollback to anyway.
-  & RB.rollbackRingBuffer (fromIntegral $ securityParam cc)
-       tipDistance
-       blockSlotNoBhh
-  where
-    lnc = localNodeConnection cc
-    Interval fromCp upTo' = interval cc
-    blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-    blocks' = do
-      let pipelineSize' = pipelineSize cc
-      if pipelineSize' > 1
-        then CS.blocksPipelined pipelineSize' lnc fromCp
-        else case concurrencyPrimitive cc of
-        Just a -> do
-          let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
-          lift $ traceInfo trace msg
-          case a of
-            MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
-            Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
-            TChan -> CS.blocksPrim
-              TChan.newTChanIO
-              (\chan e -> STM.atomically $ STM.writeTChan chan e)
-              (STM.atomically . STM.readTChan)
-              lnc fromCp
-        Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
 
 runIndexer :: forall a . (Indexer a, Show a) => a -> IO ()
 runIndexer cli = do
@@ -369,8 +151,229 @@ runIndexer cli = do
       currentTime :: UTCTime <- lift $ getCurrentTime
       foldYield step (initialState currentTime) source
 
+-- * Local chainsync
+
+type NodeFolder = FilePath
+type NodeConfig = FilePath
+type SocketPath = FilePath
+type NodeInfo a = Either NodeFolder (SocketPath, a)
+
+-- | Configuration for local chainsync streaming setup.
+data LocalChainsyncConfig a = LocalChainsyncConfig
+  { nodeInfo              :: NodeInfo a
+  , interval_             :: Interval
+  , logging_              :: Bool
+  , pipelineSize_         :: Word32
+  , batchSize_            :: Natural
+  , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
+  } deriving Show
+
+type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
+
+nodeFolderToConfigPath :: NodeFolder -> NodeConfig
+nodeFolderToConfigPath nodeFolder = nodeFolder </> "config" </> "config.json"
+
+nodeFolderToSocketPath :: NodeFolder -> SocketPath
+nodeFolderToSocketPath nodeFolder = nodeFolder </> "socket" </> "node.socket"
+
+nodeInfoSocketPath :: Either NodeFolder (SocketPath, a) -> SocketPath
+nodeInfoSocketPath nodeInfo_ = either nodeFolderToSocketPath fst nodeInfo_
+
+-- | Resolve @LocalChainsyncConfig@ that came from e.g command line
+-- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
+-- config which can be used to generate a stream of blocks.
+initializeLocalChainsync :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
+initializeLocalChainsync config = do
+  let nodeInfo' = nodeInfo config
+  let socketPath = nodeInfoSocketPath nodeInfo'
+  networkId <- case nodeInfo' of
+    Left nodeFolder -> getNetworkId $ nodeFolderToConfigPath nodeFolder
+    Right (_socketPath, networkIdOrNodeConfig) -> do
+      either pure getNetworkId networkIdOrNodeConfig
+  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath
+  securityParam' <- querySecurityParam localNodeCon
+  return $ LocalChainsyncRuntime
+    localNodeCon
+    (interval_ config)
+    securityParam'
+    (logging_ config)
+    (pipelineSize_ config)
+    (batchSize_ config)
+    (concurrencyPrimitive_ config)
+
+-- | Static configuration for block source
+data LocalChainsyncRuntime = LocalChainsyncRuntime
+  { localNodeConnection  :: C.LocalNodeConnectInfo C.CardanoMode
+  , interval             :: Interval
+  , securityParam        :: Marconi.SecurityParam
+  , logging              :: Bool
+  , pipelineSize         :: Word32
+  , batchSize            :: Natural
+
+  -- * Internal
+  , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
+  }
+
+blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+blockSource cc trace = blocks'
+  & (if logging cc then Marconi.logging trace else id)
+  & takeUpTo trace upTo'
+  & S.drop 1 -- The very first event from local chainsync is always a
+             -- rewind. We skip this because we don't have anywhere to
+             -- rollback to anyway.
+  & RB.rollbackRingBuffer (fromIntegral $ securityParam cc)
+       tipDistance
+       blockSlotNoBhh
+  where
+    lnc = localNodeConnection cc
+    Interval fromCp upTo' = interval cc
+    blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+    blocks' = do
+      let pipelineSize' = pipelineSize cc
+      if pipelineSize' > 1
+        then CS.blocksPipelined pipelineSize' lnc fromCp
+        else case concurrencyPrimitive cc of
+        Just a -> do
+          let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
+          lift $ traceInfo trace msg
+          case a of
+            MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
+            Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+            TChan -> CS.blocksPrim
+              TChan.newTChanIO
+              (\chan e -> STM.atomically $ STM.writeTChan chan e)
+              (STM.atomically . STM.readTChan)
+              lnc fromCp
+        Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+
+data ConcurrencyPrimitive
+  = MVar
+  | Chan
+  | TChan
+  deriving (Show, Read, Enum, Bounded)
+
+-- * Interval
+
+data UpTo
+  = SlotNo C.SlotNo
+  | Infinity
+  | CurrentTip
+  deriving (Show)
+
+data Interval = Interval
+  { from :: C.ChainPoint
+  , upTo :: UpTo
+  } deriving (Show)
+
+chainPointLaterThanFrom :: C.ChainPoint -> Interval -> Bool
+chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
+
+takeUpTo
+  :: Trace.Trace IO TS.Text
+  -> UpTo
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
+takeUpTo trace upTo' source = case upTo' of
+  SlotNo slotNo -> do
+    lift $ traceDebug trace $ "Will index up to " <> show slotNo
+    flip S.takeWhile source $ \case
+      CS.RollForward blk _ -> blockSlotNo blk <= slotNo
+      CS.RollBackward{}    -> True
+  Infinity -> source
+  CurrentTip -> S.lift (S.next source) >>= \case
+    Left r -> return r
+    Right (event, source') -> do
+      let tip = getTipPoint event :: C.ChainPoint
+      lift $ traceDebug trace $ "Will index up to current tip, which is: " <> show tip
+      S.yield event -- We can always yield the current event, as that
+                    -- is the source for the upper bound anyway.
+      flip S.takeWhile source' $ \case
+        CS.RollForward blk _ct -> blockChainPoint blk <= tip
+        CS.RollBackward{}      -> True -- We skip rollbacks as these can ever only to an earlier point
+      lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <> show (getTipPoint event) <> ")"
+
+  where
+    getTipPoint :: CS.ChainSyncEvent a -> C.ChainPoint
+    getTipPoint = \case
+      CS.RollForward _blk ct -> C.chainTipToChainPoint ct
+      CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
+
+
+-- * Trace
+
 traceInfo :: Trace.Trace IO TS.Text -> String -> IO ()
 traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
 
 traceDebug :: Trace.Trace IO TS.Text -> String -> IO ()
 traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
+
+
+-- * Sqlite
+
+-- ** Checkpoint
+
+sqliteInitCheckpoints :: SQL.Connection -> IO ()
+sqliteInitCheckpoints sqlCon = do
+  SQL.execute_ sqlCon
+    " CREATE TABLE IF NOT EXISTS checkpoints \
+    \   ( indexer TEXT NOT NULL              \
+    \   , slot_no INT NOT NULL               \
+    \   , block_header_hash BLOB NOT NULL    \
+    \   , PRIMARY KEY (indexer))             "
+
+
+setCheckpointSqlite :: SQL.Connection -> String -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
+setCheckpointSqlite c name (slotNo, bhh) = SQL.execute c
+  "INSERT OR REPLACE INTO checkpoints (indexer, slot_no, block_header_hash) values (?, ?, ?)"
+  (name, slotNo, bhh)
+
+-- | Get checkpoint (the place where we left off) for an indexer with @name@
+getCheckpointSqlite :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
+getCheckpointSqlite sqlCon name = do
+  list <- SQL.query sqlCon "SELECT slot_no, block_header_hash FROM checkpoints WHERE indexer = ?" (SQL.Only name)
+  case list of
+    [(slotNo, bhh)] -> return $ Just $ C.ChainPoint slotNo bhh
+    []              -> return Nothing
+    _               -> error "getCheckpointSqlite: this should never happen!!"
+
+-- ** Database path and table(s)
+
+data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
+  deriving (Show)
+
+defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
+defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
+
+-- ** Initialise
+
+-- | Initialize sqlite: create connection, run init (e.g create
+-- destination table), create checkpoints database if doesn't exist,
+-- update interval in runtime config by whether there is anywhere to
+-- resume from.
+initializeSqlite
+  :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> IO (SQL.Connection, LocalChainsyncRuntime)
+initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
+  sqlCon <- SQL.open dbPath
+  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
+  sqliteInit sqlCon tableName
+  sqliteInitCheckpoints sqlCon
+
+  -- Find ChainPoint from checkpoints table and update chainsync
+  -- runtime configuration if that is later than what was passed in
+  -- from cli configuration.
+  let cliInterval = interval chainsyncRuntime
+  maybeChainPoint <- getCheckpointSqlite sqlCon tableName
+  newInterval <- case maybeChainPoint of
+    Just cp -> if chainPointLaterThanFrom cp cliInterval
+      then do
+      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> show cp
+      return $ cliInterval { from = cp }
+      else do
+      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> show cp <> ", cli: " <> show (from cliInterval)
+      return cliInterval
+    _ -> do
+      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> show (from cliInterval)
+      return cliInterval
+  let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
+
+  return (sqlCon, chainsyncRuntime')

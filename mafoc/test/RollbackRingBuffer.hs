@@ -25,8 +25,8 @@ import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testPropertyNamed)
 
-import Mafoc.Common (SlotNoBhh, minusNaturalMaybe)
 import Mafoc.RollbackRingBuffer (rollbackRingBuffer)
+import Mafoc.Upstream (SlotNoBhh, minusNaturalMaybe)
 import Spec.Helpers (classifier, footnotes)
 
 tests :: TestTree

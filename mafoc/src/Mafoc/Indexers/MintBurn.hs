@@ -9,7 +9,7 @@ these into sqlite is outsourced from marconi.
 
 This just provides the CLI interface and a streaming runtime.
 -}
-module Mafoc.Maps.MintBurn where
+module Mafoc.Indexers.MintBurn where
 
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt

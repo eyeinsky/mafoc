@@ -11,8 +11,8 @@ import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
 import Cardano.Streaming.Helpers qualified as CS
-import Mafoc.Common (SlotNoBhh, streamPassReturn)
 import Mafoc.RingBuffer qualified as RB
+import Mafoc.Upstream (SlotNoBhh, streamPassReturn)
 
 -- The difference between a ring buffer and an elastic ring buffer is
 -- that elastic ring buffer always yields blocks that are further than

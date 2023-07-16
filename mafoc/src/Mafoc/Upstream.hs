@@ -1,7 +1,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
-module Mafoc.Common where
+module Mafoc.Upstream where
 
 import Control.Exception (throwIO, Exception)
 import Control.Monad.Trans.Class (MonadTrans, lift)

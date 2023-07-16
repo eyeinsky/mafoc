@@ -1,5 +1,5 @@
 {-# LANGUAGE NamedFieldPuns #-}
-module Mafoc.Maps.ScriptTx where
+module Mafoc.Indexers.ScriptTx where
 
 import Database.SQLite.Simple qualified as SQL
 import Options.Applicative qualified as Opt

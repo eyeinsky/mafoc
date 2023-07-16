@@ -10,11 +10,11 @@ import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (runIndexer)
-import Mafoc.Folds.EpochStakepoolSize qualified as EpochStakepoolSize
-import Mafoc.Maps.BlockBasics qualified as BlockBasics
-import Mafoc.Maps.MintBurn qualified as MintBurn
-import Mafoc.Maps.NoOp qualified as NoOp
-import Mafoc.Maps.ScriptTx qualified as ScriptTx
+import Mafoc.Indexers.BlockBasics qualified as BlockBasics
+import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
+import Mafoc.Indexers.MintBurn qualified as MintBurn
+import Mafoc.Indexers.NoOp qualified as NoOp
+import Mafoc.Indexers.ScriptTx qualified as ScriptTx
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()

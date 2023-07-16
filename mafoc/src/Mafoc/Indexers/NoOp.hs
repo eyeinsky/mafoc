@@ -1,5 +1,5 @@
 {-# LANGUAGE NamedFieldPuns #-}
-module Mafoc.Maps.NoOp where
+module Mafoc.Indexers.NoOp where
 
 import Database.SQLite.Simple qualified as SQL
 import Options.Applicative qualified as Opt

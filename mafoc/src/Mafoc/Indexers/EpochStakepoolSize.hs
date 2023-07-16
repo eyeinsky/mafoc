@@ -2,7 +2,7 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-module Mafoc.Folds.EpochStakepoolSize where
+module Mafoc.Indexers.EpochStakepoolSize where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Map.Strict qualified as M
@@ -18,11 +18,11 @@ import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
-import Mafoc.Common (getNetworkId)
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
                    LocalChainsyncConfig (batchSize_, concurrencyPrimitive_, interval_, logging_, nodeInfo, pipelineSize_),
                    LocalChainsyncRuntime (LocalChainsyncRuntime), NodeConfig, defaultTableName, initializeSqlite,
                    nodeFolderToConfigPath, nodeInfoSocketPath)
+import Mafoc.Upstream (getNetworkId)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 import Marconi.ChainIndex.Utils qualified as Marconi
 

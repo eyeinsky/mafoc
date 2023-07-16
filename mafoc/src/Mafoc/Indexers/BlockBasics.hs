@@ -3,7 +3,7 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Mafoc.Maps.BlockBasics where
+module Mafoc.Indexers.BlockBasics where
 
 import Data.Coerce (coerce)
 import Data.String (IsString (fromString))

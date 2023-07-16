@@ -48,55 +48,22 @@ library
   exposed-modules:
     Mafoc.CLI
     Mafoc.Core
-    Mafoc.Folds.EpochStakepoolSize
     Mafoc.Indexer.Class
-    Mafoc.Maps.BlockBasics
-    Mafoc.Maps.MintBurn
-    Mafoc.Maps.NoOp
-    Mafoc.Maps.ScriptTx
-    Mafoc.RollbackRingBuffer
+    Mafoc.Indexers.BlockBasics
+    Mafoc.Indexers.EpochStakepoolSize
+    Mafoc.Indexers.MintBurn
+    Mafoc.Indexers.NoOp
+    Mafoc.Indexers.ScriptTx
     Mafoc.RingBuffer
+    Mafoc.RollbackRingBuffer
     Mafoc.Speed
+    Mafoc.Upstream
 
   --------------------
   -- Local components
   --------------------
   build-depends:
     , cardano-streaming
-    , marconi-chain-index
-
-  --------------------------
-  -- Other IOG dependencies
-  --------------------------
-  build-depends:
-    , cardano-api
-
-  ------------------------
-  -- Non-IOG dependencies
-  ------------------------
-  build-depends:
-    , base           >=4.9 && <5
-    , filepath
-    , prettyprinter
-    , primitive
-    , sqlite-simple
-    , streaming
-    , time
-    , transformers
-    , vector
-    , text
-
--- executable mafoc
---   import:         lang
-  hs-source-dirs: app
-  -- main-is:        Main.hs
-
-  --------------------
-  -- Local components
-  --------------------
-  build-depends:
-    , cardano-streaming
---    , mafoc
     , marconi-chain-index
     , marconi-core
 
@@ -106,6 +73,8 @@ library
   build-depends:
     , cardano-api
     , iohk-monitoring
+    , ouroboros-consensus
+    , ouroboros-consensus-cardano
 
   ------------------------
   -- Non-IOG dependencies
@@ -117,28 +86,68 @@ library
     , containers
     , directory
     , mtl
+    , filepath
     , optparse-applicative
+    , prettyprinter
+    , primitive
     , sqlite-simple
     , stm
     , streaming
+    , text
+    , time
+    , transformers
+    , vector
+
+-- executable mafoc
+  -- import:         lang
+  hs-source-dirs: app
+  -- main-is:        Main.hs
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , cardano-streaming
+    -- , mafoc
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , base                  >=4.9 && <5
+    , optparse-applicative
 
 -- test-suite mafoc-test
 --   import:         lang
   hs-source-dirs: test
   -- main-is:        Spec.hs
   -- type:           exitcode-stdio-1.0
-  other-modules:  RollbackRingBuffer
+  other-modules:
+    RingBuffer
+    RollbackRingBuffer
+    Spec.Helpers
 
   --------------------
   -- Local components
   --------------------
---  build-depends:  mafoc
+  build-depends:
+    , cardano-streaming
+    -- , mafoc
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
   build-depends:
-    , base             >=4.9 && <5
+    , base            >=4.9 && <5
     , hedgehog
     , streaming
     , tasty

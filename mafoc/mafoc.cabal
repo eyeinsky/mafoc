@@ -47,17 +47,17 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
-    Mafoc.Common
     Mafoc.Core
-    Mafoc.Folds.EpochStakepoolSize
     Mafoc.Indexer.Class
-    Mafoc.Maps.BlockBasics
-    Mafoc.Maps.MintBurn
-    Mafoc.Maps.NoOp
-    Mafoc.Maps.ScriptTx
+    Mafoc.Indexers.BlockBasics
+    Mafoc.Indexers.EpochStakepoolSize
+    Mafoc.Indexers.MintBurn
+    Mafoc.Indexers.NoOp
+    Mafoc.Indexers.ScriptTx
     Mafoc.RingBuffer
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
+    Mafoc.Upstream
 
   --------------------
   -- Local components
