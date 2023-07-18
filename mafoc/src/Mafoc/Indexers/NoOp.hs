@@ -35,4 +35,4 @@ instance Indexer NoOp where
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon)
   persist _runtime _event = return ()
-  checkpoint Runtime{sqlConnection} slotNoBhh = setCheckpointSqlite sqlConnection "noop" slotNoBhh
+  checkpoint Runtime{sqlConnection} _state slotNoBhh = setCheckpointSqlite sqlConnection "noop" slotNoBhh

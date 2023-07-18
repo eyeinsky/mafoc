@@ -78,7 +78,7 @@ class Indexer a where
   -- | Set a checkpoint of lates ChainPoint processed. This is used when
   -- there are no events to be persisted, but sufficient amount of
   -- time has passed.
-  checkpoint :: Runtime a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
+  checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 
 runIndexer :: forall a . (Indexer a, Show a) => a -> IO ()
@@ -96,7 +96,7 @@ runIndexer cli = do
       -- `Maybe event` (because not all blocks generate an event)
       & foldYield (\st (cp, a) -> do
                       (st', b) <- toEvent indexerRuntime st a
-                      return (st', (cp, b))
+                      return (st', (cp, b, st'))
                   ) initialState
 
       -- Persist events with `persist` or `persistMany` (buffering writes by
@@ -106,20 +106,20 @@ runIndexer cli = do
   where
     buffered
       :: Runtime a -> Trace.Trace IO TS.Text -> Natural
-      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a))) IO ()
-      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a))) IO ()
+      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
+      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
     buffered indexerRuntime' trace bufferSize source = do
 
       let initialState :: UTCTime -> (Natural, UTCTime, [Event a])
           initialState t = (0, t, [])
 
-          step :: (Natural, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a)) -> IO ((Natural, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a)))
-          step state@(n, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent) = do
+          step :: (Natural, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a), State a) -> IO ((Natural, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a), State a))
+          step state@(n, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent, indexerState) = do
             now :: UTCTime <- getCurrentTime
             let isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
                 -- Write checkpoint and return state with last checkpoint time set to `now`
                 writeCheckpoint = do
-                  checkpoint indexerRuntime' slotNoBhh
+                  checkpoint indexerRuntime' indexerState slotNoBhh
                   traceInfo trace $ "Checkpointing at " <> show slotNoBhh
                   return $ initialState now
             state' <- case maybeEvent of

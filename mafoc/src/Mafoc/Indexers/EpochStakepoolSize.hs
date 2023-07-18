@@ -112,7 +112,8 @@ instance Indexer EpochStakepoolSize where
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
 
-  checkpoint _runtime _slotNoBhh = return ()
+  checkpoint _runtime _state _slotNoBhh = do
+    return ()
   -- TODO: write ledger state, add row to checkpoint table; also load
   -- this ledger state in initialize.
 

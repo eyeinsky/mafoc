@@ -54,4 +54,4 @@ instance Indexer ScriptTx where
   persistMany Runtime{sqlConnection, tableName} events =
     Marconi.ScriptTx.sqliteInsert sqlConnection tableName events
 
-  checkpoint Runtime{sqlConnection} t = setCheckpointSqlite sqlConnection "scripttx" t
+  checkpoint Runtime{sqlConnection} _state t = setCheckpointSqlite sqlConnection "scripttx" t
