@@ -54,6 +54,7 @@ library
     Mafoc.Indexers.MintBurn
     Mafoc.Indexers.NoOp
     Mafoc.Indexers.ScriptTx
+    Mafoc.Logging
     Mafoc.RingBuffer
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
@@ -84,7 +85,6 @@ library
     , bytestring
     , containers
     , filepath
-    , mtl
     , optparse-applicative
     , prettyprinter
     , primitive

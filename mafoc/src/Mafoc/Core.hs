@@ -9,7 +9,6 @@ module Mafoc.Core
   , module Mafoc.Upstream
   ) where
 
-import Control.Monad.Except (runExceptT)
 import Control.Monad.Trans.Class (lift)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
@@ -32,13 +31,13 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
-import Mafoc.RollbackRingBuffer qualified as RB
 import Marconi.ChainIndex.Indexers.MintBurn ()
-import Marconi.ChainIndex.Logging qualified as Marconi
 import Marconi.ChainIndex.Types qualified as Marconi
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
+import Mafoc.RollbackRingBuffer qualified as RB
+import Mafoc.Logging qualified as Logging
 import Mafoc.Upstream (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
                        getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
 
@@ -216,7 +215,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
 
 blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
 blockSource cc trace = blocks'
-  & (if logging cc then Marconi.logging trace else id)
+  & (if logging cc then Logging.logging trace else id)
   & takeUpTo trace upTo'
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to

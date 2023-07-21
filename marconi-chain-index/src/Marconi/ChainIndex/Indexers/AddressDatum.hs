@@ -4,7 +4,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 
 -- This module will create the SQL tables:
@@ -48,47 +47,62 @@
 --     which was included in the transaction body
 --
 
-module Marconi.ChainIndex.Indexers.AddressDatum
-  ( -- * AddressDatumIndex
-    AddressDatumIndex
-  , AddressDatumHandle
-  , StorableEvent(..)
-  , StorableQuery(..)
-  , StorableResult(..)
-  , toAddressDatumIndexEvent
-  , AddressDatumQuery
-  , AddressDatumResult
-  , AddressDatumDepth (..)
-  , open
-  , sqliteInit
-  , sqliteInsert
-  ) where
+module Marconi.ChainIndex.Indexers.AddressDatum (
+  -- * AddressDatumIndex
+  AddressDatumIndex,
+  AddressDatumHandle (AddressDatumHandle),
+  StorableEvent (..),
+  StorableQuery (..),
+  StorableResult (..),
+  toAddressDatumIndexEvent,
+  AddressDatumQuery,
+  AddressDatumResult,
+  AddressDatumDepth (..),
+  open,
+  toDatumRow,
+  sqliteInit,
+  sqliteInsert,
+) where
 
 import Cardano.Api qualified as C
-import Cardano.Api.Shelley qualified as C
-import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
-import Control.Applicative ((<|>))
 import Control.Monad (forM)
 import Control.Monad.Trans.Class (MonadTrans (lift))
 import Control.Monad.Trans.Except (ExceptT)
-import Data.Foldable (Foldable (foldl'), fold, toList)
+import Data.Either (rights)
+import Data.Foldable (
+  Foldable (foldl'),
+  fold,
+  toList,
+ )
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
+import Data.Maybe (
+  catMaybes,
+  listToMaybe,
+  mapMaybe,
+ )
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.String (fromString)
+import Data.Void (Void)
 import Database.SQLite.Simple qualified as SQL
+import Database.SQLite.Simple.QQ (sql)
 import Database.SQLite.Simple.ToField qualified as SQL
 import GHC.Generics (Generic)
 import Marconi.ChainIndex.Error (
   IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
   liftSQLError,
  )
+import Marconi.ChainIndex.Extract.Datum qualified as Datum
+import Marconi.ChainIndex.Indexers.LastSync (
+  addLastSyncPoints,
+  createLastSyncTable,
+  queryLastSyncPoint,
+  rollbackLastSyncPoints,
+ )
 import Marconi.ChainIndex.Orphans ()
-import Marconi.ChainIndex.Utils (chainPointOrGenesis)
 import Marconi.Core.Storable (
   Buffered (persistToStorage),
   HasPoint (getPoint),
@@ -103,7 +117,6 @@ import Marconi.Core.Storable (
   emptyState,
  )
 import Marconi.Core.Storable qualified as Storable
-import Text.RawString.QQ (r)
 
 {- | Define the `handler` data type, meant as a wrapper for the connection type (in this case the
  SQLite connection). In this indexer, we also add the number of events that we want to return from
@@ -114,7 +127,7 @@ data AddressDatumHandle = AddressDatumHandle
   , _addressDatumHandleDiskStore :: Int
   }
 
-type instance StorableMonad AddressDatumHandle = ExceptT IndexerError IO
+type instance StorableMonad AddressDatumHandle = ExceptT (IndexerError Void) IO
 
 {- | 'StorableEvent AddressDatumHandle is the type of events. Events are the data atoms that the
  indexer consumes.
@@ -130,7 +143,7 @@ data instance StorableEvent AddressDatumHandle
       (Map C.AddressAny (Set (C.Hash C.ScriptData)))
       (Map (C.Hash C.ScriptData) C.ScriptData)
       !C.ChainPoint
-  deriving (Eq, Show)
+  deriving (Eq, Show, Ord)
 
 instance Semigroup (StorableEvent AddressDatumHandle) where
   AddressDatumIndexEvent ad1 d1 c1 <> AddressDatumIndexEvent ad2 d2 c2 =
@@ -200,81 +213,35 @@ toAddressDatumIndexEvent
   -> [C.Tx era]
   -> C.ChainPoint
   -> StorableEvent AddressDatumHandle
-toAddressDatumIndexEvent addressFilter txs chainPoint = do
-  let datumsPerAddr = getDatumsPerAddressFromTxs
-      filterFun =
-        case addressFilter of
-          Nothing -> id
-          Just f -> Map.filterWithKey $ \k _ ->
-            case k of
-              -- Target addresses filter are only shelley addresses. Therefore, as we
-              -- encounter Byron addresses with datum, we don't filter them. However, that
-              -- is highly improbable as Byron addresses are almost never used anymore.
-              C.AddressByron _ -> True
-              C.AddressShelley addr -> f addr
-      filteredDatumsPerAddr = filterFun datumsPerAddr
-      datumMap =
-        Map.fromList $
-          mapMaybe (\(dh, d) -> fmap (dh,) d) $
-            concatMap (\datums -> Map.toList datums) $
-              Map.elems filteredDatumsPerAddr
-   in AddressDatumIndexEvent
-        (fmap Map.keysSet filteredDatumsPerAddr)
-        (Map.union datumMap getPlutusWitDatumsFromTxs)
-        chainPoint
+toAddressDatumIndexEvent addressFilter txs = AddressDatumIndexEvent addressDatumHashMap (Map.union filteredTxOutDatums plutusDatums)
   where
-    getDatumsPerAddressFromTxs :: Map C.AddressAny (Map (C.Hash C.ScriptData) (Maybe C.ScriptData))
-    getDatumsPerAddressFromTxs =
-      Map.filter (not . Map.null) $
-        Map.fromListWith (Map.unionWith (<|>)) $
-          concatMap getDatumsPerAddressFromTx txs
+    plutusDatums :: Map (C.Hash C.ScriptData) C.ScriptData
+    plutusDatums = Datum.getPlutusDatumsFromTxs txs
 
-    getDatumsPerAddressFromTx
-      :: C.Tx era
-      -> [(C.AddressAny, Map (C.Hash C.ScriptData) (Maybe C.ScriptData))]
-    getDatumsPerAddressFromTx (C.Tx (C.TxBody C.TxBodyContent{C.txOuts}) _) =
-      fmap
-        ( \(C.TxOut (C.AddressInEra _ addr) _ dat _) ->
-            ( C.toAddressAny addr
-            , maybe Map.empty (uncurry Map.singleton) $ getScriptDataFromTxOutDatum dat
-            )
-        )
-        txOuts
+    filteredAddressDatums
+      :: [(C.AddressAny, Either (C.Hash C.ScriptData) (C.Hash C.ScriptData, C.ScriptData))]
+    filteredAddressDatums = Datum.getFilteredAddressDatumsFromTxs addressFilter txs
 
-    getScriptDataFromTxOutDatum
-      :: C.TxOutDatum C.CtxTx era
-      -> Maybe (C.Hash C.ScriptData, Maybe C.ScriptData)
-    getScriptDataFromTxOutDatum (C.TxOutDatumHash _ dh) = Just (dh, Nothing)
-    getScriptDataFromTxOutDatum (C.TxOutDatumInTx _ d) = Just (C.hashScriptDataBytes d, Just $ C.getScriptData d)
-    getScriptDataFromTxOutDatum (C.TxOutDatumInline _ d) = Just (C.hashScriptDataBytes d, Just $ C.getScriptData d)
-    getScriptDataFromTxOutDatum _ = Nothing
+    filteredTxOutDatums :: Map (C.Hash C.ScriptData) C.ScriptData
+    filteredTxOutDatums = Map.fromList $ rights $ map snd filteredAddressDatums
 
-    getPlutusWitDatumsFromTxs :: Map (C.Hash C.ScriptData) C.ScriptData
-    getPlutusWitDatumsFromTxs =
-      foldr (\acc x -> Map.union acc x) Map.empty $
-        fmap (\(C.Tx txBody _) -> getPlutusWitDatumsFromTxBody txBody) txs
-
-    getPlutusWitDatumsFromTxBody :: C.TxBody era -> Map (C.Hash C.ScriptData) C.ScriptData
-    getPlutusWitDatumsFromTxBody (C.ShelleyTxBody _ _ _ (C.TxBodyScriptData _ (Ledger.TxDats' datum) _) _ _) =
-      -- TODO I'm recomputing the ScriptHash hash, because cardano-api doesn't provide the correct
-      -- functions to convert 'Ledger.DataHash' to 'C.Hash C.ScriptData'. This should go away once
-      -- we fully switch to `cardano-ledger` types.
-      Map.fromList $
-        fmap (\(_, alonzoDat) -> let d = C.fromAlonzoData alonzoDat in (C.hashScriptDataBytes d, C.getScriptData d)) $
-          Map.toList datum
-    getPlutusWitDatumsFromTxBody (C.TxBody _) = Map.empty
+    addressDatumHashMap :: Map C.AddressAny (Set (C.Hash C.ScriptData))
+    addressDatumHashMap = Map.fromListWith Set.union $ map (fmap (Set.singleton . either id fst)) filteredAddressDatums
 
 instance Buffered AddressDatumHandle where
   persistToStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent AddressDatumHandle)
     -> AddressDatumHandle
     -> StorableMonad AddressDatumHandle AddressDatumHandle
   persistToStorage es h
     = liftSQLError CantInsertEvent $ do
     let c = addressDatumHandleConnection h
+        getChainPoint (AddressDatumIndexEvent _ _ cp) = cp
+        chainPoints = getChainPoint <$> toList es
     SQL.execute_ c "BEGIN"
     sqliteInsert c "" $ toList es
+    addLastSyncPoints c chainPoints
     SQL.execute_ c "COMMIT"
     pure h
 
@@ -286,7 +253,7 @@ instance Buffered AddressDatumHandle where
       sns :: [[Integer]] <-
         SQL.query
           c
-          [r|SELECT slot_no
+          [sql|SELECT slot_no
                FROM address_datums
                GROUP BY slot_no
                ORDER BY slot_no
@@ -300,7 +267,7 @@ instance Buffered AddressDatumHandle where
       res <-
         SQL.query
           c
-          [r|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
+          [sql|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
                FROM address_datums
                LEFT JOIN datumhash_datum
                ON datumhash_datum.datum_hash = address_datums.datum_hash
@@ -308,6 +275,10 @@ instance Buffered AddressDatumHandle where
                ORDER BY slot_no DESC, address, datumhash_datum.datum_hash|]
           (SQL.Only (sn :: Integer))
       pure $ asEvents res
+
+toDatumRow :: StorableEvent AddressDatumHandle -> [DatumRow]
+toDatumRow (AddressDatumIndexEvent _ datumMap _) =
+  fmap (uncurry DatumRow) $ Map.toList datumMap
 
 -- | This function recomposes the in-memory format from the database records.
 asEvents
@@ -361,16 +332,17 @@ asEvents events =
 
 instance Queryable AddressDatumHandle where
   queryStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent AddressDatumHandle)
     -> AddressDatumHandle
     -> StorableQuery AddressDatumHandle
     -> StorableMonad AddressDatumHandle (StorableResult AddressDatumHandle)
   queryStorage es (AddressDatumHandle c _) AllAddressesQuery = liftSQLError CantQueryIndexer $ do
-    persistedData :: [(C.AddressAny, C.Hash C.ScriptData, Maybe C.ScriptData, C.SlotNo, C.Hash C.BlockHeader)] <-
+    persistedData
+      :: [(C.AddressAny, C.Hash C.ScriptData, Maybe C.ScriptData, C.SlotNo, C.Hash C.BlockHeader)] <-
       SQL.query
         c
-        [r|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
+        [sql|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
                    FROM address_datums
                    LEFT JOIN datumhash_datum
                    ON datumhash_datum.datum_hash = address_datums.datum_hash
@@ -383,10 +355,11 @@ instance Queryable AddressDatumHandle where
           concatMap (\(AddressDatumIndexEvent addrMap _ _) -> Map.keys addrMap) addressDatumIndexEvents
   queryStorage es (AddressDatumHandle c _) (AddressDatumQuery q) =
     liftSQLError CantQueryIndexer $ do
-      persistedData :: [(C.AddressAny, C.Hash C.ScriptData, Maybe C.ScriptData, C.SlotNo, C.Hash C.BlockHeader)] <-
+      persistedData
+        :: [(C.AddressAny, C.Hash C.ScriptData, Maybe C.ScriptData, C.SlotNo, C.Hash C.BlockHeader)] <-
         SQL.query
           c
-          [r|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
+          [sql|SELECT address, address_datums.datum_hash, datumhash_datum.datum, slot_no, block_hash
                    FROM address_datums
                    LEFT JOIN datumhash_datum
                    ON datumhash_datum.datum_hash = address_datums.datum_hash
@@ -404,13 +377,8 @@ instance Queryable AddressDatumHandle where
       let unresolvedDatumHashes =
             Set.toList $ fold (Map.elems addressDatumMap) `Set.difference` Map.keysSet datumMap
       datums <- forM unresolvedDatumHashes $ \dh -> do
-        (datum :: Maybe DatumRow) <-
-          listToMaybe
-            <$> SQL.query
-              c
-              "SELECT datum_hash, datum FROM datumhash_datum WHERE datum_hash = ?"
-              (SQL.Only dh)
-        pure $ fmap (\(DatumRow _ d) -> (dh, d)) datum
+        maybeDatumRow <- findDatum dh
+        pure $ fmap (\(DatumRow _ d) -> (dh, d)) maybeDatumRow
       let resolvedDatumHashes = Map.fromList $ catMaybes datums
 
       pure $
@@ -438,6 +406,14 @@ instance Queryable AddressDatumHandle where
         -- TODO Not efficient to convert back n forth between Set
         Set.fromList $ mapMaybe (\k -> Map.lookup k m) $ Set.toList keys
 
+      findDatum :: C.Hash C.ScriptData -> IO (Maybe DatumRow)
+      findDatum hash = do
+        listToMaybe
+          <$> SQL.query
+            c
+            "SELECT datum_hash, datum FROM datumhash_datum WHERE datum_hash = ?"
+            (SQL.Only hash)
+
 instance Rewindable AddressDatumHandle where
   rewindStorage
     :: C.ChainPoint
@@ -446,10 +422,12 @@ instance Rewindable AddressDatumHandle where
   rewindStorage C.ChainPointAtGenesis h@(AddressDatumHandle c _) =
     liftSQLError CantRollback $ do
       SQL.execute_ c "DELETE FROM address_datums"
+      rollbackLastSyncPoints c C.ChainPointAtGenesis
       pure h
-  rewindStorage (C.ChainPoint sn _) h@(AddressDatumHandle c _) =
+  rewindStorage cp@(C.ChainPoint sn _) h@(AddressDatumHandle c _) =
     liftSQLError CantRollback $ do
       SQL.execute c "DELETE FROM address_datums WHERE slot_no > ?" (SQL.Only sn)
+      rollbackLastSyncPoints c cp
       pure h
 
 instance Resumable AddressDatumHandle where
@@ -457,9 +435,7 @@ instance Resumable AddressDatumHandle where
     :: AddressDatumHandle
     -> StorableMonad AddressDatumHandle C.ChainPoint
   resumeFromStorage (AddressDatumHandle c _) =
-    liftSQLError CantQueryIndexer $
-      fmap chainPointOrGenesis $
-        SQL.query_ c "SELECT slot_no, block_hash FROM address_datums ORDER BY slot_no DESC LIMIT 1"
+    liftSQLError CantQueryIndexer $ queryLastSyncPoint c
 
 open
   :: FilePath
@@ -470,9 +446,9 @@ open dbPath (AddressDatumDepth k) = do
   lift $ SQL.execute_ c "PRAGMA journal_mode=WAL"
   lift $ sqliteInit c ""
   lift $ SQL.execute_ c
-      [r|CREATE INDEX IF NOT EXISTS address_datums_index
-         ON address_datums (address)|]
-
+      [sql|CREATE INDEX IF NOT EXISTS address_datums_index
+           ON address_datums (address)|]
+  lift $ createLastSyncTable c
   emptyState k (AddressDatumHandle c k)
 
 sqliteInit :: SQL.Connection -> String -> IO ()
@@ -512,10 +488,6 @@ sqliteInsert c tablePrefix events = do
         (addr, dhs) <- Map.toList addressDatumHashMap
         dh <- Set.toList dhs
         pure $ AddressDatumHashRow addr dh sl bh
-
-    toDatumRow :: StorableEvent AddressDatumHandle -> [DatumRow]
-    toDatumRow (AddressDatumIndexEvent _ datumMap _) =
-        fmap (uncurry DatumRow) $ Map.toList datumMap
 
 mkAddressDatumTableName :: String -> SQL.Query
 mkAddressDatumTableName prefix = fromString $ prefix <> "address_datums"

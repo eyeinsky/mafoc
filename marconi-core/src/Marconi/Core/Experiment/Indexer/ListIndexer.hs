@@ -23,6 +23,7 @@ import Marconi.Core.Experiment.Class (
   IsSync (lastSyncPoint),
   Resetable (reset),
   Rollbackable (rollback),
+  indexIfJust,
  )
 import Marconi.Core.Experiment.Type (Point, Timed, point)
 
@@ -39,26 +40,22 @@ deriving stock instance (Show event, Show (Point event)) => Show (ListIndexer ev
 makeLenses ''ListIndexer
 
 -- | A smart constructor for list indexer, starting at genesis with an empty list.
-mkListIndexer :: HasGenesis (Point event) => ListIndexer event
+mkListIndexer :: (HasGenesis (Point event)) => ListIndexer event
 mkListIndexer = ListIndexer [] genesis
 
-instance Monad m => IsIndex m event ListIndexer where
-  index timedEvent ix =
-    let appendEvent :: ListIndexer event -> ListIndexer event
-        appendEvent = events %~ (timedEvent :)
+instance (Monad m) => IsIndex m event ListIndexer where
+  index =
+    let appendEvent :: Timed (Point event) event -> ListIndexer event -> m (ListIndexer event)
+        appendEvent te = pure . (events %~ (te :))
 
-        updateLatest :: ListIndexer event -> ListIndexer event
-        updateLatest = latest .~ (timedEvent ^. point)
-     in do
-          pure $
-            ix
-              & appendEvent
-              & updateLatest
+        updateLatest :: Point event -> ListIndexer event -> m (ListIndexer event)
+        updateLatest p = pure . (latest .~ p)
+     in indexIfJust appendEvent updateLatest
 
-instance Applicative m => IsSync m event ListIndexer where
+instance (Applicative m) => IsSync m event ListIndexer where
   lastSyncPoint = pure . view latest
 
-instance Applicative m => Rollbackable m event ListIndexer where
+instance (Applicative m) => Rollbackable m event ListIndexer where
   rollback p ix =
     let adjustLatestPoint :: ListIndexer event -> ListIndexer event
         adjustLatestPoint = latest .~ p
@@ -74,10 +71,7 @@ instance Applicative m => Rollbackable m event ListIndexer where
      in pure $
           if isIndexBeforeRollback ix
             then ix -- if we're already before the rollback, we don't have to do anything
-            else
-              ix
-                & cleanEventsAfterRollback
-                & adjustLatestPoint
+            else adjustLatestPoint $ cleanEventsAfterRollback ix
 
 instance
   ( HasGenesis (Point event)
@@ -91,5 +85,5 @@ instance
         & events .~ mempty
         & latest .~ genesis
 
-instance Applicative m => Closeable m ListIndexer where
+instance (Applicative m) => Closeable m ListIndexer where
   close = const $ pure ()

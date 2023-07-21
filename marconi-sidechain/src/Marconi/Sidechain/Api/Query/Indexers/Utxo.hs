@@ -13,29 +13,16 @@ import Cardano.Api qualified as C
 import Control.Arrow (left)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TMVar (newEmptyTMVarIO, readTMVar)
-import Control.Lens ((^.), (^?))
+import Control.Lens ((^.))
 import Control.Monad.Except (runExceptT)
 import Control.Monad.STM (STM)
 import Data.Bifunctor (Bifunctor (bimap))
 import Data.Functor ((<&>))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Text (Text, unpack)
+import Data.Text (Text, pack)
 import GHC.Word (Word64)
 import Marconi.ChainIndex.Error (IndexerError)
 import Marconi.ChainIndex.Indexers.AddressDatum (StorableQuery)
-import Marconi.ChainIndex.Indexers.Utxo (
-  address,
-  datum,
-  datumHash,
-  txIn,
-  txIndexInBlock,
-  urCreationBlockHeaderHash,
-  urCreationBlockNo,
-  urCreationSlotNo,
-  urSpentSlotNo,
-  urSpentTxId,
-  urUtxo,
- )
 import Marconi.ChainIndex.Indexers.Utxo qualified as Utxo
 import Marconi.ChainIndex.Types (TargetAddresses)
 import Marconi.Core.Storable qualified as Storable
@@ -44,6 +31,7 @@ import Marconi.Sidechain.Api.Routes (
   GetCurrentSyncedBlockResult (GetCurrentSyncedBlockResult),
   GetUtxosFromAddressResult (GetUtxosFromAddressResult),
   SpentInfoResult (SpentInfoResult),
+  UtxoTxInput (UtxoTxInput),
  )
 import Marconi.Sidechain.Api.Types (
   AddressUtxoIndexerEnv (AddressUtxoIndexerEnv),
@@ -105,12 +93,12 @@ findByBech32AddressAtSlot
   -> IO (Either QueryExceptions GetUtxosFromAddressResult)
   -- ^ Plutus address conversion error may occur
 findByBech32AddressAtSlot env addressText upperBoundSlotNo lowerBoundSlotNo =
-  let toQueryExceptions e = QueryError (unpack addressText <> " generated error: " <> show e)
+  let toQueryExceptions e = QueryError (addressText <> " generated error: " <> pack (show e))
 
       intervalWrapper :: Maybe C.SlotNo -> C.SlotNo -> Either QueryExceptions (Utxo.Interval C.SlotNo)
       intervalWrapper s s' =
-        let f :: IndexerError -> QueryExceptions
-            f = QueryError . show
+        let f :: IndexerError Utxo.UtxoIndexerError -> QueryExceptions
+            f = QueryError . pack . show
          in left f (Utxo.interval s s')
 
       slotInterval :: Either QueryExceptions (Utxo.Interval C.SlotNo)
@@ -119,7 +107,8 @@ findByBech32AddressAtSlot env addressText upperBoundSlotNo lowerBoundSlotNo =
           (C.SlotNo <$> lowerBoundSlotNo)
           (C.SlotNo upperBoundSlotNo)
 
-      queryAtAddressAndSlot :: Utxo.QueryUtxoByAddress -> IO (Either QueryExceptions GetUtxosFromAddressResult)
+      queryAtAddressAndSlot
+        :: Utxo.QueryUtxoByAddress -> IO (Either QueryExceptions GetUtxosFromAddressResult)
       queryAtAddressAndSlot = findByAddress env
 
       query :: Either QueryExceptions Utxo.QueryUtxoByAddress
@@ -147,25 +136,24 @@ withQueryAction env query =
   where
     action indexer = do
       res <- runExceptT $ Storable.query indexer query
-      let spentInfo row =
-            -- either both parameters are Nothing or both are defined
-            SpentInfoResult <$> row ^? urSpentSlotNo <*> row ^? urSpentTxId
+      let spentInfoResult row = SpentInfoResult (Utxo._blockInfoSlotNo . Utxo._siSpentBlockInfo $ row) (Utxo._siSpentTxId row)
       pure $ case res of
-        Right (Utxo.UtxoResult rows) ->
+        Right (Utxo.UtxoByAddressResult rows) ->
           Right $
             GetUtxosFromAddressResult $
               rows <&> \row ->
-                AddressUtxoResult
-                  (row ^. urCreationSlotNo)
-                  (row ^. urCreationBlockHeaderHash)
-                  (row ^. urCreationBlockNo)
-                  (row ^. urUtxo . txIndexInBlock)
-                  (row ^. urUtxo . txIn)
-                  (row ^. urUtxo . address)
-                  (row ^. urUtxo . datumHash)
-                  (row ^. urUtxo . datum)
-                  (spentInfo row)
-                  [] -- TODO txInputs field
+                let bi = Utxo.utxoResultBlockInfo row
+                 in AddressUtxoResult
+                      (Utxo._blockInfoSlotNo bi)
+                      (Utxo._blockInfoBlockHeaderHash bi)
+                      (Utxo._blockInfoBlockNo $ Utxo.utxoResultBlockInfo row)
+                      (Utxo.utxoResultTxIndexInBlock row)
+                      (Utxo.utxoResultTxIn row)
+                      (Utxo.utxoResultDatumHash row)
+                      (Utxo.utxoResultDatum row)
+                      (Utxo.utxoResultValue row)
+                      (spentInfoResult <$> Utxo.utxoResultSpentInfo row)
+                      (UtxoTxInput <$> Utxo.utxoResultTxIns row)
         _other ->
           Left $ UnexpectedQueryResult query
 

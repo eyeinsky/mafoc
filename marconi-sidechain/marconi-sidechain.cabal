@@ -65,8 +65,9 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api       ^>=8.0
-    , cardano-slotting  ^>=0.1.1.1
+    , cardano-api          ^>=8.8
+    , cardano-ledger-core
+    , cardano-slotting     ^>=0.1.1.1
 
   ------------------------
   -- Non-IOG dependencies
@@ -89,6 +90,7 @@ executable marconi-sidechain
   import:         lang
   hs-source-dirs: app
   main-is:        Main.hs
+  ghc-options:    -threaded -rtsopts -with-rtsopts=-N
 
   --------------------
   -- Local components
@@ -155,7 +157,7 @@ library db-utils
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:   cardano-api ^>=8.0
+  build-depends:   cardano-api ^>=8.8
 
   ------------------------
   -- Non-IOG dependencies
@@ -210,7 +212,7 @@ test-suite marconi-sidechain-test
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api:{cardano-api, gen}  ^>=8.0
+    , cardano-api:{cardano-api, gen}  ^>=8.8
     , cardano-crypto-class
     , cardano-ledger-shelley
     , cardano-slotting                ^>=0.1.1.1

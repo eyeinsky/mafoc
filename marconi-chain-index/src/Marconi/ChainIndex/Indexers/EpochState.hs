@@ -94,6 +94,7 @@ import Cardano.Ledger.Shelley.API qualified as Ledger
 import Cardano.Protocol.TPraos.API qualified as Shelley
 import Cardano.Protocol.TPraos.Rules.Tickn qualified as Shelley
 import Cardano.Slotting.Slot (EpochNo)
+
 import Codec.CBOR.Read qualified as CBOR
 import Codec.CBOR.Write qualified as CBOR
 import Control.Monad (filterM, forM_, when)
@@ -118,7 +119,11 @@ import Data.Text.Encoding qualified as Text
 import Data.Tuple (swap)
 import Data.VMap qualified as VMap
 import Database.SQLite.Simple qualified as SQL
+import Database.SQLite.Simple.QQ (sql)
+
 import GHC.Generics (Generic)
+
+import Data.Void (Void)
 import Marconi.ChainIndex.Error (
   IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
   liftSQLError,
@@ -162,7 +167,6 @@ import Ouroboros.Consensus.Shelley.Ledger qualified as O
 import Ouroboros.Consensus.Storage.Serialisation qualified as O
 import System.Directory (listDirectory, removeFile)
 import System.FilePath (dropExtension, (</>))
-import Text.RawString.QQ (r)
 import Text.Read (readMaybe)
 
 data EpochStateHandle = EpochStateHandle
@@ -172,7 +176,7 @@ data EpochStateHandle = EpochStateHandle
   , _epochStateHandleSecurityParam :: !SecurityParam
   }
 
-type instance StorableMonad EpochStateHandle = ExceptT IndexerError IO
+type instance StorableMonad EpochStateHandle = ExceptT (IndexerError Void) IO
 
 data instance StorableEvent EpochStateHandle = EpochStateEvent
   { epochStateEventLedgerState :: Maybe ExtLedgerState_
@@ -261,7 +265,8 @@ getStakeMap extLedgerState = case O.ledgerState extLedgerState of
           Ledger.unStake $
             Ledger.ssStake stakeSnapshot
 
-        delegations :: VMap.VMap VMap.VB VMap.VB (Ledger.Credential 'Ledger.Staking c) (Ledger.KeyHash 'Ledger.StakePool c)
+        delegations
+          :: VMap.VMap VMap.VB VMap.VB (Ledger.Credential 'Ledger.Staking c) (Ledger.KeyHash 'Ledger.StakePool c)
         delegations = Ledger.ssDelegations stakeSnapshot
 
         sdd :: Map C.PoolId C.Lovelace
@@ -409,7 +414,7 @@ isLedgerStateFileRollbackable
 instance Buffered EpochStateHandle where
   -- We should only store on disk SDD from the last slot of each epoch.
   persistToStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent EpochStateHandle)
     -> EpochStateHandle
     -> StorableMonad EpochStateHandle EpochStateHandle
@@ -421,7 +426,7 @@ instance Buffered EpochStateHandle where
       forM_ (concatMap eventToEpochSDDRows $ filter epochStateEventIsFirstEventOfEpoch eventsList) $ \row ->
         SQL.execute
           c
-          [r|INSERT INTO epoch_sdd
+          [sql|INSERT INTO epoch_sdd
                   ( epochNo
                   , poolId
                   , lovelace
@@ -436,7 +441,7 @@ instance Buffered EpochStateHandle where
       forM_ (mapMaybe eventToEpochNonceRow $ filter epochStateEventIsFirstEventOfEpoch eventsList) $ \row ->
         SQL.execute
           c
-          [r|INSERT INTO epoch_nonce
+          [sql|INSERT INTO epoch_nonce
                   ( epochNo
                   , nonce
                   , slotNo
@@ -588,7 +593,7 @@ eventToEpochNonceRow (EpochStateEvent _ maybeEpochNo nonce _ slotNo blockHeaderH
 
 instance Queryable EpochStateHandle where
   queryStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent EpochStateHandle)
     -> EpochStateHandle
     -> StorableQuery EpochStateHandle
@@ -603,7 +608,7 @@ instance Queryable EpochStateHandle where
           res :: [EpochSDDRow] <-
             SQL.query
               c
-              [r|SELECT epochNo, poolId, lovelace, slotNo, blockHeaderHash, blockNo
+              [sql|SELECT epochNo, poolId, lovelace, slotNo, blockHeaderHash, blockNo
                      FROM epoch_sdd
                      WHERE epochNo = ?
                   |]
@@ -618,7 +623,7 @@ instance Queryable EpochStateHandle where
           res :: [EpochNonceRow] <-
             SQL.query
               c
-              [r|SELECT epochNo, nonce, slotNo, blockHeaderHash, blockNo
+              [sql|SELECT epochNo, nonce, slotNo, blockHeaderHash, blockNo
                      FROM epoch_nonce
                      WHERE epochNo = ?
                   |]
@@ -708,7 +713,7 @@ instance Resumable EpochStateHandle where
         result :: [[C.SlotNo]] <-
           SQL.query
             c
-            [r|SELECT slotNo
+            [sql|SELECT slotNo
                        FROM epoch_sdd
                        WHERE slotNo = ? LIMIT 1 |]
             (SQL.Only slotNo)
@@ -719,7 +724,7 @@ instance Resumable EpochStateHandle where
         result :: [[C.SlotNo]] <-
           SQL.query
             c
-            [r|SELECT slotNo
+            [sql|SELECT slotNo
                        FROM epoch_nonce
                        WHERE slotNo = ? LIMIT 1 |]
             (SQL.Only slotNo)
@@ -763,7 +768,7 @@ open topLevelConfig dbPath ledgerStateDirPath securityParam = do
   lift $
     SQL.execute_
       c
-      [r|CREATE TABLE IF NOT EXISTS epoch_sdd
+      [sql|CREATE TABLE IF NOT EXISTS epoch_sdd
             ( epochNo INT NOT NULL
             , poolId BLOB NOT NULL
             , lovelace INT NOT NULL
@@ -774,13 +779,14 @@ open topLevelConfig dbPath ledgerStateDirPath securityParam = do
   lift $
     SQL.execute_
       c
-      [r|CREATE TABLE IF NOT EXISTS epoch_nonce
+      [sql|CREATE TABLE IF NOT EXISTS epoch_nonce
             ( epochNo INT NOT NULL
             , nonce BLOB NOT NULL
             , slotNo INT NOT NULL
             , blockHeaderHash BLOB NOT NULL
             , blockNo INT NOT NULL
             )|]
+
   emptyState 1 (EpochStateHandle topLevelConfig c ledgerStateDirPath securityParam)
 
 -- * ExtLedgerState
@@ -789,11 +795,11 @@ getInitialExtLedgerState :: FilePath -> IO (ExtLedgerCfg_, ExtLedgerState_)
 getInitialExtLedgerState nodeConfigPath = do
   genesisConfig <- getGenesisConfig nodeConfigPath
   let initialExtLedgerState = initExtLedgerStateVar genesisConfig
-      ledgerCfg = O.ExtLedgerCfg $ O.pInfoConfig $ mkProtocolInfoCardano genesisConfig
+      ledgerCfg = O.ExtLedgerCfg $ O.pInfoConfig $ fst $ mkProtocolInfoCardano genesisConfig
   return (ledgerCfg, initialExtLedgerState)
 
 getLedgerConfig :: FilePath -> IO ExtLedgerCfg_
-getLedgerConfig nodeConfigPath = O.ExtLedgerCfg . O.pInfoConfig . mkProtocolInfoCardano <$> getGenesisConfig nodeConfigPath
+getLedgerConfig nodeConfigPath = O.ExtLedgerCfg . O.pInfoConfig . fst . mkProtocolInfoCardano <$> getGenesisConfig nodeConfigPath
 
 getGenesisConfig :: FilePath -> IO GenesisConfig
 getGenesisConfig nodeConfigPath = do

@@ -21,8 +21,9 @@ module Marconi.Core.Experiment.Type (
 ) where
 
 import Control.Exception (Exception)
-import Control.Lens (Lens')
+import Control.Lens (Lens, Lens')
 import Data.Text (Text)
+import GHC.Generics (Generic)
 
 {- | A point in time, the concrete type of a point is now derived from an indexer event,
  instead of an event.
@@ -53,13 +54,14 @@ deriving stock instance (Ord event, Ord point) => Ord (Timed point event)
 deriving stock instance Functor (Timed point)
 deriving stock instance Foldable (Timed point)
 deriving stock instance Traversable (Timed point)
+deriving stock instance Generic (Timed point event)
 
 -- | When was this event created
 point :: Lens' (Timed point event) point
 point f te = fmap (\_point -> te{_point}) $ f $ _point te
 
 -- | A lens to get the event without its time information
-event :: Lens' (Timed point event) event
+event :: Lens (Timed point a) (Timed point b) a b
 event f te = fmap (\_event -> te{_event}) $ f $ _event te
 
 -- | Error that can occur when you index events
@@ -91,4 +93,4 @@ data QueryError query
   | -- | The indexer query failed
     IndexerQueryError Text
 
-deriving stock instance Show (Result query) => Show (QueryError query)
+deriving stock instance (Show (Result query)) => Show (QueryError query)

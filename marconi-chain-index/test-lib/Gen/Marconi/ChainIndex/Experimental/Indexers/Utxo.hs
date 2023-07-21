@@ -8,7 +8,7 @@ module Gen.Marconi.ChainIndex.Experimental.Indexers.Utxo (
   genTx,
   genTx',
   genTxBodyContentFromTxIns,
-  genTxBodyContentFromTxinsWihtPhase2Validation,
+  genTxBodyContentFromTxInsWithPhase2Validation,
 ) where
 
 import Cardano.Api qualified as C
@@ -32,7 +32,7 @@ import Gen.Marconi.ChainIndex.Mockchain (
   MockBlock (MockBlock),
   genMockchain,
   genTxBodyContentFromTxIns,
-  genTxBodyContentFromTxinsWihtPhase2Validation,
+  genTxBodyContentFromTxInsWithPhase2Validation,
  )
 import Hedgehog (Gen)
 import Test.Gen.Cardano.Api.Typed qualified as CGen
@@ -48,7 +48,7 @@ genUtxoEvents'
   -> Gen (Core.ListIndexer Utxo.UtxoEvent)
 genUtxoEvents' txOutToUtxo = do
   timedEvents <- fmap fst <$> genUtxoEventsWithTxs' txOutToUtxo
-  Core.indexAll timedEvents Core.mkListIndexer
+  Core.indexAll (fmap Just <$> timedEvents) Core.mkListIndexer
 
 -- | Generate ShelleyEra UtxoEvent
 genShelleyEraUtxoEvents :: Gen (Core.Timed C.ChainPoint Utxo.UtxoEvent)
@@ -177,7 +177,7 @@ utxoAddressOverride addr utxo = utxo{Utxo._utxoAddress = C.toAddressAny addr}
  This generator may be used phase2-validation test cases
 -}
 genTx :: Gen (C.Tx C.BabbageEra)
-genTx = genTx' genTxBodyContentFromTxinsWihtPhase2Validation
+genTx = genTx' genTxBodyContentFromTxInsWithPhase2Validation
 
 {- | Generate Cardano TX
  Given a TxBodyContent generator, generate a Cardano TX

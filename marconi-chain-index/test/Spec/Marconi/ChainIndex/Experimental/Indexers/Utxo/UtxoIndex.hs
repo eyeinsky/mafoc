@@ -20,7 +20,7 @@ import Gen.Marconi.ChainIndex.Experimental.Indexers.Utxo (
   genShelleyEraUtxoEventsAtChainPoint,
   genTx',
   genTxBodyContentFromTxIns,
-  genTxBodyContentFromTxinsWihtPhase2Validation,
+  genTxBodyContentFromTxInsWithPhase2Validation,
   genUtxoEventsWithTxs,
  )
 import Gen.Marconi.ChainIndex.Mockchain (MockBlock, mockBlockTxs)
@@ -29,7 +29,12 @@ import Helpers (addressAnyToShelley)
 import Marconi.ChainIndex.Experimental.Indexers.Utxo ()
 import Marconi.ChainIndex.Experimental.Indexers.Utxo qualified as Utxo
 import Marconi.ChainIndex.Orphans ()
-import Marconi.ChainIndex.Types (TargetAddresses, UtxoIndexerConfig (UtxoIndexerConfig), ucEnableUtxoTxOutRef, ucTargetAddresses)
+import Marconi.ChainIndex.Types (
+  TargetAddresses,
+  UtxoIndexerConfig (UtxoIndexerConfig),
+  ucEnableUtxoTxOutRef,
+  ucTargetAddresses,
+ )
 import Marconi.Core.Experiment qualified as Core
 
 import Hedgehog (Gen, Property, cover, forAll, property, (/==), (===))
@@ -109,7 +114,7 @@ allqueryUtxosShouldBeUnspent = property $ do
       indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
       indexer = Utxo.mkMixedIndexer' conn keep flush
   mixedIndexer <-
-    Core.indexEither timedUtxoEvent indexer
+    Core.indexEither (asInput timedUtxoEvent) indexer
       >>= Hedgehog.evalEither
   let unprocessedUtxos :: [Core.Timed C.ChainPoint Utxo.Utxo]
       unprocessedUtxos = Utxo.timedUtxosFromTimedUtxoEvent timedUtxoEvent
@@ -129,7 +134,8 @@ allqueryUtxosShouldBeUnspent = property $ do
 
   Hedgehog.assert (not . null $ retrievedUtxos)
   -- There should be no `Spent` in the retrieved UtxoRows
-  Hedgehog.footnote "Regression test must return at least one Utxo. Utxo's may not have any Spent in the Orig. event"
+  Hedgehog.footnote
+    "Regression test must return at least one Utxo. Utxo's may not have any Spent in the Orig. event"
   Hedgehog.assert $
     and [u `notElem` inputsFromTimedUtxoEvent | u <- txInsFromRetrieved]
 
@@ -188,7 +194,7 @@ propSaveAndQueryUtxoEvents = property $ do
       indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
       indexer = Utxo.mkMixedIndexer' conn keep flush
   mixedIndexer <-
-    Core.indexEither timedUtxoEvent indexer
+    Core.indexEither (asInput timedUtxoEvent) indexer
       >>= Hedgehog.evalEither
 
   [utxosSQLCount] <-
@@ -242,11 +248,11 @@ propMixedIndexerAndListIndexerProvideTheSameQueryResult = property $ do
       indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
       indexer = Utxo.mkMixedIndexer' conn keep flush
   mixedIndexer <-
-    Core.indexEither timedUtxoEvent indexer
+    Core.indexEither (asInput timedUtxoEvent) indexer
       >>= Hedgehog.evalEither
 
   listIndexer :: Core.ListIndexer Utxo.UtxoEvent <-
-    Core.index timedUtxoEvent Core.mkListIndexer -- add events to in-memory listIndexer
+    Core.index (asInput timedUtxoEvent) Core.mkListIndexer -- add events to in-memory listIndexer
   [utxosSQLCount] <-
     liftIO
       (SQL.query_ conn "SELECT count(1) from unspent_transactions" :: IO [Integer])
@@ -294,16 +300,17 @@ propListIndexerAndMixedIndexerInMemroyIndexerProvideTheSameQueryResult = propert
   timedUtxoEvent :: Core.Timed C.ChainPoint Utxo.UtxoEvent <-
     forAll $ genShelleyEraUtxoEventsAtChainPoint cp
   conn <- liftIO $ Utxo.initSQLite ":memory:"
-  let -- we force mixedIndexer to use in-memory indexer only
-      (keep, flush) = (2160, 2160) -- x-large memory size to prevent SQL flush
-      indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
-      indexer = Utxo.mkMixedIndexer' conn keep flush
+  let
+    -- we force mixedIndexer to use in-memory indexer only
+    (keep, flush) = (2160, 2160) -- x-large memory size to prevent SQL flush
+    indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
+    indexer = Utxo.mkMixedIndexer' conn keep flush
 
   mixedIndexer <-
-    Core.indexEither timedUtxoEvent indexer
+    Core.indexEither (asInput timedUtxoEvent) indexer
       >>= Hedgehog.evalEither
   listIndexer :: Core.ListIndexer Utxo.UtxoEvent <-
-    Core.index timedUtxoEvent Core.mkListIndexer -- add events to in-memory listIndexer
+    Core.index (asInput timedUtxoEvent) Core.mkListIndexer -- add events to in-memory listIndexer
 
   -- this is to verify we did not flush to database
   [utxosSQLCount] <-
@@ -342,7 +349,7 @@ propListIndexerUpdatesLastSyncPoint = property $ do
   timedUtxoEvent :: Core.Timed C.ChainPoint Utxo.UtxoEvent <-
     forAll $ genShelleyEraUtxoEventsAtChainPoint cp
   listIndexer :: Core.ListIndexer Utxo.UtxoEvent <-
-    Core.index timedUtxoEvent Core.mkListIndexer -- add events to in-memory listIndexer
+    Core.index (asInput timedUtxoEvent) Core.mkListIndexer -- add events to in-memory listIndexer
   let unProcessedUtxos :: [Core.Timed C.ChainPoint Utxo.Utxo] -- These Utxos, are not processed yet and may have spent in them
       unProcessedUtxos = Utxo.timedUtxosFromTimedUtxoEvent timedUtxoEvent
 
@@ -383,14 +390,15 @@ propUtxoQueryAtLatestPointShouldBeSameAsQueryingAll = property $ do
   let (keep, flush) = (1, 1) -- small memory to force SQL flush
       indexer :: Core.MixedIndexer Core.SQLiteIndexer Core.ListIndexer Utxo.UtxoEvent
       indexer = Utxo.mkMixedIndexer' conn keep flush
-  mixedIndexer <- Core.indexAllEither timedUtxoEvents indexer >>= Hedgehog.evalEither
+  mixedIndexer <- Core.indexAllEither (asInput <$> timedUtxoEvents) indexer >>= Hedgehog.evalEither
   listIndexer :: Core.ListIndexer Utxo.UtxoEvent <-
-    Core.indexAll timedUtxoEvents Core.mkListIndexer -- add events to in-memory listIndexer
+    Core.indexAll (asInput <$> timedUtxoEvents) Core.mkListIndexer -- add events to in-memory listIndexer
   lastMemCp :: C.ChainPoint <- Core.lastSyncPoint (mixedIndexer ^. Core.inMemory)
   lastDbCp :: C.ChainPoint <- Core.lastSyncPoint (mixedIndexer ^. Core.inDatabase)
   lastListIndexerCp :: C.ChainPoint <- Core.lastSyncPoint listIndexer -- mixedIndexer
   Hedgehog.footnote $ "Mem chainpoint: " <> show lastMemCp
   Hedgehog.footnote $ "Db chainpoint: " <> show lastDbCp
+  Hedgehog.footnote $ "Mem size: " <> show (length $ mixedIndexer ^. Core.inMemory . Core.events)
   -- syncpoint of listIndexer should reflect the latest chainpoint
   lastListIndexerCp === last chainPoints --
   -- with keep/flush at this level, we are garanteed to have some DB entires.
@@ -419,12 +427,13 @@ propUsingAllAddressesOfTxsAsTargetAddressesShouldReturnUtxosAsIfNoFilterWasAppli
           Core.Timed
             (expectedTimedUtxoEvent ^. Core.point)
             $ Utxo.getUtxoEvents utxoIndexerConfig txs
-    let -- (expectedTimedUtxoEvent ^. Core.event . Utxo.ueUtxos)
-        filteredExpectedUtxoEvent :: Core.Timed C.ChainPoint Utxo.UtxoEvent
-        filteredExpectedUtxoEvent =
-          expectedTimedUtxoEvent
-            & Core.event . Utxo.ueUtxos
-              %~ Set.filter (\utxo -> isJust $ addressAnyToShelley $ utxo ^. Utxo.utxoAddress)
+    let
+      -- (expectedTimedUtxoEvent ^. Core.event . Utxo.ueUtxos)
+      filteredExpectedUtxoEvent :: Core.Timed C.ChainPoint Utxo.UtxoEvent
+      filteredExpectedUtxoEvent =
+        expectedTimedUtxoEvent
+          & Core.event . Utxo.ueUtxos
+            %~ Set.filter (\utxo -> isJust $ addressAnyToShelley $ utxo ^. Utxo.utxoAddress)
 
     -- If the 'expectedUtxoEvent' only contain Byron addresses, then 'filteredExpectedUtxoEvent'
     -- will have an empty set of utxos. In that scenario, the `getUtxoEvents` should not filter
@@ -470,13 +479,17 @@ propLastSyncPointIsUpdatedOnInserts = property $ do
     foldM
       ( \indx cp ->
           forAll (genShelleyEraUtxoEventsAtChainPoint cp)
-            >>= flip Core.indexEither indx
+            >>= flip Core.indexEither indx . asInput
             >>= Hedgehog.evalEither
       )
       indexer
       chainPoints
 
-  fromDbSlotNos' <- liftIO (SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC" :: IO [Integer])
+  fromDbSlotNos' <-
+    liftIO
+      ( SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC"
+          :: IO [Integer]
+      )
 
   let fromDbSlotNos :: [C.SlotNo] = fmap (C.SlotNo . fromIntegral) fromDbSlotNos'
       inMemSyncPoint = mixedIndexer ^. Core.inMemory . Core.latest
@@ -515,17 +528,26 @@ propLastChainPointOnRewindIndexer = property $ do
     foldM
       ( \indx cp ->
           forAll (genShelleyEraUtxoEventsAtChainPoint cp)
-            >>= flip Core.indexEither indx
+            >>= flip Core.indexEither indx . asInput
             >>= Hedgehog.evalEither
       )
       indexer
       chainPoints
-  fromDbSlotNosBefore <- liftIO (SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC" :: IO [Integer])
-  (C.ChainPoint dbLastSyncSlotNo b) <- evalChainPoint $ mixedIndexer ^. Core.inDatabase . Core.dbLastSync
+  fromDbSlotNosBefore <-
+    liftIO
+      ( SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC"
+          :: IO [Integer]
+      )
+  (C.ChainPoint dbLastSyncSlotNo b) <-
+    evalChainPoint $ mixedIndexer ^. Core.inDatabase . Core.dbLastSync
 
   let rewindTo :: C.ChainPoint = C.ChainPoint (dbLastSyncSlotNo - 1) b -- rewind by 1 slot
   rewoundMixedIndexer <- Core.rollback rewindTo mixedIndexer
-  fromDbSlotNosAfter <- liftIO (SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC" :: IO [Integer])
+  fromDbSlotNosAfter <-
+    liftIO
+      ( SQL.query_ conn "SELECT DISTINCT slotNo from unspent_transactions ORDER by slotNo DESC"
+          :: IO [Integer]
+      )
   let rewoundDbLastSync = rewoundMixedIndexer ^. Core.inDatabase . Core.dbLastSync
   (C.ChainPoint rewoundDbLastSyncSlotNo _) <- evalChainPoint rewoundDbLastSync
 
@@ -575,4 +597,7 @@ genTxWithNoCollateral :: Gen (C.Tx C.BabbageEra)
 genTxWithNoCollateral = genTx' genTxBodyContentFromTxIns
 
 genTxWithCollateral :: Gen (C.Tx C.BabbageEra)
-genTxWithCollateral = genTx' genTxBodyContentFromTxinsWihtPhase2Validation
+genTxWithCollateral = genTx' genTxBodyContentFromTxInsWithPhase2Validation
+
+asInput :: Core.Timed a event -> Core.Timed a (Maybe event)
+asInput = fmap Just

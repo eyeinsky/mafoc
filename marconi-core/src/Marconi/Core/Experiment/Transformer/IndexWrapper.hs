@@ -15,6 +15,7 @@ module Marconi.Core.Experiment.Transformer.IndexWrapper (
   resetVia,
   indexVia,
   indexAllDescendingVia,
+  indexAllVia,
   lastSyncPointVia,
   closeVia,
   queryVia,
@@ -31,6 +32,7 @@ import Marconi.Core.Experiment.Class (
   Queryable (query),
   Resetable (reset),
   Rollbackable (rollback),
+  indexAll,
   queryLatest,
  )
 import Marconi.Core.Experiment.Type (Point, QueryError, Result, Timed)
@@ -66,7 +68,7 @@ instance IndexerTrans (IndexWrapper config) where
 indexVia
   :: (IsIndex m event indexer, Eq (Point event))
   => Lens' s (indexer event)
-  -> Timed (Point event) event
+  -> Timed (Point event) (Maybe event)
   -> s
   -> m s
 indexVia l = l . index
@@ -77,10 +79,21 @@ indexVia l = l . index
 indexAllDescendingVia
   :: (Ord (Point event), IsIndex m event indexer, Traversable f)
   => Lens' s (indexer event)
-  -> f (Timed (Point event) event)
+  -> f (Timed (Point event) (Maybe event))
   -> s
   -> m s
 indexAllDescendingVia l = l . indexAllDescending
+
+{- | Helper to implement the @index@ functon of 'IsIndex' when we use a wrapper.
+ If you don't want to perform any other side logic, use @deriving via@ instead.
+-}
+indexAllVia
+  :: (Ord (Point event), IsIndex m event indexer, Traversable f)
+  => Lens' s (indexer event)
+  -> f (Timed (Point event) (Maybe event))
+  -> s
+  -> m s
+indexAllVia l = l . indexAll
 
 instance
   (IsIndex m event indexer)
@@ -92,14 +105,14 @@ instance
  If you don't want to perform any other side logic, use @deriving via@ instead.
 -}
 lastSyncPointVia
-  :: IsSync m event indexer
+  :: (IsSync m event indexer)
   => Getter s (indexer event)
   -> s
   -> m (Point event)
 lastSyncPointVia l = lastSyncPoint . view l
 
 instance
-  IsSync event m index
+  (IsSync event m index)
   => IsSync event m (IndexWrapper config index)
   where
   lastSyncPoint = lastSyncPointVia wrappedIndexer
@@ -108,14 +121,14 @@ instance
  If you don't want to perform any other side logic, use @deriving via@ instead.
 -}
 closeVia
-  :: Closeable m indexer
+  :: (Closeable m indexer)
   => Getter s (indexer event)
   -> s
   -> m ()
 closeVia l = close . view l
 
 instance
-  Closeable m index
+  (Closeable m index)
   => Closeable m (IndexWrapper config index)
   where
   close = closeVia wrappedIndexer
@@ -148,7 +161,7 @@ queryLatestVia
 queryLatestVia l q = queryLatest q . view l
 
 instance
-  Queryable m event query indexer
+  (Queryable m event query indexer)
   => Queryable m event query (IndexWrapper config indexer)
   where
   query = queryVia wrappedIndexer

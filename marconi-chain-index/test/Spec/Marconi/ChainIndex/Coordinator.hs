@@ -8,10 +8,16 @@ import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
 import Control.Concurrent (MVar, forkIO, modifyMVar_, newMVar, readMVar, signalQSemN, waitQSemN)
 import Control.Concurrent.STM (atomically, dupTChan, readTChan)
 import Control.Lens ((^.))
-import Control.Monad (void)
+import Control.Monad (forever, void)
 import Control.Monad.Trans.Class (MonadTrans (lift))
 import Data.Word (Word64)
-import Gen.Marconi.ChainIndex.Types (genBlockNo, genChainPoint', genChainSyncEvents, genHashBlockHeader, genSlotNo)
+import Gen.Marconi.ChainIndex.Types (
+  genBlockNo,
+  genChainPoint',
+  genChainSyncEvents,
+  genHashBlockHeader,
+  genSlotNo,
+ )
 import Hedgehog (MonadGen, MonadTest, Property, footnote, forAll, property, (===))
 import Marconi.ChainIndex.Indexers (
   Coordinator',
@@ -64,12 +70,13 @@ propBufferNEvents n = property $ do
   res <- lift $ readMVar store
   resolveWithBuffer chain res
 
-genChainSyncEventsWithChainPoint :: MonadGen m => Word64 -> Word64 -> m [ChainSyncEvent C.ChainPoint]
+genChainSyncEventsWithChainPoint
+  :: (MonadGen m) => Word64 -> Word64 -> m [ChainSyncEvent C.ChainPoint]
 genChainSyncEventsWithChainPoint lo hi = do
   cp <- genChainPoint' genBlockNo genSlotNo
   genChainSyncEvents id nextChainPoint cp lo hi
 
-nextChainPoint :: MonadGen m => C.ChainPoint -> m C.ChainPoint
+nextChainPoint :: (MonadGen m) => C.ChainPoint -> m C.ChainPoint
 nextChainPoint (C.ChainPoint cp _) = C.ChainPoint (succ cp) <$> genHashBlockHeader
 nextChainPoint C.ChainPointAtGenesis = C.ChainPoint 0 <$> genHashBlockHeader
 
@@ -84,17 +91,15 @@ storeWorker store c = do
   workerChannel <- atomically . dupTChan $ c ^. channel
   void . forkIO $ innerLoop workerChannel
   where
-    innerLoop ch = do
+    innerLoop ch = forever $ do
       signalQSemN (c ^. barrier) 1
       failWhenFull (c ^. errorVar)
       event <- atomically $ readTChan ch
       case event of
         RollForward cp _ct -> do
           modifyMVar_ store (pure . (cp :))
-          innerLoop ch
         RollBackward cp _ct -> do
           modifyMVar_ store (pure . dropWhile (> cp))
-          innerLoop ch
 
 resolve' :: [ChainSyncEvent C.ChainPoint] -> [C.ChainPoint] -> [C.ChainPoint]
 resolve' [] acc = acc
@@ -105,7 +110,7 @@ resolve :: [ChainSyncEvent C.ChainPoint] -> [C.ChainPoint]
 resolve xs = resolve' xs []
 
 resolveWithBuffer
-  :: MonadTest m
+  :: (MonadTest m)
   => [ChainSyncEvent C.ChainPoint]
   -> [C.ChainPoint]
   -> m ()

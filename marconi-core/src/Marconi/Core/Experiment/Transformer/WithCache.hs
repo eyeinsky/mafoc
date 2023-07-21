@@ -15,7 +15,17 @@ module Marconi.Core.Experiment.Transformer.WithCache (
   HasCacheConfig (cache),
 ) where
 
-import Control.Lens (At (at), Getter, Indexable (indexed), IndexedTraversal', Lens', itraverseOf, lens, makeLenses, to)
+import Control.Lens (
+  At (at),
+  Getter,
+  Indexable (indexed),
+  IndexedTraversal',
+  Lens',
+  itraverseOf,
+  lens,
+  makeLenses,
+  to,
+ )
 import Control.Lens.Operators ((%~), (&), (^.))
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
 import Data.Foldable (foldl')
@@ -55,7 +65,7 @@ import Marconi.Core.Experiment.Type (
 
 data CacheConfig query event = CacheConfig
   { _configCache :: Map query (Result query)
-  , _configOnForward :: Timed (Point event) event -> Result query -> Result query
+  , _configOnForward :: Timed (Point event) (Maybe event) -> Result query -> Result query
   }
 
 configCache :: Lens' (CacheConfig query event) (Map query (Result query))
@@ -64,12 +74,12 @@ configCache = lens _configCache (\cfg c -> cfg{_configCache = c})
 configCacheEntries :: IndexedTraversal' query (CacheConfig query event) (Result query)
 configCacheEntries f cfg =
   (\c -> cfg{_configCache = c})
-    <$> Map.traverseWithKey (indexed f) (_configCache cfg)
+    <$> Map.traverseWithKey (indexed f) (cfg ^. configCache)
 
 configOnForward
   :: Getter
       (CacheConfig query event)
-      (Timed (Point event) event -> Result query -> Result query)
+      (Timed (Point event) (Maybe event) -> Result query -> Result query)
 configOnForward = to _configOnForward
 
 {- | Setup a cache for some requests.
@@ -86,19 +96,19 @@ makeLenses 'WithCache
 deriving via
   (IndexWrapper (CacheConfig query) indexer)
   instance
-    IsSync m event indexer => IsSync m event (WithCache query indexer)
+    (IsSync m event indexer) => IsSync m event (WithCache query indexer)
 
 deriving via
   (IndexWrapper (CacheConfig query) indexer)
   instance
-    Closeable m indexer => Closeable m (WithCache query indexer)
+    (Closeable m indexer) => Closeable m (WithCache query indexer)
 
 {- | A smart constructor for 'WithCache'.
  The cache starts empty, you can populate it with 'addCacheFor'
 -}
 withCache
-  :: Ord query
-  => (Timed (Point event) event -> Result query -> Result query)
+  :: (Ord query)
+  => (Timed (Point event) (Maybe event) -> Result query -> Result query)
   -> indexer event
   -> WithCache query indexer event
 withCache _configOnForward =
@@ -139,7 +149,7 @@ instance
 onForward
   :: Getter
       (WithCache query indexer event)
-      (Timed (Point event) event -> Result query -> Result query)
+      (Timed (Point event) (Maybe event) -> Result query -> Result query)
 onForward = cacheWrapper . wrapperConfig . configOnForward
 
 {- | Add a cache for a specific query.
@@ -149,13 +159,13 @@ onForward = cacheWrapper . wrapperConfig . configOnForward
  If you want to add several indexers at the same time, use @traverse@.
 -}
 addCacheFor
-  :: Queryable (ExceptT (QueryError query) m) event query indexer
-  => IsSync (ExceptT (QueryError query) m) event indexer
-  => HasCacheConfig query indexer
-  => Monad m
-  => MonadError IndexerError m
-  => Ord query
-  => Ord (Point event)
+  :: (Queryable (ExceptT (QueryError query) m) event query indexer)
+  => (IsSync (ExceptT (QueryError query) m) event indexer)
+  => (HasCacheConfig query indexer)
+  => (Monad m)
+  => (MonadError IndexerError m)
+  => (Ord query)
+  => (Ord (Point event))
   => query
   -> indexer event
   -> m (indexer event)
@@ -189,9 +199,9 @@ instance
     pure $ indexer' & cacheEntries %~ flip (foldl' (flip $ indexer' ^. onForward)) evts
 
 rollbackCache
-  :: Applicative f
-  => Ord (Point event)
-  => Queryable f event query indexer
+  :: (Applicative f)
+  => (Ord (Point event))
+  => (Queryable f event query indexer)
   => Point event
   -> WithCache query indexer event
   -> f (WithCache query indexer event)

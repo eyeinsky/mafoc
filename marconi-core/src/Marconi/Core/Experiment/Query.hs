@@ -34,10 +34,10 @@ data EventAtQuery event = EventAtQuery
  The error cases are handled by the query interface.
  in time
 -}
-type instance Result (EventAtQuery event) = event
+type instance Result (EventAtQuery event) = Maybe event
 
 instance
-  MonadError (QueryError (EventAtQuery event)) m
+  (MonadError (QueryError (EventAtQuery event)) m)
   => Queryable m event (EventAtQuery event) ListIndexer
   where
   query p EventAtQuery ix = do
@@ -46,14 +46,10 @@ instance
     when aHeadOfSync $
       throwError $
         AheadOfLastSync Nothing
-    maybe
-      -- If we can't find the point and if it's in the past, we probably pruned it
-      (throwError NotStoredAnymore)
-      pure
-      $ ix ^? events . folded . filtered (`isAtPoint` p) . event
+    pure $ ix ^? events . folded . filtered (`isAtPoint` p) . event
 
 instance
-  MonadError (QueryError (EventAtQuery event)) m
+  (MonadError (QueryError (EventAtQuery event)) m)
   => AppendResult m event (EventAtQuery event) ListIndexer
   where
   appendResult p q indexer result =
@@ -93,7 +89,7 @@ instance
     pure result
 
 instance
-  MonadError (QueryError (EventsMatchingQuery event)) m
+  (MonadError (QueryError (EventsMatchingQuery event)) m)
   => AppendResult m event (EventsMatchingQuery event) ListIndexer
   where
   appendResult p q indexer result =

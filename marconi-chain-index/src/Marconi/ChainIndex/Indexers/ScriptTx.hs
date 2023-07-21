@@ -21,13 +21,19 @@ import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as Shelley
 import Control.Monad.Trans (MonadTrans (lift))
 import Control.Monad.Trans.Except (ExceptT)
+import Data.Void (Void)
 import Marconi.ChainIndex.Error (
   IndexerError (CantInsertEvent, CantQueryIndexer, CantRollback, CantStartIndexer),
   liftSQLError,
  )
+import Marconi.ChainIndex.Indexers.LastSync (
+  addLastSyncPoints,
+  createLastSyncTable,
+  queryLastSyncPoint,
+  rollbackLastSyncPoints,
+ )
 import Marconi.ChainIndex.Orphans ()
 import Marconi.ChainIndex.Types ()
-import Marconi.ChainIndex.Utils (chainPointOrGenesis)
 import Marconi.Core.Storable (
   Buffered (getStoredEvents, persistToStorage),
   HasPoint (getPoint),
@@ -68,7 +74,7 @@ data ScriptTxHandle = ScriptTxHandle
    The first type we introduce is the monad in which the database (and by extension,
    the indexer) runs. -}
 
-type instance StorableMonad ScriptTxHandle = ExceptT IndexerError IO
+type instance StorableMonad ScriptTxHandle = ExceptT (IndexerError Void) IO
 
 {- The next type we introduce is the type of events. Events are the data atoms that
    the indexer consumes. They depend on the `handle` because they need to eventually
@@ -133,7 +139,9 @@ instance SQL.ToField (StorableQuery ScriptTxHandle) where
 instance SQL.FromField (StorableQuery ScriptTxHandle) where
   fromField f =
     SQL.fromField f
-      >>= \b -> either (const cantDeserialise) (return . ScriptTxAddress) $ Shelley.deserialiseFromRawBytes Shelley.AsScriptHash b
+      >>= \b ->
+        either (const cantDeserialise) (return . ScriptTxAddress) $
+          Shelley.deserialiseFromRawBytes Shelley.AsScriptHash b
     where
       cantDeserialise = SQL.returnError SQL.ConversionFailed f "Cannot deserialise address."
 
@@ -154,7 +162,7 @@ type Result = StorableResult ScriptTxHandle
 
 toUpdate
   :: forall era
-   . C.IsCardanoEra era
+   . (C.IsCardanoEra era)
   => [C.Tx era]
   -> ChainPoint
   -> StorableEvent ScriptTxHandle
@@ -184,13 +192,16 @@ instance Buffered ScriptTxHandle where
   {- The data is buffered in memory. When the memory buffer is filled, we need to store
      it on disk. -}
   persistToStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent ScriptTxHandle)
     -> ScriptTxHandle
     -> StorableMonad ScriptTxHandle ScriptTxHandle
   persistToStorage es h =
     liftSQLError CantInsertEvent $ do
-      sqliteInsert (hdlConnection h) "script_transactions" (toList es)
+      let c = hdlConnection h
+      sqliteInsert c "script_transactions" (toList es)
+      let chainPoints = chainPoint <$> toList es
+      addLastSyncPoints c chainPoints
       pure h
 
   {- We want to potentially store data in two formats. The first one is similar (if
@@ -213,13 +224,20 @@ instance Buffered ScriptTxHandle where
     -> StorableMonad ScriptTxHandle [StorableEvent ScriptTxHandle]
   getStoredEvents (ScriptTxHandle c sz) = liftSQLError CantInsertEvent $ do
     sns :: [[Integer]] <-
-      SQL.query c "SELECT slotNo FROM script_transactions GROUP BY slotNo ORDER BY slotNo DESC LIMIT ?" (SQL.Only sz)
+      SQL.query
+        c
+        "SELECT slotNo FROM script_transactions GROUP BY slotNo ORDER BY slotNo DESC LIMIT ?"
+        (SQL.Only sz)
     -- Take the slot number of the sz'th slot
     let sn =
           if null sns
             then 0
             else head . last $ take sz sns
-    es <- SQL.query c "SELECT scriptAddress, txCbor, slotNo, blockHash FROM script_transactions WHERE slotNo >= ? ORDER BY slotNo DESC, txCbor, scriptAddress" (SQL.Only (sn :: Integer))
+    es <-
+      SQL.query
+        c
+        "SELECT scriptAddress, txCbor, slotNo, blockHash FROM script_transactions WHERE slotNo >= ? ORDER BY slotNo DESC, txCbor, scriptAddress"
+        (SQL.Only (sn :: Integer))
     pure $ asEvents es
 
 -- This function recomposes the in-memory format from the database records. This
@@ -250,7 +268,7 @@ asEvents rs@(ScriptTxRow _ _ sn hsh : _) =
 
 instance Queryable ScriptTxHandle where
   queryStorage
-    :: Foldable f
+    :: (Foldable f)
     => f (StorableEvent ScriptTxHandle)
     -> ScriptTxHandle
     -> StorableQuery ScriptTxHandle
@@ -277,25 +295,26 @@ instance Rewindable ScriptTxHandle where
     :: ChainPoint
     -> ScriptTxHandle
     -> StorableMonad ScriptTxHandle ScriptTxHandle
-  rewindStorage (ChainPoint sn _) h@(ScriptTxHandle c _) = liftSQLError CantRollback $ do
+  rewindStorage cp@(ChainPoint sn _) h@(ScriptTxHandle c _) = liftSQLError CantRollback $ do
     SQL.execute c "DELETE FROM script_transactions WHERE slotNo > ?" (SQL.Only sn)
+    rollbackLastSyncPoints c cp
     pure h
   rewindStorage ChainPointAtGenesis h@(ScriptTxHandle c _) = liftSQLError CantRollback $ do
     SQL.execute_ c "DELETE FROM script_transactions"
+    rollbackLastSyncPoints c ChainPointAtGenesis
     pure h
 
 -- For resuming we need to provide a list of points where we can resume from.
 
 instance Resumable ScriptTxHandle where
   resumeFromStorage (ScriptTxHandle c _) =
-    liftSQLError CantQueryIndexer $
-      fmap chainPointOrGenesis $
-        SQL.query_ c "SELECT slotNo, blockHash FROM script_transactions ORDER BY slotNo DESC LIMIT 1"
+    liftSQLError CantQueryIndexer $ queryLastSyncPoint c
 
 open :: FilePath -> Depth -> StorableMonad ScriptTxHandle ScriptTxIndexer
 open dbPath (Depth k) = do
   c <- liftSQLError CantStartIndexer (SQL.open dbPath)
   lift $ sqliteInit c defaultTableName
+  lift $ createLastSyncTable c
   emptyState k (ScriptTxHandle c k)
 
 defaultTableName :: String

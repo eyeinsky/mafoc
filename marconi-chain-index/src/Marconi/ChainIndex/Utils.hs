@@ -9,18 +9,28 @@ module Marconi.ChainIndex.Utils (
   getBlockNoFromChainTip,
   querySecurityParam,
   querySecurityParamEra,
+  toException,
   chainPointOrGenesis,
   shelleyBasedToCardanoEra,
   toShelleyEraInCardanoMode,
+  addressesToPredicate,
 ) where
 
 import Cardano.Api qualified as C
 import Cardano.Streaming.Helpers qualified as C
-import Control.Monad.Except (ExceptT, throwError)
+import Control.Exception (Exception, throw)
+import Control.Monad.Except (
+  ExceptT,
+  runExceptT,
+  throwError,
+ )
 import Control.Monad.Trans (MonadTrans (lift))
 import Data.Text (pack)
 import Marconi.ChainIndex.Error (IndexerError (CantStartIndexer))
-import Marconi.ChainIndex.Types (SecurityParam)
+import Marconi.ChainIndex.Types (
+  SecurityParam,
+  TargetAddresses,
+ )
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (EraMismatch)
 
 isBlockRollbackable :: SecurityParam -> C.BlockNo -> C.BlockNo -> Bool
@@ -41,7 +51,7 @@ querySecurityParam
   :: C.NetworkId
   -> FilePath
   -- ^ Node socket file path
-  -> ExceptT IndexerError IO SecurityParam
+  -> ExceptT (IndexerError err) IO SecurityParam
 querySecurityParam networkId socketPath = do
   (C.AnyCardanoEra era) <- queryCurrentEra networkId socketPath
   case shelleyBasedToCardanoEra era of
@@ -53,30 +63,31 @@ queryCurrentEra
   :: C.NetworkId
   -> FilePath
   -- ^ Node socket file path
-  -> ExceptT IndexerError IO C.AnyCardanoEra
+  -> ExceptT (IndexerError err) IO C.AnyCardanoEra
 queryCurrentEra networkId socketPath = do
+  let localNodeConnectInfo :: C.LocalNodeConnectInfo C.CardanoMode
+      localNodeConnectInfo = C.mkLocalNodeConnectInfo networkId socketPath
+
+      queryInMode :: C.QueryInMode C.CardanoMode C.AnyCardanoEra
+      queryInMode = C.QueryCurrentEra C.CardanoModeIsMultiEra
+
+      toError :: (Show a) => a -> ExceptT (IndexerError err) IO b
+      toError = throwError . CantStartIndexer . pack . show
+
   result <- lift $ C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode
   case result of
     Left err -> toError err
     Right x -> pure x
-  where
-    localNodeConnectInfo :: C.LocalNodeConnectInfo C.CardanoMode
-    localNodeConnectInfo = C.mkLocalNodeConnectInfo networkId socketPath
-
-    queryInMode :: C.QueryInMode C.CardanoMode C.AnyCardanoEra
-    queryInMode = C.QueryCurrentEra C.CardanoModeIsMultiEra
-
-    toError :: Show a => a -> ExceptT IndexerError IO b
-    toError = throwError . CantStartIndexer . pack . show
 
 -- | Query security param from the local node given a Shelley based era.
 querySecurityParamEra
   :: forall era
+   . forall err
    . C.ShelleyBasedEra era
   -> C.NetworkId
   -> FilePath
   -- ^ Node socket file path
-  -> ExceptT IndexerError IO SecurityParam
+  -> ExceptT (IndexerError err) IO SecurityParam
 querySecurityParamEra shelleyBasedEra networkId socketPath = do
   result <- lift $ C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode
   genesisParameters <- case result of
@@ -93,8 +104,15 @@ querySecurityParamEra shelleyBasedEra networkId socketPath = do
       C.QueryInEra (toShelleyEraInCardanoMode shelleyBasedEra) $
         C.QueryInShelleyBasedEra shelleyBasedEra C.QueryGenesisParameters
 
-    toError :: Show a => a -> ExceptT IndexerError IO b
+    toError :: (Show a) => a -> ExceptT (IndexerError err) IO b
     toError = throwError . CantStartIndexer . pack . show
+
+toException :: (Exception err) => ExceptT err IO a -> IO a
+toException mx = do
+  x <- runExceptT mx
+  case x of
+    Left err -> throw err
+    Right res -> pure res
 
 {- | Return the first element of the list of chain points. If the list is empty, return the genesis
  point.
@@ -103,6 +121,10 @@ chainPointOrGenesis :: [C.ChainPoint] -> C.ChainPoint
 chainPointOrGenesis result = case result of
   [] -> C.ChainPointAtGenesis
   cp : _ -> cp
+
+-- | Convert a list of target addresses to a predicate function
+addressesToPredicate :: Maybe TargetAddresses -> Maybe (C.Address C.ShelleyAddr -> Bool)
+addressesToPredicate = fmap (\list -> (`elem` list))
 
 -- TODO This should be moved to `cardano-api`.
 toShelleyEraInCardanoMode :: C.ShelleyBasedEra era -> C.EraInMode era C.CardanoMode

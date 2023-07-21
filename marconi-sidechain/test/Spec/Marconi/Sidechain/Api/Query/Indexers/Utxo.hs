@@ -10,6 +10,8 @@ import Control.Concurrent.STM (atomically)
 import Control.Lens.Operators ((^.))
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson qualified as Aeson
+import Data.List qualified as List
+import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import Data.Text (unpack)
@@ -26,6 +28,7 @@ import Marconi.Sidechain.Api.Routes (
   GetCurrentSyncedBlockResult (GetCurrentSyncedBlockResult),
   GetUtxosFromAddressResult (GetUtxosFromAddressResult, unAddressUtxosResult),
  )
+import Marconi.Sidechain.Api.Routes qualified as Routes
 import Marconi.Sidechain.Api.Types (sidechainAddressUtxoIndexer, sidechainEnvIndexers)
 import Marconi.Sidechain.Bootstrap (initializeSidechainEnv)
 import Network.JsonRpc.Client.Types ()
@@ -82,15 +85,22 @@ queryTargetAddressTest = property $ do
       . Set.toList
       . Set.fromList -- remove the potential duplicate addresses
       . fmap Utxo._address
-      . concatMap (Set.toList . Utxo.ueUtxos)
+      . concatMap Utxo.ueUtxos
       $ events
 
   let numOfFetched = length fetchedRows
+      expected = List.sortOn (fmap Routes.utxoResultTxIn) fetchedRows
+
+      retrieved =
+        List.sortOn (fmap Routes.utxoResultTxIn)
+          . mapMaybe (Aeson.decode . Aeson.encode)
+          $ fetchedRows
+
   Hedgehog.classify "Retrieved Utxos are greater than or Equal to 5" $ numOfFetched >= 5
   Hedgehog.classify "Retrieved Utxos are greater than 1" $ numOfFetched > 1
 
   Hedgehog.assert (not . null $ fetchedRows)
-  (Set.fromList . mapMaybe (Aeson.decode . Aeson.encode) $ fetchedRows) === Set.fromList fetchedRows
+  expected === retrieved
 
 {- | Test roundtrip Utxos thruough JSON-RPC http server.
  We compare a represenation of the generated UtxoEvents
@@ -109,13 +119,23 @@ propUtxoEventInsertionAndJsonRpcQueryRoundTrip action = property $ do
           . Set.fromList
           . fmap (unpack . C.serialiseAddress)
           . mapMaybe (addressAnyToShelley . Utxo._address)
-          . concatMap (Set.toList . Utxo.ueUtxos)
+          . foldMap Utxo.ueUtxos
           $ events
   rpcResponses <- liftIO $ for qAddresses (queryAddressUtxosAction action)
-  let fetchedUtxoRows = concatMap fromQueryResult rpcResponses
+  let fetchedUtxoRows = foldMap fromQueryResult rpcResponses
+      expected =
+        Map.fromList
+          . fmap (\x -> (Routes.utxoResultTxIn x, x))
+          $ fetchedUtxoRows
+
+      retrieved =
+        Map.fromList
+          . fmap (\x -> (Routes.utxoResultTxIn x, x))
+          . mapMaybe (Aeson.decode . Aeson.encode)
+          $ fetchedUtxoRows
 
   Hedgehog.assert (not . null $ fetchedUtxoRows)
-  (Set.fromList . mapMaybe (Aeson.decode . Aeson.encode) $ fetchedUtxoRows) === Set.fromList fetchedUtxoRows
+  retrieved === expected
 
 fromQueryResult :: JsonRpcResponse e GetUtxosFromAddressResult -> [AddressUtxoResult]
 fromQueryResult (Result _ (GetUtxosFromAddressResult rows)) = rows

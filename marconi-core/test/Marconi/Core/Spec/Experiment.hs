@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -123,7 +124,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State (StateT, evalStateT, gets)
 import Control.Tracer qualified as Tracer
 
-import Data.Foldable (Foldable (foldl'))
+import Data.Foldable (Foldable (foldl'), find)
 import Data.Function ((&))
 
 import GHC.Generics (Generic)
@@ -140,7 +141,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Except (ExceptT)
 
 import Data.Either (fromRight)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 
 import Data.Monoid (Sum (Sum))
 import Database.SQLite.Simple (FromRow)
@@ -162,7 +163,7 @@ instance Core.HasGenesis TestPoint where
 
 -- | We simplify the events to either `Insert` or `Rollback`
 data Item event
-  = Insert !TestPoint !event
+  = Insert !TestPoint !(Maybe event)
   | Rollback !TestPoint
   deriving stock (Show)
 
@@ -172,6 +173,8 @@ data Item event
 data GenChainConfig = GenChainConfig
   { _chainSize :: Gen Int
   -- ^ Size of the chain to generate
+  , _emptyEventFrequency :: Word
+  -- ^ How often an event is @Nothing@
   , _rollbackFrequency :: Word
   -- ^ How often a rollback can happen
   , _rollbackDepth :: TestPoint -> Gen TestPoint
@@ -182,6 +185,10 @@ data GenChainConfig = GenChainConfig
 
 chainSize :: Getter GenChainConfig (Gen Int)
 chainSize = to _chainSize
+
+emptyEventFrequency :: Lens' GenChainConfig Word
+emptyEventFrequency =
+  lens _emptyEventFrequency (\g f -> g{_emptyEventFrequency = f})
 
 rollbackFrequency :: Lens' GenChainConfig Word
 rollbackFrequency =
@@ -196,9 +203,13 @@ currentTestPoint =
   lens _currentTestPoint (\g p -> g{_currentTestPoint = p})
 
 -- | Generate an insert at the given slot
-genInsert :: Arbitrary event => TestPoint -> Gen (Item event)
-genInsert no = do
-  xs <- Test.arbitrary
+genInsert :: (Arbitrary event) => Word -> TestPoint -> Gen (Item event)
+genInsert f no = do
+  xs <-
+    Test.frequency
+      [ (fromIntegral f, pure Nothing)
+      , (100 - fromIntegral f, Just <$> Test.arbitrary)
+      ]
   pure $ Insert (no + 1) xs
 
 -- | Generate a rollback, 'GenState' set the maximal depth of the rollback
@@ -210,30 +221,31 @@ genRollback = do
 
 -- | Generate an insert or a rollback, rollback depth is uniform on the chain length
 genItem
-  :: Arbitrary event
+  :: (Arbitrary event)
   => StateT GenChainConfig Gen (Item event)
 genItem = do
   no <- use currentTestPoint
-  f <- use rollbackFrequency
   genRollback' <- gets genRollback
   let setStateSlot = \case
         Insert no' _ -> currentTestPoint .= no'
         Rollback n -> currentTestPoint .= n
+  f <- use rollbackFrequency
   let f' = if no > 0 then f else 0 -- no rollback on genesis
+  g <- use emptyEventFrequency
   item <-
     lift $
       Test.frequency
         [ (fromIntegral f', genRollback')
-        , (100 - fromIntegral f', genInsert no)
+        , (100 - fromIntegral f', genInsert g no)
         ]
   setStateSlot item
   pure item
 
 process
-  :: Core.IsIndex m event indexer
-  => Ord (Core.Point event)
-  => Core.Point event ~ TestPoint
-  => Core.Rollbackable m event indexer
+  :: (Core.IsIndex m event indexer)
+  => (Ord (Core.Point event))
+  => (Core.Point event ~ TestPoint)
+  => (Core.Rollbackable m event indexer)
   => Item event
   -> indexer event
   -> m (indexer event)
@@ -242,7 +254,7 @@ process = \case
   Rollback n -> Core.rollback n
 
 genChain
-  :: Arbitrary event
+  :: (Arbitrary event)
   => GenChainConfig
   -> Gen [Item event]
 genChain cfg = flip evalStateT cfg $ do
@@ -253,13 +265,13 @@ uniformRollBack :: TestPoint -> Gen TestPoint
 uniformRollBack = fmap TestPoint . choose . (,) 0 . unwrapTestPoint
 
 genLargeChain
-  :: Arbitrary event
+  :: (Arbitrary event)
   => Word
   -- ^ Rollback percentage
   -> Gen [Item event]
 genLargeChain p = do
   let n = Test.choose (1000000, 1200000)
-  genChain $ GenChainConfig n p uniformRollBack 0
+  genChain $ GenChainConfig n 5 p uniformRollBack 0
 
 -- | Chain events with 10% of rollback
 newtype DefaultChain event = DefaultChain {_defaultChain :: [Item event]}
@@ -267,18 +279,27 @@ newtype DefaultChain event = DefaultChain {_defaultChain :: [Item event]}
 makeLenses 'DefaultChain
 
 -- | Chain events with 10% of rollback (rollbackDepth is)
-instance Arbitrary event => Arbitrary (DefaultChain event) where
+instance (Arbitrary event) => Arbitrary (DefaultChain event) where
   arbitrary = Test.sized $ \n ->
-    DefaultChain <$> genChain (GenChainConfig (pure n) 10 uniformRollBack 0)
+    DefaultChain <$> genChain (GenChainConfig (pure n) 5 10 uniformRollBack 0)
 
 -- | Chain events without any rollback
 newtype ForwardChain event = ForwardChain {_forwardChain :: [Item event]}
 
 makeLenses 'ForwardChain
 
-instance Arbitrary event => Arbitrary (ForwardChain event) where
+instance (Arbitrary event) => Arbitrary (ForwardChain event) where
   arbitrary = Test.sized $ \n ->
-    ForwardChain <$> genChain (GenChainConfig (pure n) 0 uniformRollBack 0)
+    ForwardChain <$> genChain (GenChainConfig (pure n) 5 0 uniformRollBack 0)
+
+-- | Chain events without empty event
+newtype FullChain event = FullChain {_fullChain :: [Item event]}
+
+makeLenses 'FullChain
+
+instance (Arbitrary event) => Arbitrary (FullChain event) where
+  arbitrary = Test.sized $ \n ->
+    FullChain <$> genChain (GenChainConfig (pure n) 0 10 uniformRollBack 0)
 
 -- ** Event instances
 
@@ -291,8 +312,8 @@ type instance Core.Point TestEvent = TestPoint
 
 -- * Model
 
-newtype IndexerModel e = IndexerModel {_model :: [(TestPoint, e)]}
-  deriving stock (Show)
+newtype IndexerModel e = IndexerModel {_model :: [(TestPoint, Maybe e)]}
+  deriving stock (Show, Functor, Foldable, Traversable)
 
 makeLenses ''IndexerModel
 
@@ -315,11 +336,11 @@ makeLenses ''IndexerTestRunner
 
 -- | Compare an execution on the base model and one on the indexer
 compareToModelWith
-  :: Monad m
-  => Show event
-  => Core.Point event ~ TestPoint
-  => Core.IsIndex m event indexer
-  => Core.Rollbackable m event indexer
+  :: (Monad m)
+  => (Show event)
+  => (Core.Point event ~ TestPoint)
+  => (Core.IsIndex m event indexer)
+  => (Core.Rollbackable m event indexer)
   => Gen [Item event]
   -- ^ the generator used to generate the chain
   -> IndexerTestRunner m event indexer
@@ -344,12 +365,12 @@ compareToModelWith genChain' runner modelComputation indexerComputation prop =
 
 -- | Compare an execution on the base model and one on the indexer
 behaveLikeModel
-  :: Eq a
-  => Show a
-  => Show event
-  => Core.Point event ~ TestPoint
-  => Core.IsIndex m event indexer
-  => Core.Rollbackable m event indexer
+  :: (Eq a)
+  => (Show a)
+  => (Show event)
+  => (Core.Point event ~ TestPoint)
+  => (Core.IsIndex m event indexer)
+  => (Core.Rollbackable m event indexer)
   => Gen [Item event]
   -- ^ the generator used to generate the chain
   -> IndexerTestRunner m event indexer
@@ -364,14 +385,15 @@ behaveLikeModel genChain' runner modelComputation indexerComputation =
 
 -- | A test tree for the core functionalities of an indexer
 indexingTestGroup
-  :: Core.Rollbackable m TestEvent indexer
-  => Core.IsIndex m TestEvent indexer
-  => Core.IsSync m TestEvent indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
+  :: (Core.Rollbackable m TestEvent indexer)
+  => (Core.IsIndex m TestEvent indexer)
+  => (Core.IsSync m TestEvent indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
   => String
   -> IndexerTestRunner m TestEvent indexer
   -> Tasty.TestTree
@@ -399,14 +421,15 @@ indexingTestGroup indexerName runner =
     ]
 
 indexingPerformanceTest
-  :: Core.Rollbackable m TestEvent indexer
-  => Core.IsIndex m TestEvent indexer
-  => Core.IsSync m TestEvent indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
+  :: (Core.Rollbackable m TestEvent indexer)
+  => (Core.IsIndex m TestEvent indexer)
+  => (Core.IsSync m TestEvent indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
   => String
   -> IndexerTestRunner m TestEvent indexer
   -> Tasty.TestTree
@@ -417,17 +440,18 @@ indexingPerformanceTest indexerName runner =
         storageBasedModelProperty (genLargeChain 10) runner
 
 storageBasedModelProperty
-  :: Core.Rollbackable m event indexer
-  => Core.IsIndex m event indexer
-  => Core.IsSync m event indexer
-  => Core.Point event ~ TestPoint
-  => Show event
-  => Eq event
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery event)) m)
-      event
-      (Core.EventsMatchingQuery event)
-      indexer
+  :: (Core.Rollbackable m event indexer)
+  => (Core.IsIndex m event indexer)
+  => (Core.IsSync m event indexer)
+  => (Core.Point event ~ TestPoint)
+  => (Show event)
+  => (Eq event)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery event)) m)
+        event
+        (Core.EventsMatchingQuery event)
+        indexer
+     )
   => Gen [Item event]
   -> IndexerTestRunner m event indexer
   -> Property
@@ -439,7 +463,7 @@ storageBasedModelProperty gen runner =
    in behaveLikeModel
         gen
         runner
-        (views model (fmap snd))
+        (catMaybes . views model (fmap snd))
         indexerEvents
 
 lastSyncBasedModelProperty
@@ -461,7 +485,7 @@ lastSyncBasedModelProperty gen runner =
 
 -- | A runner for a 'ListIndexer'
 listIndexerRunner
-  :: Core.HasGenesis (Core.Point e)
+  :: (Core.HasGenesis (Core.Point e))
   => IndexerTestRunner (ExceptT Core.IndexerError IO) e Core.ListIndexer
 listIndexerRunner =
   IndexerTestRunner
@@ -477,7 +501,7 @@ initSQLite = do
     " CREATE TABLE index_model \
     \   ( point INT NOT NULL   \
     \   , value INT NOT NULL   \
-    \   )                      "
+    \   )"
 
   pure con
 
@@ -489,7 +513,7 @@ sqliteModelIndexer con =
     "INSERT INTO index_model VALUES (?, ?)"
     "SELECT point FROM index_model ORDER BY point DESC LIMIT 1"
 
-instance MonadIO m => Core.Rollbackable m TestEvent Core.SQLiteIndexer where
+instance (MonadIO m) => Core.Rollbackable m TestEvent Core.SQLiteIndexer where
   rollback = Core.rollbackSQLiteIndexerWith "DELETE FROM index_model WHERE point > ?"
 
 instance
@@ -510,7 +534,7 @@ instance
           \ ORDER BY point DESC"
           rowToResult
 
-monadicExceptTIO :: Tasty.Testable a => PropertyM (ExceptT err IO) a -> Property
+monadicExceptTIO :: (Tasty.Testable a) => PropertyM (ExceptT err IO) a -> Property
 monadicExceptTIO =
   GenM.monadic $ Tasty.ioProperty . fmap (fromRight $ Tasty.property False) . runExceptT
 
@@ -532,7 +556,7 @@ mixedModelNoMemoryIndexer con = do
   dbIndexer <- sqliteModelIndexer con
   Core.standardMixedIndexer
     0
-    0
+    1
     dbIndexer
 
 mixedModelLowMemoryIndexer
@@ -600,7 +624,7 @@ mixedHighMemoryIndexerRunner =
 
 -- | A runner for a the 'WithTracer' tranformer
 withTracerRunner
-  :: Monad m
+  :: (Monad m)
   => IndexerTestRunner m event wrapped
   -> IndexerTestRunner m event (Core.WithTracer m wrapped)
 withTracerRunner wRunner =
@@ -623,17 +647,17 @@ instance
   index = Core.indexVia underCoordinator
   indexAllDescending = Core.indexAllDescendingVia underCoordinator
 
-instance MonadIO m => Core.IsSync m event (UnderCoordinator indexer) where
+instance (MonadIO m) => Core.IsSync m event (UnderCoordinator indexer) where
   lastSyncPoint = Core.lastSyncPointVia underCoordinator
 
 instance
-  Core.HasGenesis (Core.Point event)
+  (Core.HasGenesis (Core.Point event))
   => Core.Rollbackable (ExceptT Core.IndexerError IO) event (UnderCoordinator indexer)
   where
   rollback = Core.rollbackVia $ underCoordinator . wrappedIndexer
 
 instance
-  Core.Closeable (ExceptT Core.IndexerError IO) Core.Coordinator
+  (Core.Closeable (ExceptT Core.IndexerError IO) Core.Coordinator)
   => Core.Closeable (ExceptT Core.IndexerError IO) (UnderCoordinator indexer)
   where
   close = Core.closeVia $ underCoordinator . wrappedIndexer
@@ -664,7 +688,7 @@ coordinatorIndexerRunner wRunner =
       (t, run) <-
         lift $
           Core.createWorker
-            pure
+            (pure . pure)
             wrapped
       UnderCoordinator . Core.IndexWrapper (IndexerMVar t) <$> lift (Core.mkCoordinator [run])
 
@@ -674,7 +698,7 @@ data ParityQuery = OddTestEvent | EvenTestEvent
 type instance Core.Result ParityQuery = [TestEvent]
 
 instance
-  Applicative m
+  (Applicative m)
   => Core.Queryable m TestEvent ParityQuery Core.ListIndexer
   where
   query p par indexer = do
@@ -691,7 +715,7 @@ instance
           . filtered f
 
 instance
-  MonadIO m
+  (MonadIO m)
   => Core.Queryable m TestEvent ParityQuery Core.SQLiteIndexer
   where
   query p q indexer =
@@ -715,13 +739,13 @@ instance
               indexer
 
 buildCacheFor
-  :: Core.Queryable (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event query indexer
-  => Core.IsSync (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event indexer
-  => Monad m
-  => Ord query
-  => Ord (Core.Point event)
+  :: (Core.Queryable (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event query indexer)
+  => (Core.IsSync (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event indexer)
+  => (Monad m)
+  => (Ord query)
+  => (Ord (Core.Point event))
   => query
-  -> (Core.Timed (Core.Point event) event -> Core.Result query -> Core.Result query)
+  -> (Core.Timed (Core.Point event) (Maybe event) -> Core.Result query -> Core.Result query)
   -> indexer event
   -> m (Core.WithCache query indexer event)
 buildCacheFor q onForward indexer = do
@@ -730,13 +754,13 @@ buildCacheFor q onForward indexer = do
 
 -- | A runner for a the 'WithTracer' tranformer
 withCacheRunner
-  :: Core.Queryable (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event query wrapped
-  => Core.IsSync (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event wrapped
-  => Monad m
-  => Ord query
-  => Ord (Core.Point event)
+  :: (Core.Queryable (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event query wrapped)
+  => (Core.IsSync (ExceptT (Core.QueryError query) (ExceptT Core.IndexerError m)) event wrapped)
+  => (Monad m)
+  => (Ord query)
+  => (Ord (Core.Point event))
   => query
-  -> (Core.Timed (Core.Point event) event -> Core.Result query -> Core.Result query)
+  -> (Core.Timed (Core.Point event) (Maybe event) -> Core.Result query -> Core.Result query)
   -> IndexerTestRunner m event wrapped
   -> IndexerTestRunner m event (Core.WithCache query wrapped)
 withCacheRunner q onForward wRunner =
@@ -751,8 +775,9 @@ oddCacheRunner
       (Core.WithCache ParityQuery Core.ListIndexer)
 oddCacheRunner =
   let aggregate timedEvent xs =
-        let e = timedEvent ^. Core.event
-         in if odd e then e : xs else xs
+        case timedEvent ^. Core.event of
+          Just e -> if odd e then e : xs else xs
+          Nothing -> xs
    in withCacheRunner OddTestEvent aggregate listIndexerRunner
 
 sqlLiteCacheRunner
@@ -762,8 +787,9 @@ sqlLiteCacheRunner
       (Core.WithCache ParityQuery Core.SQLiteIndexer)
 sqlLiteCacheRunner =
   let aggregate timedEvent xs =
-        let e = timedEvent ^. Core.event
-         in if odd e then e : xs else xs
+        case timedEvent ^. Core.event of
+          Just e -> if odd e then e : xs else xs
+          Nothing -> xs
    in withCacheRunner OddTestEvent aggregate mkSqliteIndexerRunner
 
 cacheTestGroup :: Tasty.TestTree
@@ -793,10 +819,10 @@ cacheTestGroup =
 
 -- We ask odd elements, which are cached
 cacheHitProperty
-  :: Core.IsIndex m TestEvent indexer
-  => Core.Rollbackable m TestEvent indexer
-  => Core.Queryable (ExceptT (Core.QueryError ParityQuery) m) TestEvent ParityQuery indexer
-  => Core.IsSync m TestEvent indexer
+  :: (Core.IsIndex m TestEvent indexer)
+  => (Core.Rollbackable m TestEvent indexer)
+  => (Core.Queryable (ExceptT (Core.QueryError ParityQuery) m) TestEvent ParityQuery indexer)
+  => (Core.IsSync m TestEvent indexer)
   => Gen [Item TestEvent]
   -> IndexerTestRunner m TestEvent indexer
   -> Property
@@ -807,27 +833,28 @@ cacheHitProperty gen indexer =
    in behaveLikeModel
         gen
         indexer
-        (views model (filter odd . fmap snd))
+        (views model $ mapMaybe (find odd . snd))
         indexerEvents
 
 -- We ask even elements, which aren't cached
 cacheMissProperty
-  :: Core.IsIndex m TestEvent indexer
-  => Core.Rollbackable m TestEvent indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError ParityQuery) m)
-      TestEvent
-      ParityQuery
-      indexer
-  => Core.IsSync m TestEvent indexer
+  :: (Core.IsIndex m TestEvent indexer)
+  => (Core.Rollbackable m TestEvent indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError ParityQuery) m)
+        TestEvent
+        ParityQuery
+        indexer
+     )
+  => (Core.IsSync m TestEvent indexer)
   => Gen [Item TestEvent]
   -> IndexerTestRunner m TestEvent indexer
   -> Property
 cacheMissProperty gen indexer =
   let indexerEvents indexer' =
-        fromRight []
+        either (error . show) id
           <$> Core.queryLatest' EvenTestEvent indexer'
-      modelEvents = views model (filter even . fmap snd)
+      modelEvents = views model $ mapMaybe (find even . snd)
    in behaveLikeModel
         gen
         indexer
@@ -836,7 +863,7 @@ cacheMissProperty gen indexer =
 
 -- | A runner for a the 'WithTracer' tranformer
 withDelayRunner
-  :: Monad m
+  :: (Monad m)
   => Word
   -> IndexerTestRunner m event wrapped
   -> IndexerTestRunner m event (Core.WithDelay wrapped)
@@ -846,15 +873,16 @@ withDelayRunner delay wRunner =
     (Core.withDelay delay <$> wRunner ^. indexerGenerator)
 
 delayProperty
-  :: Core.IsIndex m TestEvent indexer
-  => Core.IsSync m TestEvent indexer
-  => Core.Rollbackable m TestEvent indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
-  => Core.IsSync m TestEvent indexer
+  :: (Core.IsIndex m TestEvent indexer)
+  => (Core.IsSync m TestEvent indexer)
+  => (Core.Rollbackable m TestEvent indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
+  => (Core.IsSync m TestEvent indexer)
   => Word
   -> Gen [Item TestEvent]
   -> IndexerTestRunner m TestEvent indexer
@@ -866,7 +894,7 @@ delayProperty delay gen runner =
           <$> Core.queryLatest' Core.allEvents indexer'
 
       modelEvents lastSync =
-        views model (fmap snd . filter ((lastSync >=) . fst))
+        views model (mapMaybe snd . filter ((lastSync >=) . fst))
 
       dRunner = withDelayRunner delay runner
 
@@ -883,14 +911,15 @@ delayProperty delay gen runner =
 
 -- | A test tree for the core functionalities of a delayed indexer
 delayTestGroup
-  :: Core.Rollbackable m TestEvent indexer
-  => Core.IsIndex m TestEvent indexer
-  => Core.IsSync m TestEvent indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
+  :: (Core.Rollbackable m TestEvent indexer)
+  => (Core.IsIndex m TestEvent indexer)
+  => (Core.IsSync m TestEvent indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) m)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
   => String
   -> IndexerTestRunner m TestEvent indexer
   -> Tasty.TestTree
@@ -918,15 +947,16 @@ delayTestGroup title runner =
     ]
 
 stopCoordinatorProperty
-  :: Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.Closeable (ExceptT Core.IndexerError IO) indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) IO)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
+  :: (Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.Closeable (ExceptT Core.IndexerError IO) indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) IO)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
   => Gen [Item TestEvent]
   -> IndexerTestRunner (ExceptT Core.IndexerError IO) TestEvent indexer
   -> Property
@@ -956,15 +986,16 @@ stopCoordinatorProperty gen runner =
           liftIO $ ([ThreadFinished] ===) <$> traverse threadStatus threadIds
 
 stopCoordinatorTest
-  :: Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.Closeable (ExceptT Core.IndexerError IO) indexer
-  => Core.Queryable
-      (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) IO)
-      TestEvent
-      (Core.EventsMatchingQuery TestEvent)
-      indexer
+  :: (Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.Closeable (ExceptT Core.IndexerError IO) indexer)
+  => ( Core.Queryable
+        (ExceptT (Core.QueryError (Core.EventsMatchingQuery TestEvent)) IO)
+        TestEvent
+        (Core.EventsMatchingQuery TestEvent)
+        indexer
+     )
   => IndexerTestRunner (ExceptT Core.IndexerError IO) TestEvent indexer
   -> Tasty.TestTree
 stopCoordinatorTest runner =
@@ -973,9 +1004,9 @@ stopCoordinatorTest runner =
       stopCoordinatorProperty (view defaultChain <$> Test.arbitrary) runner
 
 resumeLastSyncProperty
-  :: Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer
-  => Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer
+  :: (Core.IsIndex (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.IsSync (ExceptT Core.IndexerError IO) TestEvent indexer)
+  => (Core.Rollbackable (ExceptT Core.IndexerError IO) TestEvent indexer)
   => (indexer TestEvent -> SQL.Connection)
   -> (SQL.Connection -> ExceptT Core.IndexerError IO (indexer TestEvent))
   -> Gen [Item TestEvent]
@@ -998,7 +1029,11 @@ resumeSQLiteLastSyncTest
 resumeSQLiteLastSyncTest runner =
   Tasty.testProperty "SQLiteIndexer - stop and restart restore lastSyncPoint" $
     Test.withMaxSuccess 5000 $
-      resumeLastSyncProperty (view Core.handle) sqliteModelIndexer (view defaultChain <$> Test.arbitrary) runner
+      resumeLastSyncProperty
+        (view Core.handle)
+        sqliteModelIndexer
+        (view fullChain <$> Test.arbitrary)
+        runner
 
 resumeMixedLastSyncTest
   :: IndexerTestRunner
@@ -1009,11 +1044,15 @@ resumeMixedLastSyncTest
 resumeMixedLastSyncTest runner =
   Tasty.testProperty "MixedIndexer - stop and restart restore lastSyncPoint" $
     Test.withMaxSuccess 5000 $
-      resumeLastSyncProperty (view $ Core.inDatabase . Core.handle) mixedModelNoMemoryIndexer (view defaultChain <$> Test.arbitrary) runner
+      resumeLastSyncProperty
+        (view $ Core.inDatabase . Core.handle)
+        mixedModelNoMemoryIndexer
+        (view fullChain <$> Test.arbitrary)
+        runner
 
 compareIndexers
-  :: Monad m
-  => Show src
+  :: (Monad m)
+  => (Show src)
   => (src -> refIndexer event -> PropertyM m (refIndexer event))
   -> (src -> testIndexer event -> PropertyM m (testIndexer event))
   -> (refIndexer event -> testIndexer event -> PropertyM m Property)
@@ -1072,7 +1111,7 @@ memorySizeUpdateTest =
       memorySizeUpdateProperty (view defaultChain <$> Test.arbitrary)
 
 instance
-  Applicative m
+  (Applicative m)
   => Core.AppendResult m TestEvent ParityQuery Core.ListIndexer
   where
   appendResult p q indexer res = (++) <$> res <*> Core.query p q indexer
@@ -1099,9 +1138,10 @@ cacheUpdateProperty gen =
           flexibleIndexer'' <- GenM.run $ Core.addCacheFor OddTestEvent flexibleIndexer'
           GenM.run $ foldM (flip process) flexibleIndexer'' end
 
-      aggregate timedEvent xs =
-        let e = timedEvent ^. Core.event
-         in if odd e then e : xs else xs
+      aggregate timedEvent xs = do
+        case timedEvent ^. Core.event of
+          Just e -> if odd e then e : xs else xs
+          Nothing -> xs
 
       compareIndexed refIndexer testedIndexer = do
         refEvents <- GenM.run $ indexerEvents refIndexer
@@ -1125,14 +1165,14 @@ cacheUpdateTest =
 
 -- | A runner for a the 'WithTransform' tranformer
 withTransformRunner
-  :: Monad m
+  :: (Monad m)
   => (input -> output)
   -> IndexerTestRunner m output wrapped
   -> IndexerTestRunner m input (Core.WithTransform wrapped output)
 withTransformRunner f wRunner =
   IndexerTestRunner
     (wRunner ^. indexerRunner)
-    (Core.withTransform f <$> wRunner ^. indexerGenerator)
+    (Core.withTransform (pure . f) <$> wRunner ^. indexerGenerator)
 
 withTransformProperty
   :: Gen [Item TestEvent]
@@ -1144,7 +1184,7 @@ withTransformProperty gen =
           <$> Core.queryLatest' Core.allEvents indexer'
 
       modelEvents lastSync =
-        views model (fmap (abs . snd) . filter ((lastSync >=) . fst))
+        views model (mapMaybe (fmap abs . snd) . filter ((lastSync >=) . fst))
 
       runner = withTransformRunner abs listIndexerRunner
 
@@ -1167,7 +1207,7 @@ withTransformTest =
 
 -- | A runner for a the 'WithTransform' tranformer
 withAggregateRunner
-  :: Monad m
+  :: (Monad m)
   => (input -> output)
   -> IndexerTestRunner m output wrapped
   -> IndexerTestRunner m input (Core.WithAggregate wrapped output)
@@ -1187,8 +1227,14 @@ withAggregateProperty gen =
           . fromRight []
           <$> Core.queryLatest' Core.allEvents indexer'
 
+      modelAggregate (Just x) (Just y) = Just $ x + y
+      modelAggregate Nothing (Just y) = Just y
+      modelAggregate (Just x) Nothing = Just x
+      modelAggregate Nothing Nothing = Nothing
+
       modelEvents lastSync =
-        init . scanr (+) 0 <$> views model (fmap snd . filter ((lastSync >=) . fst))
+        catMaybes . init . scanr modelAggregate Nothing
+          <$> views model (fmap snd . filter ((lastSync >=) . fst))
 
       runner = withAggregateRunner id listIndexerRunner
 

@@ -93,7 +93,7 @@ rewindableIndex socketPath cpFromCli maybeEnd networkId = do
             signalQSemN (Marconi._barrier coordinator) 1
             event <- atomically $ readTChan workerChannel
             case event of
-              CS.RollForward bim _ -> do
+              CS.RollForward (bim, _, _) _ -> do
                 modifyMVar_ index (RI.insert $ NoopEvent $ Mafoc.blockChainPoint bim)
                 printAndDieWhenEnd end bim
                 loop index
@@ -103,7 +103,7 @@ rewindableIndex socketPath cpFromCli maybeEnd networkId = do
 
       void $ IO.withAsync (loop mIndexer) $ \a -> do
         IO.link a
-        CS.withChainSyncEventStream
+        CS.withChainSyncEventEpochNoStream
           socketPath
           networkId
           [fromMaybe C.ChainPointAtGenesis cpFromCli]

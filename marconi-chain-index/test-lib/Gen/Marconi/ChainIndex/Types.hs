@@ -1,4 +1,5 @@
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TupleSections #-}
 
 module Gen.Marconi.ChainIndex.Types (
   nonEmptySubset,
@@ -12,6 +13,7 @@ module Gen.Marconi.ChainIndex.Types (
   genExecutionUnits,
   genSlotNo,
   genTxBodyContentWithTxInsCollateral,
+  genTxBodyContentForPlutusScripts,
   genTxBodyWithTxIns,
   genTxIndex,
   genWitnessAndHashInEra,
@@ -65,10 +67,10 @@ nonEmptySubset s = do
   sub <- Gen.subset s
   pure $ Set.singleton e <> sub
 
-genSlotNo :: Hedgehog.MonadGen m => m C.SlotNo
+genSlotNo :: (Hedgehog.MonadGen m) => m C.SlotNo
 genSlotNo = C.SlotNo <$> Gen.word64 (Range.linear 10 1000)
 
-genBlockNo :: Hedgehog.MonadGen m => m C.BlockNo
+genBlockNo :: (Hedgehog.MonadGen m) => m C.BlockNo
 genBlockNo = C.BlockNo <$> Gen.word64 (Range.linear 100 1000)
 
 validByteSizeLength :: Int
@@ -78,7 +80,7 @@ validByteSizeLength = 32
  "almost" because the 'ChainTip' of the events is always 'ChainTipAtGenesis'.
 -}
 genChainSyncEvents
-  :: Hedgehog.MonadGen m
+  :: (Hedgehog.MonadGen m)
   => (a -> C.ChainPoint)
   -- ^ extract the chainpoint from the event
   -> (a -> m a)
@@ -92,7 +94,8 @@ genChainSyncEvents
   -> m [ChainSyncEvent a]
 genChainSyncEvents getChainPoint f start lo hi = do
   nbOfEvents <- Gen.word64 $ Range.linear lo hi
-  reverse . toList <$> evalStateT (go nbOfEvents (RollForward start C.ChainTipAtGenesis :| [])) (start :| [])
+  reverse . toList
+    <$> evalStateT (go nbOfEvents (RollForward start C.ChainTipAtGenesis :| [])) (start :| [])
   where
     go n xs
       | n <= 0 = pure xs
@@ -101,7 +104,7 @@ genChainSyncEvents getChainPoint f start lo hi = do
           go (n - 1) (cons next xs)
 
 genChainSyncEvent
-  :: Hedgehog.MonadGen m
+  :: (Hedgehog.MonadGen m)
   => (a -> C.ChainPoint)
   -> (a -> m a)
   -> StateT (NonEmpty a) m (ChainSyncEvent a)
@@ -124,7 +127,7 @@ genChainSyncEvent getChainPoint f = do
     genRollForward x = RollForward <$> f x <*> pure C.ChainTipAtGenesis
 
 genBlockHeader
-  :: Hedgehog.MonadGen m
+  :: (Hedgehog.MonadGen m)
   => m C.BlockNo
   -> m C.SlotNo
   -> m C.BlockHeader
@@ -145,7 +148,7 @@ genChainPoints b e = do
   mapM (\s -> C.ChainPoint (C.SlotNo s) <$> genHashBlockHeader) [1 .. maxSlots]
 
 genChainPoint'
-  :: Hedgehog.MonadGen m
+  :: (Hedgehog.MonadGen m)
   => m C.BlockNo
   -> m C.SlotNo
   -> m C.ChainPoint
@@ -153,7 +156,7 @@ genChainPoint' genB genS = do
   (C.BlockHeader sn hsh _) <- genBlockHeader genB genS
   pure $ C.ChainPoint sn hsh
 
-genChainPoint :: Hedgehog.MonadGen m => m C.ChainPoint
+genChainPoint :: (Hedgehog.MonadGen m) => m C.ChainPoint
 genChainPoint =
   Gen.frequency
     [ (95, genChainPoint' genBlockNo genSlotNo)
@@ -164,7 +167,7 @@ genTxIndex :: Gen C.TxIx
 genTxIndex = C.TxIx . fromIntegral <$> Gen.word16 Range.constantBounded
 
 genTxBodyWithTxIns
-  :: C.IsCardanoEra era
+  :: (C.IsCardanoEra era)
   => C.CardanoEra era
   -> [(C.TxIn, C.BuildTxWith C.BuildTx (C.Witness C.WitCtxTxIn era))]
   -> C.TxInsCollateral era
@@ -182,13 +185,81 @@ genTxBodyContentWithTxInsCollateral
   -> Gen (C.TxBodyContent C.BuildTx era)
 genTxBodyContentWithTxInsCollateral era txIns txInsCollateral = do
   txbody <- CGen.genTxBodyContent era
-  txProtocolParams <- C.BuildTxWith . Just <$> CGen.genProtocolParameters
+  initialPP <- CGen.genProtocolParameters C.BabbageEra
+  let txProtocolParams =
+        C.BuildTxWith $
+          Just $
+            initialPP
+              { C.protocolParamUTxOCostPerWord = Just 1
+              , C.protocolParamUTxOCostPerByte = Just 1
+              , C.protocolParamPrices = Just $ C.ExecutionUnitPrices 1 1
+              , C.protocolParamMaxTxExUnits = Just $ C.ExecutionUnits 1 1
+              , C.protocolParamMaxBlockExUnits = Just $ C.ExecutionUnits 1 1
+              , C.protocolParamMaxValueSize = Just 1
+              , C.protocolParamCollateralPercent = Just 1
+              , C.protocolParamMaxCollateralInputs = Just 1
+              }
   pure $
     txbody
       { C.txIns
       , C.txInsCollateral
       , C.txProtocolParams
       }
+
+genTxBodyContentForPlutusScripts :: Gen (C.TxBodyContent C.BuildTx C.BabbageEra)
+genTxBodyContentForPlutusScripts = do
+  txIns <-
+    map (,C.BuildTxWith (C.KeyWitness C.KeyWitnessForSpending))
+      <$> Gen.list (Range.constant 1 10) CGen.genTxIn
+  txInsCollateral <-
+    C.TxInsCollateral C.CollateralInBabbageEra <$> Gen.list (Range.linear 1 10) CGen.genTxIn
+  let txInsReference = C.TxInsReferenceNone
+  txOuts <- Gen.list (Range.constant 1 10) (genTxOutTxContext C.BabbageEra)
+  let txTotalCollateral = C.TxTotalCollateralNone
+  let txReturnCollateral = C.TxReturnCollateralNone
+  txFee <- genTxFee C.BabbageEra
+  let txValidityRange = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInBabbageEra)
+  let txMetadata = C.TxMetadataNone
+  let txAuxScripts = C.TxAuxScriptsNone
+  let txExtraKeyWits = C.TxExtraKeyWitnessesNone
+  txProtocolParams <- C.BuildTxWith . Just <$> genProtocolParametersForPlutusScripts
+  let txWithdrawals = C.TxWithdrawalsNone
+  let txCertificates = C.TxCertificatesNone
+  let txUpdateProposal = C.TxUpdateProposalNone
+  let txMintValue = C.TxMintNone
+  let txScriptValidity = C.TxScriptValidity C.TxScriptValiditySupportedInBabbageEra C.ScriptValid
+  let txGovernanceActions = C.TxGovernanceActionsNone
+  let txVotes = C.TxVotesNone
+
+  pure $
+    C.TxBodyContent
+      { C.txIns
+      , C.txInsCollateral
+      , C.txInsReference
+      , C.txOuts
+      , C.txTotalCollateral
+      , C.txReturnCollateral
+      , C.txFee
+      , C.txValidityRange
+      , C.txMetadata
+      , C.txAuxScripts
+      , C.txExtraKeyWits
+      , C.txProtocolParams
+      , C.txWithdrawals
+      , C.txCertificates
+      , C.txUpdateProposal
+      , C.txMintValue
+      , C.txScriptValidity
+      , C.txGovernanceActions
+      , C.txVotes
+      }
+  where
+    -- Copied from cardano-api. Delete when this function is reexported
+    genTxFee :: C.CardanoEra era -> Gen (C.TxFee era)
+    genTxFee era =
+      case C.txFeesExplicitInEra era of
+        Left supported -> pure (C.TxFeeImplicit supported)
+        Right supported -> C.TxFeeExplicit supported <$> CGen.genLovelace
 
 genWitnessAndHashInEra :: C.CardanoEra era -> Gen (C.Witness C.WitCtxTxIn era, C.ScriptHash)
 genWitnessAndHashInEra era = do
@@ -315,7 +386,7 @@ genSimpleTxOutDatumHashTxContext era = case era of
 genHashScriptData :: Gen (C.Hash C.ScriptData)
 genHashScriptData = C.ScriptDataHash . unsafeMakeSafeHash . mkDummyHash <$> Gen.int (Range.linear 0 10)
   where
-    mkDummyHash :: forall h a. CRYPTO.HashAlgorithm h => Int -> CRYPTO.Hash h a
+    mkDummyHash :: forall h a. (CRYPTO.HashAlgorithm h) => Int -> CRYPTO.Hash h a
     mkDummyHash = coerce . CRYPTO.hashWithSerialiser @h CBOR.toCBOR
 
 genProtocolParametersForPlutusScripts :: Gen C.ProtocolParameters
@@ -341,8 +412,18 @@ genProtocolParametersForPlutusScripts =
     <*> pure Nothing -- Obsolete from babbage onwards
     <*> pure
       ( Map.fromList
-          [ (C.AnyPlutusScriptVersion C.PlutusScriptV1, C.CostModel $ Map.elems $ fromMaybe (error "Ledger.Params: defaultCostModelParams is broken") defaultCostModelParams)
-          , (C.AnyPlutusScriptVersion C.PlutusScriptV2, C.CostModel $ Map.elems $ fromMaybe (error "Ledger.Params: defaultCostModelParams is broken") defaultCostModelParams)
+          [
+            ( C.AnyPlutusScriptVersion C.PlutusScriptV1
+            , C.CostModel $
+                Map.elems $
+                  fromMaybe (error "Ledger.Params: defaultCostModelParams is broken") defaultCostModelParams
+            )
+          ,
+            ( C.AnyPlutusScriptVersion C.PlutusScriptV2
+            , C.CostModel $
+                Map.elems $
+                  fromMaybe (error "Ledger.Params: defaultCostModelParams is broken") defaultCostModelParams
+            )
           ]
       )
     <*> (Just <$> genExecutionUnitPrices)
@@ -401,5 +482,5 @@ genEpochNo = C.EpochNo <$> Gen.word64 (Range.linear 0 10)
 genPoolId :: Gen (C.Hash C.StakePoolKey)
 genPoolId = C.StakePoolKeyHash . KeyHash . mkDummyHash <$> Gen.int (Range.linear 0 10)
   where
-    mkDummyHash :: forall h a. CRYPTO.HashAlgorithm h => Int -> CRYPTO.Hash h a
+    mkDummyHash :: forall h a. (CRYPTO.HashAlgorithm h) => Int -> CRYPTO.Hash h a
     mkDummyHash = coerce . CRYPTO.hashWithSerialiser @h CBOR.toCBOR

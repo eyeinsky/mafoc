@@ -5,6 +5,7 @@
 -}
 module Marconi.Core.Experiment.Class (
   IsIndex (..),
+  indexIfJust,
   indexEither,
   indexAllEither,
   indexAllDescendingEither,
@@ -21,9 +22,11 @@ module Marconi.Core.Experiment.Class (
   HasGenesis (..),
 ) where
 
+import Control.Lens ((^.))
+import Control.Monad ((<=<))
 import Control.Monad.Except (ExceptT, MonadError, runExceptT)
 import Data.Foldable (foldlM, foldrM)
-import Marconi.Core.Experiment.Type (Point, QueryError, Result, Timed)
+import Marconi.Core.Experiment.Type (Point, QueryError, Result, Timed, point)
 
 -- IsIndex
 
@@ -34,11 +37,11 @@ import Marconi.Core.Experiment.Type (Point, QueryError, Result, Timed)
      * @event@ the indexed events
      * @m@ the monad in which our indexer operates
 -}
-class Monad m => IsIndex m event indexer where
+class (Monad m) => IsIndex m event indexer where
   -- | index an event at a given point in time
   index
-    :: Eq (Point event)
-    => Timed (Point event) event
+    :: (Eq (Point event))
+    => Timed (Point event) (Maybe event)
     -> indexer event
     -> m (indexer event)
 
@@ -47,7 +50,7 @@ class Monad m => IsIndex m event indexer where
   -- The events must be sorted in ascending order (the most recent first)
   indexAll
     :: (Ord (Point event), Traversable f)
-    => f (Timed (Point event) event)
+    => f (Timed (Point event) (Maybe event))
     -> indexer event
     -> m (indexer event)
   indexAll = flip $ foldlM (flip index)
@@ -57,12 +60,29 @@ class Monad m => IsIndex m event indexer where
   -- The events must be sorted in descending order (the most recent first)
   indexAllDescending
     :: (Ord (Point event), Traversable f)
-    => f (Timed (Point event) event)
+    => f (Timed (Point event) (Maybe event))
     -> indexer event
     -> m (indexer event)
   indexAllDescending = flip $ foldrM index
 
   {-# MINIMAL index #-}
+
+{- | If the event is @Nothing@, just updat the last sync event.
+ Otherwise, store the event and update the last sync event.
+-}
+indexIfJust
+  :: (IsIndex m event indexer)
+  => (Timed (Point event) event -> indexer event -> m (indexer event))
+  -- ^ the function that adds the event
+  -> (Point event -> indexer event -> m (indexer event))
+  -- ^ the function that update the last point, called in any case
+  -> Timed (Point event) (Maybe event)
+  -> indexer event
+  -> m (indexer event)
+indexIfJust appendEvent updateLatest timedEvent =
+  case sequence timedEvent of
+    Nothing -> updateLatest (timedEvent ^. point)
+    Just e -> updateLatest (timedEvent ^. point) <=< appendEvent e
 
 {- | Like @index@, but internalise its error in the result.
 
@@ -73,7 +93,7 @@ indexEither
   :: ( IsIndex (ExceptT err m) event indexer
      , Eq (Point event)
      )
-  => Timed (Point event) event
+  => Timed (Point event) (Maybe event)
   -> indexer event
   -> m (Either err (indexer event))
 indexEither evt = runExceptT . index evt
@@ -84,7 +104,7 @@ indexAllEither
      , Traversable f
      , Ord (Point event)
      )
-  => f (Timed (Point event) event)
+  => f (Timed (Point event) (Maybe event))
   -> indexer event
   -> m (Either err (indexer event))
 indexAllEither evt = runExceptT . indexAll evt
@@ -95,7 +115,7 @@ indexAllDescendingEither
      , Traversable f
      , Ord (Point event)
      )
-  => f (Timed (Point event) event)
+  => f (Timed (Point event) (Maybe event))
   -> indexer event
   -> m (Either err (indexer event))
 indexAllDescendingEither evt = runExceptT . indexAllDescending evt
@@ -109,7 +129,7 @@ indexAllDescendingEither evt = runExceptT . indexAllDescending evt
      * @m@ the monad in which our indexer operates
 -}
 class Rollbackable m event indexer where
-  rollback :: Ord (Point event) => Point event -> indexer event -> m (indexer event)
+  rollback :: (Ord (Point event)) => Point event -> indexer event -> m (indexer event)
 
 {- | We can reset an indexer, clearing all its content
 
@@ -117,7 +137,7 @@ class Rollbackable m event indexer where
      * @event@ the indexer events
      * @m@ the monad in which our indexer operates
 -}
-class HasGenesis (Point event) => Resetable m event indexer where
+class (HasGenesis (Point event)) => Resetable m event indexer where
   reset :: indexer event -> m (indexer event)
 
 -- Queryable
@@ -135,7 +155,7 @@ class Queryable m event query indexer where
   -- "With the knowledge you have at that point in time,
   --  what is your answer to this query?"
   query
-    :: Ord (Point event)
+    :: (Ord (Point event))
     => Point event
     -> query
     -> indexer event
@@ -143,8 +163,8 @@ class Queryable m event query indexer where
 
 -- | Like 'query', but internalise @QueryError@ in the result.
 query'
-  :: Queryable (ExceptT (QueryError query) m) event query indexer
-  => Ord (Point event)
+  :: (Queryable (ExceptT (QueryError query) m) event query indexer)
+  => (Ord (Point event))
   => Point event
   -> query
   -> indexer event
@@ -153,10 +173,10 @@ query' p q = runExceptT . query p q
 
 -- | Like 'query', but use the latest point of the indexer instead of a provided one
 queryLatest
-  :: Queryable m event query indexer
-  => IsSync m event indexer
-  => MonadError (QueryError query) m
-  => Ord (Point event)
+  :: (Queryable m event query indexer)
+  => (IsSync m event indexer)
+  => (MonadError (QueryError query) m)
+  => (Ord (Point event))
   => query
   -> indexer event
   -> m (Result query)
@@ -166,10 +186,10 @@ queryLatest q indexer = do
 
 -- | Like 'query\'', but use the latest point of the indexer instead of a provided one
 queryLatest'
-  :: Queryable (ExceptT (QueryError query) m) event query indexer
-  => IsSync m event indexer
-  => Monad m
-  => Ord (Point event)
+  :: (Queryable (ExceptT (QueryError query) m) event query indexer)
+  => (IsSync m event indexer)
+  => (Monad m)
+  => (Ord (Point event))
   => query
   -> indexer event
   -> m (Either (QueryError query) (Result query))
@@ -180,7 +200,7 @@ queryLatest' q indexer = do
 -- | The indexer can take a result and complete it with its events
 class AppendResult m event query indexer where
   appendResult
-    :: Ord (Point event)
+    :: (Ord (Point event))
     => Point event
     -> query
     -> indexer event
@@ -196,7 +216,7 @@ class IsSync m event indexer where
   -- | Last sync of the indexer
   lastSyncPoint :: indexer event -> m (Point event)
 
--- | Check if the given point is ahead of the last syncPoint of an indexer,
+-- | Check if the given point is ahead of the last syncPoint of an indexer
 isAheadOfSync
   :: (Ord (Point event), IsSync m event indexer, Functor m)
   => Point event

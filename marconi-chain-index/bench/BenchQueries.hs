@@ -32,7 +32,15 @@ import Cardano.Api qualified as C
 import Cardano.Chain.Slotting (EpochSlots (EpochSlots))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race_)
-import Control.Concurrent.STM (STM, TMVar, atomically, newEmptyTMVar, putTMVar, readTMVar, tryTakeTMVar)
+import Control.Concurrent.STM (
+  STM,
+  TMVar,
+  atomically,
+  newEmptyTMVar,
+  putTMVar,
+  readTMVar,
+  tryTakeTMVar,
+ )
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy (ByteString)
@@ -42,6 +50,7 @@ import Data.Word (Word64)
 import Database.SQLite.Simple (FromRow (fromRow), field, toRow)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.FromField (FromField)
+import Database.SQLite.Simple.QQ (sql)
 import Database.SQLite.Simple.ToField (ToField)
 import Database.SQLite.Simple.ToRow (ToRow)
 import GHC.Generics (Generic)
@@ -51,16 +60,20 @@ import Marconi.ChainIndex.Indexers.Utxo (
   Interval (LessThanOrEqual),
   QueryUtxoByAddress (QueryUtxoByAddress),
   StorableQuery (QueryUtxoByAddressWrapper),
-  StorableResult (UtxoResult, getUtxoResult),
+  StorableResult (UtxoByAddressResult, getUtxoByAddressResult),
   UtxoHandle,
   UtxoIndexer,
  )
-import Marconi.ChainIndex.Types (IndexingDepth (MinIndexingDepth), UtxoIndexerConfig (UtxoIndexerConfig), ucEnableUtxoTxOutRef, ucTargetAddresses)
+import Marconi.ChainIndex.Types (
+  IndexingDepth (MinIndexingDepth),
+  UtxoIndexerConfig (UtxoIndexerConfig),
+  ucEnableUtxoTxOutRef,
+  ucTargetAddresses,
+ )
 import Marconi.Core.Storable qualified as Storable
 import System.Environment (getEnv)
 import System.FilePath ((</>))
 import Test.Tasty.Bench (bench, bgroup, defaultMain, nfIO)
-import Text.RawString.QQ (r)
 
 data FrequencyRow a = FrequencyRow
   { _frequencyRowValue :: !a
@@ -133,7 +146,7 @@ tests databaseDir indexerTVar = do
   (addressesWithMostUtxos :: [FrequencyRow C.AddressAny]) <-
     SQL.query
       c
-      [r|SELECT address, COUNT(address) as frequency
+      [sql|SELECT address, COUNT(address) as frequency
            FROM unspent_transactions u
            LEFT JOIN spent s
            ON u.txId = s.txInTxId
@@ -155,7 +168,7 @@ tests databaseDir indexerTVar = do
           . LessThanOrEqual
           $ C.SlotNo 2000000 -- maxBound will create SQL.Integer overflow, see PLT 5937
   let countRows = \case
-        UtxoResult rows -> length rows
+        UtxoByAddressResult rows -> length rows
         _other -> 0
 
   noUtxos <- fmap countRows $ raiseException fetchUtxoOfAddressWithMostUtxos
@@ -169,13 +182,17 @@ tests databaseDir indexerTVar = do
     [ bgroup
         "UTXO indexer query performance"
         [ bench "Query address with most utxos and get result size" $
-            nfIO (raiseException $ fmap (length . getUtxoResult) fetchUtxoOfAddressWithMostUtxos)
+            nfIO (raiseException $ fmap (length . getUtxoByAddressResult) fetchUtxoOfAddressWithMostUtxos)
         , bench "Query address with most utxos and call 'show' on the result" $
-            nfIO (raiseException $ fmap (fmap show . getUtxoResult) fetchUtxoOfAddressWithMostUtxos)
+            nfIO (raiseException $ fmap (fmap show . getUtxoByAddressResult) fetchUtxoOfAddressWithMostUtxos)
         , bench "Query address with most utxos and encode result in JSON" $
-            nfIO (raiseException $ fmap (fmap Aeson.encode . getUtxoResult) fetchUtxoOfAddressWithMostUtxos)
+            nfIO
+              (raiseException $ fmap (fmap Aeson.encode . getUtxoByAddressResult) fetchUtxoOfAddressWithMostUtxos)
         , bench "Query address with most utxos and JSON encode/decode roundtrip the result" $
-            nfIO (raiseException $ fmap (encodeDecodeRoundTrip . getUtxoResult) fetchUtxoOfAddressWithMostUtxos)
+            nfIO
+              ( raiseException $
+                  fmap (encodeDecodeRoundTrip . getUtxoByAddressResult) fetchUtxoOfAddressWithMostUtxos
+              )
         ]
     ]
 
@@ -199,7 +216,7 @@ waitUntilSynced databaseDir nodeSocketPath = do
           C.LocalNodeConnectInfo
             { C.localConsensusModeParams = C.CardanoModeParams (EpochSlots 21600)
             , C.localNodeNetworkId = C.Testnet $ C.NetworkMagic 1 -- TODO This should be provded as a CLI param
-            , C.localNodeSocketPath = nodeSocketPath
+            , C.localNodeSocketPath = C.File nodeSocketPath
             }
       -- TODO This should change. We should not query the slotNo with SQLite directly, because:
       --   * we're getting "SQLite3 returned ErrorBusy"
@@ -208,12 +225,12 @@ waitUntilSynced databaseDir nodeSocketPath = do
       sns <-
         SQL.query
           c
-          [r|SELECT slotNo
+          [sql|SELECT slotNo
                    FROM unspent_transactions
                    ORDER BY slotNo DESC
                    LIMIT 1|]
           ()
-        :: IO [[Word64]]
+          :: IO [[Word64]]
       let maybeCurrentSyncedSlot = listToMaybe =<< listToMaybe sns
       case maybeCurrentSyncedSlot of
         Nothing -> go c

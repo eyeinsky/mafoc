@@ -6,7 +6,6 @@ module Marconi.ChainIndex.CLI where
 
 import Control.Applicative (optional, some)
 import Data.ByteString.Char8 qualified as C8
-import Data.Functor ((<&>))
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Maybe (fromMaybe)
@@ -61,27 +60,17 @@ chainPointParser =
         . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
         . C8.pack
 
-{- | Exit program with error
- Note, if the targetAddress parser fails, or is empty, there is nothing to do for the hotStore.
- In such case we should fail fast
--}
-fromEitherWithError :: (Show e) => Either e a -> a
-fromEitherWithError v = case v of
-  Left e ->
-    error $ "\n!!!\n Abnormal Termination with Error: " <> show e <> "\n!!!\n"
-  Right accounts -> accounts
-
 -- TODO: `pNetworkId` and `pTestnetMagic` are copied from
 -- https://github.com/input-output-hk/cardano-node/blob/988c93085022ed3e2aea5d70132b778cd3e622b9/cardano-cli/src/Cardano/CLI/Shelley/Parsers.hs#L2009-L2027
 -- Use them from there whenever they are exported.
-pNetworkId :: Opt.Parser C.NetworkId
-pNetworkId = pMainnet Opt.<|> fmap C.Testnet pTestnetMagic
+pNetworkIdParser :: Opt.Parser C.NetworkId
+pNetworkIdParser = pMainnetParser Opt.<|> fmap C.Testnet pTestnetMagicParser
 
-pMainnet :: Opt.Parser C.NetworkId
-pMainnet = Opt.flag' C.Mainnet (Opt.long "mainnet" <> Opt.help "Use the mainnet magic id.")
+pMainnetParser :: Opt.Parser C.NetworkId
+pMainnetParser = Opt.flag' C.Mainnet (Opt.long "mainnet" <> Opt.help "Use the mainnet magic id.")
 
-pTestnetMagic :: Opt.Parser C.NetworkMagic
-pTestnetMagic =
+pTestnetMagicParser :: Opt.Parser C.NetworkMagic
+pTestnetMagicParser =
   C.NetworkMagic
     <$> Opt.option
       Opt.auto
@@ -93,21 +82,20 @@ pTestnetMagic =
 {- | parses CLI params to valid NonEmpty list of Shelley addresses
  We error out if there are any invalid addresses
 -}
-multiAddresses :: Opt.Mod Opt.OptionFields [C.Address C.ShelleyAddr] -> Opt.Parser TargetAddresses
-multiAddresses desc = NonEmpty.fromList . concat <$> some single
+multiAddressesParser
+  :: Opt.Mod Opt.OptionFields [C.Address C.ShelleyAddr] -> Opt.Parser TargetAddresses
+multiAddressesParser = fmap (NonEmpty.fromList . concat) . some . single
   where
-    single :: Opt.Parser [C.Address C.ShelleyAddr]
-    single = Opt.option (Opt.str <&> parseCardanoAddresses) desc
+    single :: Opt.Mod Opt.OptionFields [C.Address C.ShelleyAddr] -> Opt.Parser [C.Address C.ShelleyAddr]
+    single = Opt.option (Opt.str >>= fmap nub . traverse parseCardanoAddresses . Text.words)
 
     deserializeToCardano :: Text -> Either C.Bech32DecodeError (C.Address C.ShelleyAddr)
     deserializeToCardano = C.deserialiseFromBech32 (C.proxyToAsType Proxy)
 
-    parseCardanoAddresses :: String -> [C.Address C.ShelleyAddr]
-    parseCardanoAddresses =
-      nub
-        . fromEitherWithError
-        . traverse (deserializeToCardano . Text.pack)
-        . words
+    parseCardanoAddresses :: Text -> Opt.ReadM (C.Address C.ShelleyAddr)
+    parseCardanoAddresses arg = case deserializeToCardano arg of
+      Left _ -> fail $ "Invalid address (not a valid Bech32 address representation): " <> show arg
+      Right addr -> pure addr
 
 {- | This executable is meant to exercise a set of indexers (for now datumhash -> datum)
      against the mainnet (meant to be used for testing).
@@ -118,7 +106,7 @@ multiAddresses desc = NonEmpty.fromList . concat <$> some single
      > select slotNo, datumHash, datum from kv_datumhsh_datum where slotNo = 39920450;
      39920450|679a55b523ff8d61942b2583b76e5d49498468164802ef1ebe513c685d6fb5c2|X(002f9787436835852ea78d3c45fc3d436b324184
 -}
-data Options = Options
+data CommonOptions = CommonOptions
   { optionsSocketPath :: !String
   -- ^ POSIX socket file to communicate with cardano node
   , optionsNetworkId :: !NetworkId
@@ -127,6 +115,11 @@ data Options = Options
   -- ^ Required depth of a block before it is indexed
   , optionsMinIndexingDepth :: !IndexingDepth
   -- ^ Required depth of a block before it is indexed
+  }
+  deriving (Show)
+
+data Options = Options
+  { commonOptions :: !CommonOptions
   , optionsDbPath :: !FilePath
   -- ^ Directory path containing the SQLite database files
   , optionsEnableUtxoTxOutRef :: !Bool
@@ -155,17 +148,26 @@ parseOptions = getGitSha >>= Opt.execParser . programParser
 programParser :: String -> Opt.ParserInfo Options
 programParser gitSha =
   Opt.info
-    (Opt.helper <*> commonVersionOption gitSha <*> optionsParser)
+    (Opt.helper <*> commonVersionOptionParser gitSha <*> optionsParser)
     (marconiDescr "marconi")
+
+commonOptionsParser :: Opt.Parser CommonOptions
+commonOptionsParser =
+  CommonOptions
+    <$> commonSocketPathParser
+    <*> pNetworkIdParser
+    <*> chainPointParser
+    <*> commonMinIndexingDepthParser
 
 optionsParser :: Opt.Parser Options
 optionsParser =
   Options
-    <$> commonSocketPath
-    <*> pNetworkId
-    <*> chainPointParser
-    <*> commonMinIndexingDepth
-    <*> commonDbDir
+    <$> commonOptionsParser
+    <*> commonDbDirParser
+    <*> Opt.switch
+      ( Opt.long "enable-txoutref"
+          <> Opt.help "enable txout ref storage."
+      )
     <*> Opt.switch
       ( Opt.long "disable-utxo"
           <> Opt.help "disable utxo indexers."
@@ -173,10 +175,6 @@ optionsParser =
     <*> Opt.switch
       ( Opt.long "disable-address-datum"
           <> Opt.help "disable address->datum indexers."
-      )
-    <*> Opt.switch
-      ( Opt.long "disable-datum"
-          <> Opt.help "disable datum indexers."
       )
     <*> Opt.switch
       ( Opt.long "disable-script-tx"
@@ -190,8 +188,8 @@ optionsParser =
       ( Opt.long "disable-mintburn"
           <> Opt.help "disable mint/burn indexers."
       )
-    <*> commonMaybeTargetAddress
-    <*> commonMaybeTargetAsset
+    <*> commonMaybeTargetAddressParser
+    <*> commonMaybeTargetAssetParser
     <*> ( optional $
             Opt.strOption $
               Opt.long "node-config-path"
@@ -232,8 +230,8 @@ mintBurnDbPath o =
 
 -- * Common CLI parsers for other derived programs.
 
-commonSocketPath :: Opt.Parser String
-commonSocketPath =
+commonSocketPathParser :: Opt.Parser String
+commonSocketPathParser =
   Opt.strOption $
     Opt.long "socket-path"
       <> Opt.short 's'
@@ -241,16 +239,16 @@ commonSocketPath =
       <> Opt.metavar "FILE-PATH"
 
 -- | Root directory for the SQLite storage of all the indexers
-commonDbDir :: Opt.Parser String
-commonDbDir =
+commonDbDirParser :: Opt.Parser String
+commonDbDirParser =
   Opt.strOption $
     Opt.short 'd'
       <> Opt.long "db-dir"
       <> Opt.metavar "DIR"
-      <> Opt.help "Directory path where all SQLite databases are located."
+      <> Opt.help "Directory path where all Marconi-related SQLite databases are located."
 
-commonVersionOption :: String -> Opt.Parser (a -> a)
-commonVersionOption sha = Opt.infoOption sha $ Opt.long "version" <> Opt.help "Show git SHA"
+commonVersionOptionParser :: String -> Opt.Parser (a -> a)
+commonVersionOptionParser sha = Opt.infoOption sha $ Opt.long "version" <> Opt.help "Show git SHA"
 
 getGitSha :: IO String
 getGitSha = fromMaybe "GIHUB_SHA environment variable not set!" <$> lookupEnv "GITHUB_SHA"
@@ -260,10 +258,12 @@ marconiDescr programName =
   Opt.fullDesc
     <> Opt.progDesc programName
     <> Opt.header
-      (programName <> " - a lightweight customizable solution for indexing and querying the Cardano blockchain")
+      ( programName
+          <> " - a lightweight customizable solution for indexing and querying the Cardano blockchain"
+      )
 
-commonMaybePort :: Opt.Parser (Maybe Int)
-commonMaybePort =
+commonMaybePortParser :: Opt.Parser (Maybe Int)
+commonMaybePortParser =
   Opt.optional $
     Opt.option Opt.auto $
       Opt.long "http-port"
@@ -273,10 +273,10 @@ commonMaybePort =
 {- | Parse the addresses to index. Addresses should be given in Bech32 format
  Several addresses can be given in a single string, if they are separated by a space
 -}
-commonMaybeTargetAddress :: Opt.Parser (Maybe TargetAddresses)
-commonMaybeTargetAddress =
+commonMaybeTargetAddressParser :: Opt.Parser (Maybe TargetAddresses)
+commonMaybeTargetAddressParser =
   Opt.optional $
-    multiAddresses $
+    multiAddressesParser $
       Opt.long "addresses-to-index"
         <> Opt.short 'a'
         <> Opt.metavar "BECH32-ADDRESS"
@@ -291,12 +291,12 @@ commonMaybeTargetAddress =
  be matched.
  Several assets can be given in a single string if you separate them with a space.
 -}
-commonMaybeTargetAsset :: Opt.Parser (Maybe (NonEmpty (C.PolicyId, Maybe C.AssetName)))
-commonMaybeTargetAsset =
+commonMaybeTargetAssetParser :: Opt.Parser (Maybe (NonEmpty (C.PolicyId, Maybe C.AssetName)))
+commonMaybeTargetAssetParser =
   let assetPair
         :: Opt.Mod Opt.OptionFields [(C.PolicyId, Maybe C.AssetName)]
         -> Opt.Parser [(C.PolicyId, Maybe C.AssetName)]
-      assetPair = Opt.option $ Opt.str >>= traverse parseAsset . Text.words
+      assetPair = Opt.option $ Opt.str >>= fmap nub . traverse parseAsset . Text.words
    in Opt.optional $
         (fmap (NonEmpty.fromList . concat) . some . assetPair) $
           Opt.long "match-asset-id"
@@ -306,7 +306,7 @@ commonMaybeTargetAsset =
               \ i.e \"--match-asset-id assetname-1.policy-id-1 --match-asset-id policy-id-2 ...\"\
               \ or \"--match-asset-id \"assetname-1.policy-id-1 policy-id-2\" ...\""
 
--- | Asset parser, see @commonMaybeTargetAsset@ for more info.
+-- | Asset parser, see @commonMaybeTargetAssetParser@ for more info.
 parseAsset :: Text -> Opt.ReadM (C.PolicyId, Maybe C.AssetName)
 parseAsset arg = do
   let parseAssetName :: Text -> Opt.ReadM C.AssetName
@@ -323,19 +323,19 @@ parseAsset arg = do
       fail $ "Invalid format: expected POLICY_ID[,ASSET_NAME]. Got " <> Text.unpack arg
 
 -- | Allow the user to specify how deep must be a block before we index it.
-commonMinIndexingDepth :: Opt.Parser IndexingDepth
-commonMinIndexingDepth =
+commonMinIndexingDepthParser :: Opt.Parser IndexingDepth
+commonMinIndexingDepthParser =
   let maxIndexingDepth =
         Opt.flag'
           MaxIndexingDepth
-          (Opt.long "max-indexing-depth" <> Opt.help "Only index events that are not volatile")
+          (Opt.long "max-indexing-depth" <> Opt.help "Only index blocks that are not rollbackable")
       givenIndexingDepth =
         MinIndexingDepth
           <$> Opt.option
             Opt.auto
             ( Opt.long "min-indexing-depth"
                 <> Opt.metavar "NATURAL"
-                <> Opt.help "Depth of an event before it is indexed"
+                <> Opt.help "Depth of a block before it is indexed in relation to the tip of the local connected node"
                 <> Opt.value 0
             )
    in maxIndexingDepth Opt.<|> givenIndexingDepth

@@ -22,9 +22,8 @@ import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoin
                    LocalChainsyncConfig (batchSize_, concurrencyPrimitive_, interval_, logging_, nodeInfo, pipelineSize_),
                    LocalChainsyncRuntime (LocalChainsyncRuntime), NodeConfig, defaultTableName, initializeSqlite,
                    nodeFolderToConfigPath, nodeInfoSocketPath)
-import Mafoc.Upstream (getNetworkId)
+import Mafoc.Upstream (getNetworkId, querySecurityParam)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
-import Marconi.ChainIndex.Utils qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
   { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
@@ -94,9 +93,10 @@ instance Indexer EpochStakepoolSize where
           Right (_socketPath, nodeConfig') -> nodeConfig'
         socketPath = nodeInfoSocketPath nodeInfo'
     networkId <- getNetworkId nodeConfig
-    securityParam' <- Marconi.querySecurityParam networkId socketPath
+    let lnc = CS.mkLocalNodeConnectInfo networkId socketPath
+    securityParam' <- querySecurityParam lnc
     let chainsyncRuntime = LocalChainsyncRuntime
-          (CS.mkLocalNodeConnectInfo networkId socketPath)
+          lnc
           (interval_ chainsyncConfig)
           securityParam'
           (logging_ chainsyncConfig)
