@@ -199,7 +199,7 @@ simpleCmd str a = O.command str $ O.info (pure a) mempty
 opt :: Char -> String -> String -> O.Mod O.OptionFields a
 opt short long help = O.long long <> O.short short <> O.help help
 
-longOpt :: String -> String -> O.Mod O.OptionFields a
+longOpt :: O.HasName f => String -> String -> O.Mod f a
 longOpt long help = O.long long <> O.help help
 
 parseSlotNo :: Char -> String -> String -> O.Parser C.SlotNo
