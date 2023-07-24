@@ -57,7 +57,7 @@ instance Indexer BlockBasics where
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
-  checkpoint Runtime{sqlConnection} _state slotNoBhh = setCheckpointSqlite sqlConnection "blockbasics" slotNoBhh
+  checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
 
 type Row = (Word64, C.Hash C.BlockHeader, Int)
 

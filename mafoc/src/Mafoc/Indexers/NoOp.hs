@@ -27,12 +27,15 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
 instance Indexer NoOp where
   type Event NoOp = ()
   data State NoOp = EmptyState
-  data Runtime NoOp = Runtime { sqlConnection :: SQL.Connection }
+  data Runtime NoOp = Runtime
+    { sqlConnection :: SQL.Connection
+    , tableName     :: String
+    }
   toEvent _runtime _state _blockInMode = pure (EmptyState, Nothing)
   initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName (\_ _ -> return ()) chainsyncRuntime trace
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon)
+    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
   persist _runtime _event = return ()
-  checkpoint Runtime{sqlConnection} _state slotNoBhh = setCheckpointSqlite sqlConnection "noop" slotNoBhh
+  checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh

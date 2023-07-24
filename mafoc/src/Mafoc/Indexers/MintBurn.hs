@@ -69,4 +69,4 @@ instance Indexer MintBurn where
   persistMany Runtime{sqlConnection, tableName} events = do
     Marconi.MintBurn.sqliteInsert sqlConnection tableName events
 
-  checkpoint Runtime{sqlConnection} _state slotNoBhh = setCheckpointSqlite sqlConnection "mintburn" slotNoBhh
+  checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
