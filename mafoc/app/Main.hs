@@ -11,7 +11,9 @@ import Cardano.Streaming.Callbacks qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (runIndexer)
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
+import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
+import Mafoc.Indexers.EpochState qualified as EpochState
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
 import Mafoc.Indexers.ScriptTx qualified as ScriptTx
@@ -27,6 +29,8 @@ main = printRollbackException $ Opt.execParser cmdParserInfo >>= \case
   MintBurn configFromCli -> runIndexer configFromCli
   NoOp configFromCli -> runIndexer configFromCli
   EpochStakepoolSize configFromCli -> runIndexer configFromCli
+  EpochNonce configFromCli -> runIndexer configFromCli
+  EpochState configFromCli -> runIndexer configFromCli
   ScriptTx configFromCli -> runIndexer configFromCli
 
 printRollbackException :: IO () -> IO ()
@@ -40,6 +44,8 @@ data Command
   | MintBurn MintBurn.MintBurn
   | NoOp NoOp.NoOp
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
+  | EpochNonce EpochNonce.EpochNonce
+  | EpochState EpochState.EpochState
   | ScriptTx ScriptTx.ScriptTx
   deriving Show
 
@@ -55,6 +61,8 @@ cmdParser = Opt.subparser
  <> Opt.command "mintburn" (MintBurn <$> MintBurn.parseCli)
  <> Opt.command "noop" (NoOp <$> NoOp.parseCli)
  <> Opt.command "epochstakepoolsize" (EpochStakepoolSize <$> EpochStakepoolSize.parseCli)
+ <> Opt.command "epochnonce" (EpochNonce <$> EpochNonce.parseCli)
+ <> Opt.command "epochstate" (EpochState <$> EpochState.parseCli)
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

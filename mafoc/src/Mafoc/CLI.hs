@@ -1,8 +1,6 @@
 module Mafoc.CLI where
 
-import Data.ByteString.Char8 qualified as C8
 import Data.List qualified as L
-import Data.Proxy (Proxy (Proxy))
 import Data.Word (Word32)
 import Numeric.Natural (Natural)
 import Options.Applicative ((<|>))
@@ -12,7 +10,7 @@ import Text.Read qualified as Read
 import Cardano.Api qualified as C
 import Mafoc.Core (ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig, NodeInfo,
-                   UpTo (CurrentTip, Infinity, SlotNo))
+                   UpTo (CurrentTip, Infinity, SlotNo), eitherParseHashBlockHeader, leftError, parseSlotNo_)
 import Marconi.ChainIndex.Types qualified as Marconi
 
 -- * Options
@@ -125,18 +123,8 @@ mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
 
 -- * String parsers
 
-parseSlotNo_ :: String -> Either String C.SlotNo
-parseSlotNo_ str = maybe (leftError "Can't read SlotNo" str) (Right . C.SlotNo) $ Read.readMaybe str
-
-leftError :: String -> String -> Either String a
-leftError label str = Left $ label <> ": '" <> str <> "'"
-
 maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
 maybeParseHashBlockHeader = either (const Nothing) Just . eitherParseHashBlockHeader
-
-eitherParseHashBlockHeader = C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy) . C8.pack
-
-eitherParseHashBlockHeader_ = either (Left . show) Right . eitherParseHashBlockHeader
 
 -- ** Interval
 

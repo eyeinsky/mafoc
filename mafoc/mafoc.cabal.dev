@@ -50,7 +50,9 @@ library
     Mafoc.Core
     Mafoc.Indexer.Class
     Mafoc.Indexers.BlockBasics
+    Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
+    Mafoc.Indexers.EpochState
     Mafoc.Indexers.MintBurn
     Mafoc.Indexers.NoOp
     Mafoc.Indexers.ScriptTx
@@ -75,6 +77,7 @@ library
     , iohk-monitoring
     , ouroboros-consensus
     , ouroboros-consensus-cardano
+    , cardano-ledger-shelley
 
   ------------------------
   -- Non-IOG dependencies
