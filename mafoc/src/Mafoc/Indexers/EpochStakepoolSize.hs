@@ -1,18 +1,27 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Mafoc.Indexers.EpochStakepoolSize where
 
-import Control.Monad.IO.Class (liftIO)
+import Data.Coerce (coerce)
+import Data.Function (on)
+import Data.List (intercalate, sortBy)
 import Data.Map.Strict qualified as M
+import Data.Maybe (mapMaybe)
 import Data.String (fromString)
+import Data.Text qualified as TS
+import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Options.Applicative qualified as Opt
+import System.Directory (listDirectory, removeFile)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Ouroboros.Consensus.Cardano.Block qualified as O
+import Ouroboros.Consensus.Config qualified as O
 import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 
@@ -20,8 +29,9 @@ import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
                    LocalChainsyncConfig (batchSize_, concurrencyPrimitive_, interval_, logging_, nodeInfo, pipelineSize_),
-                   LocalChainsyncRuntime (LocalChainsyncRuntime), NodeConfig, defaultTableName, initializeSqlite,
-                   nodeFolderToConfigPath, nodeInfoSocketPath)
+                   LocalChainsyncRuntime (LocalChainsyncRuntime), NodeConfig, defaultTableName,
+                   nodeFolderToConfigPath, nodeInfoSocketPath, from, sqliteOpen, SlotNoBhh, traceInfo
+                  )
 import Mafoc.Upstream (getNetworkId, querySecurityParam)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -92,30 +102,87 @@ instance Indexer EpochStakepoolSize where
           Left nodeFolder                  -> nodeFolderToConfigPath nodeFolder
           Right (_socketPath, nodeConfig') -> nodeConfig'
         socketPath = nodeInfoSocketPath nodeInfo'
+
     networkId <- getNetworkId nodeConfig
     let lnc = CS.mkLocalNodeConnectInfo networkId socketPath
     securityParam' <- querySecurityParam lnc
-    let chainsyncRuntime = LocalChainsyncRuntime
+    let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
+    sqlCon <- sqliteOpen dbPath
+    sqliteInit sqlCon tableName
+
+    (ledgerConfig, extLedgerState, startFrom) <- listExtLedgerStates "." >>= \case
+      -- A ledger state exists on disk, resume from there
+      (fn, (slotNo, bhh)) : _ -> do
+        cfg <- Marconi.getLedgerConfig nodeConfig
+        let O.ExtLedgerCfg topLevelConfig = cfg
+        extLedgerState <- Marconi.loadExtLedgerState (O.configCodec topLevelConfig) fn >>= \case
+          Right (_, extLedgerState) -> return extLedgerState
+          Left msg                  -> error $ "Error while deserialising file " <> fn <> ", error: " <> show msg
+        let cp = C.ChainPoint slotNo bhh
+        traceInfo trace $ "Found on-disk ledger state, resuming from: " <> show cp
+        return (cfg, extLedgerState, cp)
+      -- No existing ledger states, start from the beginning
+      [] -> do
+        (cfg, st) <- Marconi.getInitialExtLedgerState nodeConfig
+        traceInfo trace "No on-disk ledger state found, resuming from genesis"
+        return (cfg, st, C.ChainPointAtGenesis)
+
+    let chainsyncRuntime' = LocalChainsyncRuntime
           lnc
-          (interval_ chainsyncConfig)
+          ((interval_ chainsyncConfig) {from = startFrom})
           securityParam'
           (logging_ chainsyncConfig)
           (pipelineSize_ chainsyncConfig)
           (batchSize_ chainsyncConfig)
           (concurrencyPrimitive_ chainsyncConfig)
 
-    let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
-    (ledgerConfig, extLedgerState) <- liftIO $ Marconi.getInitialExtLedgerState nodeConfig
-    let maybeEpochNo = Marconi.getEpochNo extLedgerState
-    return (State extLedgerState maybeEpochNo, chainsyncRuntime', Runtime sqlCon tableName ledgerConfig)
+    return ( State extLedgerState $ Marconi.getEpochNo extLedgerState
+           , chainsyncRuntime'
+           , Runtime sqlCon tableName ledgerConfig)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
 
-  checkpoint _runtime _state _slotNoBhh = do
-    return ()
-  -- TODO: write ledger state, add row to checkpoint table; also load
-  -- this ledger state in initialize.
+  checkpoint Runtime{ledgerCfg, sqlConnection, tableName} State{extLedgerState} slotNoBhh = do
+    let O.ExtLedgerCfg topLevelConfig = ledgerCfg
+    putStrLn $ "Write ledger state"
+    Marconi.writeExtLedgerState (bhhToFileName slotNoBhh) (O.configCodec topLevelConfig) extLedgerState
+    putStrLn $ "Wrote ledger state"
+    mapM_ (removeFile . bhhToFileName) . drop 2 . map snd =<< listExtLedgerStates "."
+    putStrLn $ "Removed other files"
+
+-- * Ledger state checkpoint
+
+bhhToFileName :: SlotNoBhh -> FilePath
+bhhToFileName (slotNo, blockHeaderHash) = intercalate "_"
+  [ "ledgerState"
+  , show slotNo'
+  , TS.unpack (C.serialiseToRawBytesHexText blockHeaderHash)
+  ]
+  where
+    slotNo' = coerce slotNo :: Word64
+
+bhhFromFileName :: String -> Either String SlotNoBhh
+bhhFromFileName str = case splitOn '_' str of
+  _ : slotNoStr : blockHeaderHashHex : _ -> (,)
+    <$> Opt.parseSlotNo_ slotNoStr
+    <*> Opt.eitherParseHashBlockHeader_ blockHeaderHashHex
+  _ -> Left "Can't parse ledger state file name, must be <slot no> _ <block header hash>"
+  where
+
+splitOn :: Eq a => a -> [a] -> [[a]]
+splitOn x xs = case span (/= x) xs of
+  (prefix, _x : rest) -> prefix : recurse rest
+  (lastChunk, [])     -> [lastChunk]
+  where
+    recurse = splitOn x
+
+listExtLedgerStates :: FilePath -> IO [(FilePath, SlotNoBhh)]
+listExtLedgerStates dirPath = sortBy (flip compare `on` snd) . mapMaybe parse <$> listDirectory dirPath
+  where
+    parse :: FilePath -> Maybe (FilePath, SlotNoBhh)
+    parse fn = either (const Nothing) Just . fmap (fn,) $ bhhFromFileName fn
+
+-- * Sqlite
 
 sqliteInit :: SQL.Connection -> String -> IO ()
 sqliteInit c tableName = SQL.execute_ c $

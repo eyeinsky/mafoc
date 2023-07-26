@@ -132,10 +132,11 @@ leftError :: String -> String -> Either String a
 leftError label str = Left $ label <> ": '" <> str <> "'"
 
 maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
-maybeParseHashBlockHeader =
-  either (const Nothing) Just
-  . C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy)
-  . C8.pack
+maybeParseHashBlockHeader = either (const Nothing) Just . eitherParseHashBlockHeader
+
+eitherParseHashBlockHeader = C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy) . C8.pack
+
+eitherParseHashBlockHeader_ = either (Left . show) Right . eitherParseHashBlockHeader
 
 -- ** Interval
 
@@ -151,7 +152,7 @@ parseFrom str = case str of
     let (fromSlotNo, bhh) = L.span (/= ':') str
     slotNo <- parseSlotNo_ fromSlotNo
     blockHeaderHash <- case bhh of
-      ':' : str' -> maybe (leftError "Can't read block header hash" bhh) Right $ maybeParseHashBlockHeader str'
+      ':' : str' -> either (Left . show) Right $ eitherParseHashBlockHeader str'
       _          -> leftError "No block header hash" ""
     return $ C.ChainPoint slotNo blockHeaderHash
 

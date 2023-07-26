@@ -84,6 +84,7 @@ library
     , base                  >=4.9 && <5
     , bytestring
     , containers
+    , directory
     , filepath
     , optparse-applicative
     , prettyprinter

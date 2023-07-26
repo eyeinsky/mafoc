@@ -346,14 +346,13 @@ defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromM
 -- ** Initialise
 
 -- | Initialize sqlite: create connection, run init (e.g create
--- destination table), create checkpoints database if doesn't exist,
+-- destination table), create checkpoints table if doesn't exist,
 -- update interval in runtime config by whether there is anywhere to
 -- resume from.
 initializeSqlite
   :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> IO (SQL.Connection, LocalChainsyncRuntime)
 initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
-  sqlCon <- SQL.open dbPath
-  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
+  sqlCon <- sqliteOpen dbPath
   sqliteInit sqlCon tableName
   sqliteInitCheckpoints sqlCon
 
@@ -376,3 +375,9 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
   let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
 
   return (sqlCon, chainsyncRuntime')
+
+sqliteOpen :: FilePath -> IO SQL.Connection
+sqliteOpen dbPath = do
+  sqlCon <- SQL.open dbPath
+  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
+  return sqlCon
