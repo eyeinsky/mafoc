@@ -16,7 +16,8 @@ import Cardano.Api.Shelley qualified as C
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig, NodeConfig, initializeLedgerState, storeLedgerState)
+                   LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase,
+                   storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
@@ -82,7 +83,7 @@ instance Indexer EpochStakepoolSize where
 
   initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
     (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-
-      initializeLedgerState chainsyncConfig trace dbPathAndTableName sqliteInit "stakepool_delegation"
+      initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit "stakepool_delegation"
     return ( State extLedgerState epochNo
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)

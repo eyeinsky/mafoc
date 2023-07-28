@@ -47,8 +47,10 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
+    Mafoc.Cmds.FoldLedgerState
     Mafoc.Core
     Mafoc.Indexer.Class
+    Mafoc.Indexers.AddressDatum
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
@@ -74,10 +76,9 @@ library
   --------------------------
   build-depends:
     , cardano-api
+    , cardano-ledger-shelley
     , iohk-monitoring
     , ouroboros-consensus
-    , ouroboros-consensus-cardano
-    , cardano-ledger-shelley
 
   ------------------------
   -- Non-IOG dependencies
@@ -88,7 +89,6 @@ library
     , bytestring
     , containers
     , directory
-    , mtl
     , filepath
     , optparse-applicative
     , prettyprinter
@@ -102,7 +102,7 @@ library
     , vector
 
 -- executable mafoc
-  -- import:         lang
+--   import:         lang
   hs-source-dirs: app
   -- main-is:        Main.hs
 

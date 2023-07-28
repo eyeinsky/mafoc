@@ -20,7 +20,7 @@ import Mafoc.Core (
   Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
   LocalChainsyncConfig_,
   defaultTableName,
-  initializeLocalChainsync,
+  initializeLocalChainsync_,
   initializeSqlite,
   setCheckpointSqlite,
  )
@@ -61,7 +61,7 @@ instance Indexer MintBurn where
   toEvent _runtime _state blockInMode = pure (EmptyState, Just $ Marconi.MintBurn.toUpdate Nothing blockInMode)
 
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.MintBurn.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)

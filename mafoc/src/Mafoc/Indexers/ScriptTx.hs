@@ -7,10 +7,9 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync, initializeSqlite,
-                   setCheckpointSqlite)
-import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi.ScriptTx
-import Marconi.Core.Storable qualified as Marconi
+                   LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
+                   initializeSqlite, setCheckpointSqlite)
+import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi
 
 data ScriptTx = ScriptTx
   { chainsync          :: LocalChainsyncConfig_
@@ -29,7 +28,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
 
 instance Indexer ScriptTx where
 
-  type Event ScriptTx = Marconi.StorableEvent Marconi.ScriptTx.ScriptTxHandle
+  type Event ScriptTx = Marconi.StorableEvent Marconi.ScriptTxHandle
 
   data Runtime ScriptTx = Runtime
     { sqlConnection :: SQL.Connection
@@ -40,18 +39,18 @@ instance Indexer ScriptTx where
   toEvent _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = pure (EmptyState, event)
     where
       event = let
-        event'@(Marconi.ScriptTx.ScriptTxEvent txScripts _) = Marconi.ScriptTx.toUpdate txs (blockChainPoint blockInMode)
+        event'@(Marconi.ScriptTxEvent txScripts _) = Marconi.toUpdate txs (blockChainPoint blockInMode)
         in case txScripts of
              [] -> Nothing
              _  -> Just event'
 
   initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.ScriptTx.sqliteInit chainsyncRuntime trace
+    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events =
-    Marconi.ScriptTx.sqliteInsert sqlConnection tableName events
+    Marconi.sqliteInsert sqlConnection tableName events
 
   checkpoint Runtime{sqlConnection, tableName} _state t = setCheckpointSqlite sqlConnection tableName t

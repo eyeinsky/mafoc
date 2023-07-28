@@ -11,7 +11,7 @@ import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
-                   LocalChainsyncConfig, NodeConfig, initializeLedgerState, storeLedgerState)
+                   LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase, storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochNonce = EpochNonce
@@ -65,7 +65,7 @@ instance Indexer EpochNonce where
 
   initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
     (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-
-      initializeLedgerState chainsyncConfig trace dbPathAndTableName sqliteInit "epoch_nonce"
+      initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit "epoch_nonce"
     return ( State extLedgerState epochNo
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)

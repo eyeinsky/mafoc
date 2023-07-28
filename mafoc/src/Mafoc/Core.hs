@@ -1,9 +1,14 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE MultiWayIf          #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE AllowAmbiguousTypes    #-}
+{-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE DerivingStrategies     #-}
+{-# LANGUAGE LambdaCase             #-}
+{-# LANGUAGE MultiWayIf             #-}
+{-# LANGUAGE OverloadedLabels       #-}
+{-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE StarIsType             #-}
+{-# LANGUAGE TupleSections          #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 module Mafoc.Core
   ( module Mafoc.Core
   , module Mafoc.Upstream
@@ -12,7 +17,6 @@ module Mafoc.Core
 import Control.Concurrent qualified as IO
 import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
-import Control.Monad.Except (runExceptT)
 import Control.Monad.Trans.Class (lift)
 import Data.ByteString.Char8 qualified as C8
 import Data.Coerce (coerce)
@@ -20,10 +24,12 @@ import Data.Function (on, (&))
 import Data.List qualified as L
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (Proxy))
+import Data.String (IsString)
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word32, Word64)
 import Database.SQLite.Simple qualified as SQL
+import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Numeric.Natural (Natural)
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
@@ -93,10 +99,17 @@ runIndexer cli = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace $ "Indexer started with configuration: " <> show cli
-    (initialState, localChainsyncRuntime, indexerRuntime) <- initialize cli trace
+    (initialState, lcr, indexerRuntime) <- initialize cli trace
     S.effects
       -- Start streaming blocks over local chainsync
-      $ blockSource localChainsyncRuntime trace
+      $ blockSource
+          (securityParam lcr)
+          (localNodeConnection lcr)
+          (interval lcr)
+          (pipelineSize lcr)
+          (concurrencyPrimitive lcr)
+          (logging lcr)
+          trace
       -- Pick out ChainPoint
       & S.map (\blk -> (blockSlotNoBhh blk, blk))
       -- Fold over stream of blocks with state, emit indexer events as
@@ -108,7 +121,7 @@ runIndexer cli = do
 
       -- Persist events with `persist` or `persistMany` (buffering writes by
       -- batchSize in the latter case)
-      & buffered indexerRuntime trace (batchSize localChainsyncRuntime)
+      & buffered indexerRuntime trace (batchSize lcr)
 
   where
     buffered
@@ -160,10 +173,14 @@ runIndexer cli = do
 
 -- * Local chainsync
 
-type NodeFolder = FilePath
-type NodeConfig = FilePath
-type SocketPath = FilePath
-type NodeInfo a = Either NodeFolder (SocketPath, a)
+newtype NodeFolder = NodeFolder FilePath
+  deriving newtype (Show, IsString)
+newtype NodeConfig = NodeConfig FilePath
+  deriving newtype (Show, IsString)
+newtype SocketPath = SocketPath FilePath
+  deriving newtype (Show, IsString)
+newtype NodeInfo a = NodeInfo (Either NodeFolder (SocketPath, a))
+  deriving Show
 
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig a = LocalChainsyncConfig
@@ -177,46 +194,41 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
 
 type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
 
-nodeFolderToConfigPath :: NodeFolder -> NodeConfig
-nodeFolderToConfigPath nodeFolder = nodeFolder </> "config" </> "config.json"
+-- ** Get and derive stuff from LocalChainsyncConfig
 
-nodeFolderToSocketPath :: NodeFolder -> SocketPath
-nodeFolderToSocketPath nodeFolder = nodeFolder </> "socket" </> "node.socket"
+instance IsLabel "nodeConfig" (NodeFolder -> NodeConfig) where
+  fromLabel (NodeFolder nodeFolder) = NodeConfig (mkPath nodeFolder)
+    where
+      mkPath :: FilePath -> FilePath
+      mkPath nodeFolder' = nodeFolder' </> "config" </> "config.json"
+instance IsLabel "nodeConfig" (LocalChainsyncConfig NodeConfig -> NodeConfig) where
+  fromLabel = #nodeConfig . nodeInfo
+instance IsLabel "nodeConfig" (NodeInfo NodeConfig -> NodeConfig) where
+  fromLabel = either #nodeConfig snd . (\(NodeInfo e) -> e)
 
-nodeInfoSocketPath :: Either NodeFolder (SocketPath, a) -> SocketPath
-nodeInfoSocketPath nodeInfo_ = either nodeFolderToSocketPath fst nodeInfo_
+instance IsLabel "socketPath" (LocalChainsyncConfig a -> SocketPath) where
+  fromLabel = #socketPath . nodeInfo
+instance IsLabel "socketPath" (NodeInfo a -> SocketPath) where
+  fromLabel = either (coerce mkPath) fst . (\(NodeInfo e) -> e)
+    where
+      mkPath :: FilePath -> FilePath
+      mkPath nodeFolder' = nodeFolder' </> "socket" </> "node.socket"
 
-getNodeConfigSocketPath :: LocalChainsyncConfig NodeConfig -> (NodeConfig, SocketPath)
-getNodeConfigSocketPath chainsyncConfigWithNodeConfig = (nodeConfig, socketPath)
-  where
-    nodeInfo' = nodeInfo chainsyncConfigWithNodeConfig
-    nodeConfig = case nodeInfo' of
-      Left nodeFolder                  -> nodeFolderToConfigPath nodeFolder
-      Right (_socketPath, nodeConfig') -> nodeConfig'
-    socketPath = nodeInfoSocketPath nodeInfo'
+instance IsLabel "getNetworkId" (NodeConfig -> IO C.NetworkId) where
+  fromLabel (NodeConfig nodeConfig') = getNetworkId nodeConfig'
+instance IsLabel "getNetworkId" (NodeInfo NodeConfig -> IO C.NetworkId) where
+  fromLabel (NodeInfo nodeInfo') = case nodeInfo' of
+      Left nodeFolder                 -> #getNetworkId (#nodeConfig nodeFolder :: NodeConfig)
+      Right (_socketPath, nodeConfig) -> #getNetworkId nodeConfig
+instance IsLabel "getNetworkId" (LocalChainsyncConfig_ -> IO C.NetworkId) where
+  fromLabel lcc = let
+    NodeInfo nodeInfo' = nodeInfo lcc
+    in case nodeInfo' of
+      Left nodeFolder -> #getNetworkId (#nodeConfig nodeFolder :: NodeConfig)
+      Right (_socketPath, networkIdOrNodeConfig) -> do
+        either pure (getNetworkId . coerce) networkIdOrNodeConfig
 
-
--- | Resolve @LocalChainsyncConfig@ that came from e.g command line
--- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
--- config which can be used to generate a stream of blocks.
-initializeLocalChainsync :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
-initializeLocalChainsync config = do
-  let nodeInfo' = nodeInfo config
-  let socketPath = nodeInfoSocketPath nodeInfo'
-  networkId <- case nodeInfo' of
-    Left nodeFolder -> getNetworkId $ nodeFolderToConfigPath nodeFolder
-    Right (_socketPath, networkIdOrNodeConfig) -> do
-      either pure getNetworkId networkIdOrNodeConfig
-  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath
-  securityParam' <- querySecurityParam localNodeCon
-  return $ LocalChainsyncRuntime
-    localNodeCon
-    (interval_ config)
-    securityParam'
-    (logging_ config)
-    (pipelineSize_ config)
-    (batchSize_ config)
-    (concurrencyPrimitive_ config)
+-- * LocalChainsyncRuntime
 
 -- | Static configuration for block source
 data LocalChainsyncRuntime = LocalChainsyncRuntime
@@ -231,38 +243,81 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
   }
 
-blockSource :: LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource cc trace = blocks'
-  & (if logging cc then Logging.logging trace else id)
+initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId -> IO LocalChainsyncRuntime
+initializeLocalChainsync config networkId = do
+  let SocketPath socketPath' = #socketPath config
+  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
+  securityParam' <- querySecurityParam localNodeCon
+  return $ LocalChainsyncRuntime
+    localNodeCon
+    (interval_ config)
+    securityParam'
+    (logging_ config)
+    (pipelineSize_ config)
+    (batchSize_ config)
+    (concurrencyPrimitive_ config)
+
+-- | Resolve @LocalChainsyncConfig@ that came from e.g command line
+-- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
+-- config which can be used to generate a stream of blocks.
+initializeLocalChainsync_ :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
+initializeLocalChainsync_ config = do
+  networkId <- #getNetworkId config
+  initializeLocalChainsync config networkId
+
+blockSourceFromLocalChainsyncRuntime
+  :: LocalChainsyncRuntime
+  -> Trace.Trace IO TS.Text
+  -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+blockSourceFromLocalChainsyncRuntime lcr trace = blockSource
+  (securityParam lcr)
+  (localNodeConnection lcr)
+  (interval lcr)
+  (pipelineSize lcr)
+  (concurrencyPrimitive lcr)
+  (logging lcr)
+  trace
+
+blockSource
+  :: Marconi.SecurityParam
+  -> C.LocalNodeConnectInfo C.CardanoMode
+  -> Interval
+  -> Word32
+  -> Maybe ConcurrencyPrimitive
+  -> Bool
+  -> Trace.Trace IO TS.Text
+  -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
+blockSource securityParam' lnc interval' pipelineSize' concurrencyPrimitive' logging' trace = blocks'
+  & (if logging' then Logging.logging trace else id)
   & takeUpTo trace upTo'
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
-  & RB.rollbackRingBuffer (fromIntegral $ securityParam cc)
+  & RB.rollbackRingBuffer (fromIntegral securityParam')
        tipDistance
        blockSlotNoBhh
   where
-    lnc = localNodeConnection cc
-    Interval fromCp upTo' = interval cc
+    Interval fromCp upTo' = interval'
     blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-    blocks' = do
-      let pipelineSize' = pipelineSize cc
-      if pipelineSize' > 1
-        then CS.blocksPipelined pipelineSize' lnc fromCp
-        else case concurrencyPrimitive cc of
-        Just a -> do
-          let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
-          lift $ traceInfo trace msg
-          case a of
-            MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
-            Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
-            TChan -> CS.blocksPrim
-              TChan.newTChanIO
-              (\chan e -> STM.atomically $ STM.writeTChan chan e)
-              (STM.atomically . STM.readTChan)
-              lnc fromCp
-        Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+    blocks' = if pipelineSize' > 1
+      then CS.blocksPipelined pipelineSize' lnc fromCp
+      else case concurrencyPrimitive' of
+      Just a -> do
+        let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
+        lift $ traceInfo trace msg
+        case a of
+          MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
+          Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+          TChan -> CS.blocksPrim
+            TChan.newTChanIO
+            (\chan e -> STM.atomically $ STM.writeTChan chan e)
+            (STM.atomically . STM.readTChan)
+            lnc fromCp
+      Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
 
+-- | This is a very internal data type to help swap the concurrency
+-- primitive used to pass blocks from the local chainsync's green thread
+-- to the indexer.
 data ConcurrencyPrimitive
   = MVar
   | Chan
@@ -332,25 +387,29 @@ listExtLedgerStates dirPath = L.sortBy (flip compare `on` snd) . mapMaybe parse 
     parse :: FilePath -> Maybe (FilePath, SlotNoBhh)
     parse fn = either (const Nothing) Just . fmap (fn,) $ bhhFromFileName fn
 
-loadLedgerState :: FilePath -> Trace.Trace IO TS.Text -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_, C.ChainPoint)
-loadLedgerState nodeConfig trace = do
-  paths <- listExtLedgerStates "."
-  case paths of
-    -- A ledger state exists on disk, resume from there
-    (fn, (slotNo, bhh)) : _ -> do
-      cfg <- Marconi.getLedgerConfig nodeConfig
-      let O.ExtLedgerCfg topLevelConfig = cfg
-      extLedgerState <- Marconi.loadExtLedgerState (O.configCodec topLevelConfig) fn >>= \case
-        Right (_, extLedgerState) -> return extLedgerState
-        Left msg                  -> error $ "Error while deserialising file " <> fn <> ", error: " <> show msg
-      let cp = C.ChainPoint slotNo bhh
-      traceInfo trace $ "Found on-disk ledger state, resuming from: " <> show cp
-      return (cfg, extLedgerState, cp)
-    -- No existing ledger states, start from the beginning
-    [] -> do
-      (cfg, st) <- Marconi.getInitialExtLedgerState nodeConfig
-      traceInfo trace "No on-disk ledger state found, resuming from genesis"
-      return (cfg, st, C.ChainPointAtGenesis)
+-- | Load ledger state from file, while taking the chain point it's at from the file name.
+loadLedgerStateWithChainpoint :: NodeConfig -> Trace.Trace IO TS.Text -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_, C.ChainPoint)
+loadLedgerStateWithChainpoint nodeConfig@(NodeConfig nodeConfig') trace = listExtLedgerStates "." >>= \case
+  -- A ledger state exists on disk, resume from there
+  (fn, (slotNo, bhh)) : _ -> do
+    (cfg, extLedgerState) <- loadLedgerState nodeConfig fn
+    let cp = C.ChainPoint slotNo bhh
+    traceInfo trace $ "Found on-disk ledger state, resuming from: " <> show cp
+    return (cfg, extLedgerState, cp)
+  -- No existing ledger states, start from the beginning
+  [] -> do
+    (cfg, st) <- Marconi.getInitialExtLedgerState nodeConfig'
+    traceInfo trace "No on-disk ledger state found, resuming from genesis"
+    return (cfg, st, C.ChainPointAtGenesis)
+
+loadLedgerState :: NodeConfig -> FilePath -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
+loadLedgerState (NodeConfig nodeConfig) ledgerStatePath = do
+  cfg <- Marconi.getLedgerConfig nodeConfig
+  let O.ExtLedgerCfg topLevelConfig = cfg
+  extLedgerState <- Marconi.loadExtLedgerState (O.configCodec topLevelConfig) ledgerStatePath >>= \case
+    Right (_, extLedgerState) -> return extLedgerState
+    Left msg                  -> error $ "Error while deserialising file " <> ledgerStatePath <> ", error: " <> show msg
+  return (cfg, extLedgerState)
 
 storeLedgerState :: Marconi.ExtLedgerCfg_ -> SlotNoBhh -> Marconi.ExtLedgerState_ -> IO ()
 storeLedgerState ledgerCfg slotNoBhh extLedgerState = do
@@ -362,7 +421,7 @@ storeLedgerState ledgerCfg slotNoBhh extLedgerState = do
   putStrLn $ "Removed other files"
 
 -- | Initialization for ledger state indexers
-initializeLedgerState
+initializeLedgerStateAndDatabase
   :: LocalChainsyncConfig NodeConfig
   -> Trace.Trace IO TS.Text
   -> DbPathAndTableName                  -- ^ Path to sqlite db and table name from cli
@@ -371,17 +430,19 @@ initializeLedgerState
   -> IO ( Marconi.ExtLedgerState_, Maybe C.EpochNo
         , LocalChainsyncRuntime
         , SQL.Connection, String, Marconi.ExtLedgerCfg_)
-initializeLedgerState chainsyncConfig trace dbPathAndTableName sqliteInit defaultTableName' = do
-  let (nodeConfig, socketPath) = getNodeConfigSocketPath chainsyncConfig
+initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit defaultTableName' = do
+  let nodeConfig = #nodeConfig chainsyncConfig
+  let (SocketPath socketPath') = #socketPath chainsyncConfig
 
   networkId <- #getNetworkId nodeConfig
-  let localNodeConnectInfo = CS.mkLocalNodeConnectInfo networkId socketPath
+  let localNodeConnectInfo = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeConnectInfo
+
   let (dbPath, tableName) = defaultTableName defaultTableName' dbPathAndTableName
   sqlCon <- sqliteOpen dbPath
   sqliteInit sqlCon tableName
 
-  (ledgerConfig, extLedgerState, startFrom) <- loadLedgerState nodeConfig trace
+  (ledgerConfig, extLedgerState, startFrom) <- loadLedgerStateWithChainpoint nodeConfig trace
 
   let chainsyncRuntime' = LocalChainsyncRuntime
         localNodeConnectInfo
@@ -396,6 +457,12 @@ initializeLedgerState chainsyncConfig trace dbPathAndTableName sqliteInit defaul
          , chainsyncRuntime'
          , sqlCon, tableName, ledgerConfig)
 
+-- | Load ledger state from disk
+initializeLedgerState :: NodeConfig -> FilePath -> IO (SlotNoBhh, Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
+initializeLedgerState nodeConfig ledgerStatePath = do
+  slotNoBhh <- either (error $ "Can't parse chain-point from filename: " <> ledgerStatePath) return $ bhhFromFileName ledgerStatePath
+  (ledgerCfg, extLedgerState) <- loadLedgerState nodeConfig ledgerStatePath
+  return (slotNoBhh, ledgerCfg, extLedgerState)
 
 bhhToFileName :: SlotNoBhh -> FilePath
 bhhToFileName (slotNo, blockHeaderHash) = L.intercalate "_"

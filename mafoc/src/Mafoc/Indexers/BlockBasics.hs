@@ -16,7 +16,7 @@ import Options.Applicative qualified as Opt
 import Cardano.Api qualified as C
 
 import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persist, toEvent),
-                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, initializeSqlite,
+                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
 -- * Block transaction count indexer
@@ -52,7 +52,7 @@ instance Indexer BlockBasics where
   persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
 
   initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)

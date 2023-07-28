@@ -1,5 +1,6 @@
 module Mafoc.CLI where
 
+import Data.Coerce (coerce)
 import Data.List qualified as L
 import Data.Word (Word32)
 import Numeric.Natural (Natural)
@@ -9,7 +10,8 @@ import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
 import Mafoc.Core (ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
-                   LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig, NodeInfo,
+                   LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
+                   NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo), eitherParseHashBlockHeader, leftError, parseSlotNo_)
 import Marconi.ChainIndex.Types qualified as Marconi
 
@@ -77,7 +79,7 @@ commonSecurityParam :: O.Parser Marconi.SecurityParam
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
 commonSecurityParamEither :: O.Parser (Either C.NetworkId NodeConfig)
-commonSecurityParamEither = Left <$> commonNetworkId <|> Right <$> commonNodeConfig
+commonSecurityParamEither = Left <$> commonNetworkId <|> Right . coerce <$> commonNodeConfig
 
 commonNodeFolder :: O.Mod O.ArgumentFields NodeConfig
 commonNodeFolder =
@@ -85,19 +87,25 @@ commonNodeFolder =
   <> O.help "Path to cardano-node's folder. The program will figure out socket path, security parameter, network and node config path from it."
 
 commonNodeConnection :: O.Parser (NodeInfo (Either C.NetworkId NodeConfig))
-commonNodeConnection =
-      Left  <$> O.strArgument commonNodeFolder
-  <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
+commonNodeConnection = coerce
+  <$> (    Left <$> O.strArgument commonNodeFolder
+       <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
+      )
 
 commonNodeConnectionAndConfig :: O.Parser (NodeInfo NodeConfig)
-commonNodeConnectionAndConfig =
-      Left  <$> O.strArgument commonNodeFolder
-  <|> Right <$> ((,) <$> commonSocketPath <*> commonNodeConfig)
+commonNodeConnectionAndConfig = coerce
+  <$> (   Left <$> O.strArgument commonNodeFolder
+      <|> Right <$> ((,) <$> commonSocketPath <*> commonNodeConfig)
+      )
 
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither)
   $ opt 'i' "interval" "Chain interval to index, defaults to from genesis to infinity"
   <> O.value (Interval C.ChainPointAtGenesis Infinity)
+
+commonUpTo :: O.Parser UpTo
+commonUpTo = O.option (O.eitherReader parseUpTo)
+  $ opt 'u' "upto" "An up-to point: <slot no> or '@' which stands for current tip."
 
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)

@@ -4,8 +4,8 @@ module Mafoc.Indexers.EpochState where
 import Database.SQLite.Simple qualified as SQL
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
-import Mafoc.Core (Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent), initializeLedgerState,
-                   storeLedgerState)
+import Mafoc.Core (Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+                   initializeLedgerStateAndDatabase, storeLedgerState)
 import Mafoc.Indexers.EpochNonce (EpochNonce)
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize (EpochStakepoolSize)
@@ -50,7 +50,7 @@ instance Indexer EpochState where
     -- sqliteInit as well. The same function to create the table names
     -- can be used, but it's still awkward.
     (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tablePrefix, ledgerConfig) <-
-      initializeLedgerState chainsyncConfig trace dbPathAndTableName sqliteInit "epochstate"
+      initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit "epochstate"
     let t1 = tablePrefix <> "_ess"
         t2 = tablePrefix <> "_nonce"
     return ( State $ EpochStakepoolSize.State extLedgerState epochNo

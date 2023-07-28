@@ -9,6 +9,7 @@ import Options.Applicative qualified as Opt
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
+import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Core (runIndexer)
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
@@ -33,6 +34,8 @@ main = printRollbackException $ Opt.execParser cmdParserInfo >>= \case
   EpochState configFromCli -> runIndexer configFromCli
   ScriptTx configFromCli -> runIndexer configFromCli
 
+  FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
+
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catch` (\(a :: IO.SomeException) -> print a)
 
@@ -47,6 +50,8 @@ data Command
   | EpochNonce EpochNonce.EpochNonce
   | EpochState EpochState.EpochState
   | ScriptTx ScriptTx.ScriptTx
+
+  | FoldLedgerState FoldLedgerState.FoldLedgerState
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -63,6 +68,8 @@ cmdParser = Opt.subparser
  <> Opt.command "epochstakepoolsize" (EpochStakepoolSize <$> EpochStakepoolSize.parseCli)
  <> Opt.command "epochnonce" (EpochNonce <$> EpochNonce.parseCli)
  <> Opt.command "epochstate" (EpochState <$> EpochState.parseCli)
+
+ <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

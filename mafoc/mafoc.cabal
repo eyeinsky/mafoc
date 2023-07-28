@@ -47,6 +47,7 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
+    Mafoc.Cmds.FoldLedgerState
     Mafoc.Core
     Mafoc.Indexer.Class
     Mafoc.Indexers.BlockBasics
