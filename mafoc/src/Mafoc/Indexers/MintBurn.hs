@@ -12,9 +12,9 @@ This just provides the CLI interface and a streaming runtime.
 module Mafoc.Indexers.MintBurn where
 
 import Database.SQLite.Simple qualified as SQL
-import Mafoc.CLI qualified as Opt
 import Options.Applicative qualified as Opt
 
+import Mafoc.CLI qualified as Opt
 import Mafoc.Core (
   DbPathAndTableName,
   Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
