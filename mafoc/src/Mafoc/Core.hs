@@ -31,7 +31,7 @@ import Data.Word (Word32, Word64)
 import Database.SQLite.Simple qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Numeric.Natural (Natural)
-import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
+import Prettyprinter (Doc, Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
 import Prettyprinter.Render.Text (renderStrict)
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
@@ -98,7 +98,7 @@ runIndexer :: forall a . (Indexer a, Show a) => a -> IO ()
 runIndexer cli = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
-    traceInfo trace $ "Indexer started with configuration: " <> show cli
+    traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
     (initialState, lcr, indexerRuntime) <- initialize cli trace
     S.effects
       -- Start streaming blocks over local chainsync
@@ -140,7 +140,8 @@ runIndexer cli = do
                 -- Write checkpoint and return state with last checkpoint time set to `now`
                 writeCheckpoint = do
                   checkpoint indexerRuntime' indexerState slotNoBhh
-                  traceInfo trace $ "Checkpointing at " <> show slotNoBhh
+                  let (slotNo, bhh) = slotNoBhh
+                  traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh)
                   return $ initialState now
             state' <- case maybeEvent of
               -- There is an event
@@ -303,7 +304,7 @@ blockSource securityParam' lnc interval' pipelineSize' concurrencyPrimitive' log
       then CS.blocksPipelined pipelineSize' lnc fromCp
       else case concurrencyPrimitive' of
       Just a -> do
-        let msg = "Using " <> show a <> " as concurrency variable to pass blocks"
+        let msg = "Using " <> pretty (show a) <> " as concurrency variable to pass blocks"
         lift $ traceInfo trace msg
         case a of
           MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
@@ -347,7 +348,7 @@ takeUpTo
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
 takeUpTo trace upTo' source = case upTo' of
   SlotNo slotNo -> do
-    lift $ traceDebug trace $ "Will index up to " <> show slotNo
+    lift $ traceDebug trace $ "Will index up to " <> pretty slotNo
     flip S.takeWhile source $ \case
       CS.RollForward blk _ -> blockSlotNo blk <= slotNo
       CS.RollBackward{}    -> True
@@ -356,13 +357,13 @@ takeUpTo trace upTo' source = case upTo' of
     Left r -> return r
     Right (event, source') -> do
       let tip = getTipPoint event :: C.ChainPoint
-      lift $ traceDebug trace $ "Will index up to current tip, which is: " <> show tip
+      lift $ traceDebug trace $ "Will index up to current tip, which is: " <> pretty tip
       S.yield event -- We can always yield the current event, as that
                     -- is the source for the upper bound anyway.
       flip S.takeWhile source' $ \case
         CS.RollForward blk _ct -> blockChainPoint blk <= tip
         CS.RollBackward{}      -> True -- We skip rollbacks as these can ever only to an earlier point
-      lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <> show (getTipPoint event) <> ")"
+      lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <+> pretty (getTipPoint event) <+> ")"
 
   where
     getTipPoint :: CS.ChainSyncEvent a -> C.ChainPoint
@@ -373,11 +374,14 @@ takeUpTo trace upTo' source = case upTo' of
 
 -- * Trace
 
-traceInfo :: Trace.Trace IO TS.Text -> String -> IO ()
-traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
+traceInfo :: Trace.Trace IO TS.Text -> Doc () -> IO ()
+traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions msg
 
-traceDebug :: Trace.Trace IO TS.Text -> String -> IO ()
-traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
+traceInfoStr :: Trace.Trace IO TS.Text -> String -> IO ()
+traceInfoStr trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
+
+traceDebug :: Trace.Trace IO TS.Text -> Doc () -> IO ()
+traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaultLayoutOptions msg
 
 -- * Ledger state checkpoint
 
@@ -394,7 +398,7 @@ loadLedgerStateWithChainpoint nodeConfig@(NodeConfig nodeConfig') trace = listEx
   (fn, (slotNo, bhh)) : _ -> do
     (cfg, extLedgerState) <- loadLedgerState nodeConfig fn
     let cp = C.ChainPoint slotNo bhh
-    traceInfo trace $ "Found on-disk ledger state, resuming from: " <> show cp
+    traceInfo trace $ "Found on-disk ledger state, resuming from: " <> pretty cp
     return (cfg, extLedgerState, cp)
   -- No existing ledger states, start from the beginning
   [] -> do
@@ -557,13 +561,13 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
   newInterval <- case maybeChainPoint of
     Just cp -> if chainPointLaterThanFrom cp cliInterval
       then do
-      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> show cp
+      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> pretty cp
       return $ cliInterval { from = cp }
       else do
-      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> show cp <> ", cli: " <> show (from cliInterval)
+      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> pretty cp <> ", cli: " <> pretty (from cliInterval)
       return cliInterval
     _ -> do
-      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> show (from cliInterval)
+      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> pretty (from cliInterval)
       return cliInterval
   let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
 
