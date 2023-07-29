@@ -61,7 +61,7 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
 commonPipelineSize :: O.Parser Word32
 commonPipelineSize = O.option O.auto
   $ opt 'p' "pipeline-size" "Size of piplined requests."
-  <> O.value 1
+  <> O.value 500
 
 commonNetworkId :: O.Parser C.NetworkId
 commonNetworkId = mainnet <|> C.Testnet <$> testnet
@@ -113,7 +113,7 @@ commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.val
 commonBatchSize :: O.Parser Natural
 commonBatchSize = O.option O.auto
   $ longOpt "batch-size" "Batche size for persisting events"
-  <> O.value 1
+  <> O.value 3000
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig_
 commonLocalChainsyncConfig = mkCommonLocalChainsyncConfig commonNodeConnection
