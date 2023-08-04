@@ -54,7 +54,6 @@ library
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
-    Mafoc.Indexers.EpochState
     Mafoc.Indexers.MintBurn
     Mafoc.Indexers.NoOp
     Mafoc.Indexers.ScriptTx

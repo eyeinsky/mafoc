@@ -15,7 +15,6 @@ import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
-import Mafoc.Indexers.EpochState qualified as EpochState
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
 import Mafoc.Indexers.ScriptTx qualified as ScriptTx
@@ -38,7 +37,6 @@ runCommand = \case
       NoOp configFromCli               -> runIndexer configFromCli
       EpochStakepoolSize configFromCli -> runIndexer configFromCli
       EpochNonce configFromCli         -> runIndexer configFromCli
-      EpochState configFromCli         -> runIndexer configFromCli
       ScriptTx configFromCli           -> runIndexer configFromCli
     in runIndexer' batchSize
 
@@ -61,7 +59,6 @@ data IndexerCommand
   | NoOp NoOp.NoOp
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
   | EpochNonce EpochNonce.EpochNonce
-  | EpochState EpochState.EpochState
   | ScriptTx ScriptTx.ScriptTx
   deriving Show
 
@@ -79,7 +76,6 @@ cmdParser = Opt.subparser
   <> indexerCommand' "noop" NoOp
   <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
   <> indexerCommand' "epochnonce" EpochNonce
-  <> indexerCommand' "epochstate" EpochState
   <> indexerCommand' "scripttx" ScriptTx
   where
     indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)

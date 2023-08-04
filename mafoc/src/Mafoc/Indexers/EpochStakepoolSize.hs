@@ -15,7 +15,7 @@ import Cardano.Api.Shelley qualified as C
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase,
                    storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -50,21 +50,21 @@ instance Indexer EpochStakepoolSize where
     , maybeEpochNo   :: Maybe C.EpochNo
     }
 
-  toEvent Runtime{ledgerCfg} state blockInMode = return (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
+  toEvents Runtime{ledgerCfg} state blockInMode = return (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
     stakeMap = Marconi.getStakeMap newExtLedgerState
-    maybeEvent :: Maybe EpochStakepoolSizeEvent
+    maybeEvent :: [EpochStakepoolSizeEvent]
     maybeEvent = case maybeEpochNo state of
       Just previousEpochNo -> case maybeCurrentEpochNo of
         -- Epoch number increases: it is epoch boundary so emit an event
         Just currentEpochNo -> let epochDiff = currentEpochNo - previousEpochNo
           in case epochDiff of
                -- Epoch increased, emit an event
-               1 -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
+               1 -> [EpochStakepoolSizeEvent currentEpochNo stakeMap]
                -- Epoch remained the same, don't emit an event
-               0 -> Nothing
+               0 -> []
                _ -> error $ "EpochStakepoolSize indexer: assumption violated: epoch changed by " <> show epochDiff <> " instead of expected 0 or 1."
         _ -> error $ "EpochStakepoolSize indexer: assumption violated: there was a previous epoch no, but there is none now — this can't be!"
         -- todo: Replace the errors above with specific exceptions
@@ -72,10 +72,10 @@ instance Indexer EpochStakepoolSize where
         -- There was no previous epoch no (= it was Byron era) but
         -- there is one now: emit an event as this started a new
         -- epoch.
-        Just currentEpochNo -> Just $ EpochStakepoolSizeEvent currentEpochNo stakeMap
+        Just currentEpochNo -> [EpochStakepoolSizeEvent currentEpochNo stakeMap]
         -- No previous epoch no and no current epoch no, the Byron
         -- era continues.
-        _                   -> Nothing
+        _                   -> []
 
   initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
     (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-

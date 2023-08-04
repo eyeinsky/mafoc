@@ -7,7 +7,7 @@ import Database.SQLite.Simple qualified as SQL
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
                    initializeSqlite, setCheckpointSqlite)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi
@@ -33,13 +33,13 @@ instance Indexer ScriptTx where
     }
   data State ScriptTx = EmptyState
 
-  toEvent _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = pure (EmptyState, event)
+  toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = pure (EmptyState, event)
     where
       event = let
         event'@(Marconi.ScriptTxEvent txScripts _) = Marconi.toUpdate txs (blockChainPoint blockInMode)
         in case txScripts of
-             [] -> Nothing
-             _  -> Just event'
+             [] -> []
+             _  -> [event']
 
   initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync

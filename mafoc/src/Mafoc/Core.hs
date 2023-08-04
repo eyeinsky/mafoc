@@ -88,7 +88,7 @@ class Indexer a where
   data State a
 
   -- | Convert a state and a block to events and a new state.
-  toEvent :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> IO (State a, Maybe (Event a))
+  toEvents :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> IO (State a, [Event a])
 
   -- | Initialize an indexer from @a@ to a runtime for local
   -- chainsync, indexer's runtime configuration and the indexer state.
@@ -107,10 +107,10 @@ runIndexer cli batchSize = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
-    (initialState, lcr, indexerRuntime) <- initialize cli trace
-    S.effects
-      -- Start streaming blocks over local chainsync
-      $ blockSource
+    (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
+
+    -- Start streaming blocks over local chainsync
+    blockSource
           (securityParam lcr)
           (localNodeConnection lcr)
           (interval lcr)
@@ -118,70 +118,73 @@ runIndexer cli batchSize = do
           (concurrencyPrimitive lcr)
           (logging lcr)
           trace
+
       -- Pick out ChainPoint
       & S.map (\blk -> (blockSlotNoBhh blk, blk))
-      -- Fold over stream of blocks with state, emit indexer events as
-      -- `Maybe event` (because not all blocks generate an event)
-      & foldYield (\st (cp, a) -> do
-                      (st', b) <- toEvent indexerRuntime st a
-                      return (st', (cp, b, st'))
-                  ) initialState
 
-      -- Persist events with `persist` or `persistMany` (buffering writes by
-      -- batchSize in the latter case)
-      & buffered indexerRuntime trace batchSize
+      -- Fold over stream of blocks by converting them to events, then
+      -- pass them on together with a chain point and indexer state
+      & foldYield (\indexerState (cp, blockInMode) -> do
+                      (indexerState', events) <- toEvents indexerRuntime indexerState blockInMode
+                      return (indexerState', (cp, events, indexerState'))
+                  ) indexerInitialState
+
+      -- Persist events in batches and write a checkpoint. Do this
+      -- either when `batchSize` amount of events is collected or when
+      -- a time limit is reached.
+      & batchedPersist indexerRuntime trace batchSize
+
+type BatchState a = (BatchSize, UTCTime, [[Event a]])
+
+batchedPersist
+  :: forall a . Indexer a
+  => Runtime a
+  -> Trace.Trace IO TS.Text
+  -> BatchSize
+  -> S.Stream (S.Of (SlotNoBhh, [Event a], State a)) IO ()
+  -> IO ()
+batchedPersist indexerRuntime trace batchSize source = do
+  now :: UTCTime <- getCurrentTime
+  let initialBatchState = emptyBuffer now
+  S.foldM_ step (pure initialBatchState) (\_ -> pure ()) source
 
   where
-    buffered
-      :: Runtime a -> Trace.Trace IO TS.Text -> BatchSize
-      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
-      -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
-    buffered indexerRuntime' trace batchSize' source = do
+    emptyBuffer :: UTCTime -> BatchState a
+    emptyBuffer t = (0, t, [])
 
-      let initialState :: UTCTime -> (BatchSize, UTCTime, [Event a])
-          initialState t = (0, t, [])
+    step :: BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
+    step state@(batchFill, lastCheckpointTime, bufferedEvents) t@(slotNoBhh, newEvents, indexerState) = do
+      now :: UTCTime <- getCurrentTime
+      let persistAndCheckpoint :: [[Event a]] -> Doc () -> IO (BatchState a)
+          persistAndCheckpoint bufferedEvents' msg = do
+            case concat bufferedEvents' of
+              events@(_ : _) -> persistMany indexerRuntime events
+              []             -> pure ()
+            checkpoint indexerRuntime indexerState slotNoBhh
+            let (slotNo, bhh) = slotNoBhh
+            traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
+            return $ emptyBuffer now
 
-          step :: (BatchSize, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a), State a) -> IO ((BatchSize, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a), State a))
-          step state@(batchFill, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent, indexerState) = do
-            now :: UTCTime <- getCurrentTime
-            let isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
-                -- Write checkpoint and return state with last checkpoint time set to `now`
-                writeCheckpoint = do
-                  checkpoint indexerRuntime' indexerState slotNoBhh
-                  let (slotNo, bhh) = slotNoBhh
-                  traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh)
-                  return $ initialState now
-            state' <- case maybeEvent of
-              -- There is an event
-              Just x -> let
-                succN = succ batchFill
-                bufferFull = succN == batchSize'
-                in if bufferFull || isCheckpointTime
-                -- If buffer is full or if it's checkpoint time, we flush the buffer and checkpoint
-                then do
-                traceDebug trace $ "Checkpointing because " <> if
-                  | bufferFull       -> "buffer full"
-                  | isCheckpointTime -> "it's checkpoint time"
-                  | otherwise        -> error "Checkpointing because: this should never happen !!"
-                persistMany indexerRuntime' (reverse $ x : xs)
-                writeCheckpoint
-                -- Buffer is not full, let's add event to buffer
-                else return (succN, lastCheckpointTime, x : xs)
-              -- It's time to checkpoint, let's persist events and checkpoint.
-              _ | isCheckpointTime -> do
-                traceDebug trace "Checkpointing because it's checkpoint time (but buffer is not full)"
-                persistMany indexerRuntime' (reverse xs) -- This is a no-op when `xs` is empty
-                writeCheckpoint
-              -- It's not checkpoint time and there is no event, pass buffer state unchanged.
-                | otherwise -> return state
+          isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
 
-            return (state', t)
+      if not (null newEvents)
+        -- There are new events
+        then let
+          bufferFill' = batchFill + toEnum (length newEvents)
+          bufferedEvents' = newEvents : bufferedEvents
+          in if | isCheckpointTime         -> persistAndCheckpoint bufferedEvents' "it's checkpoint time"
+                | bufferFill' >= batchSize -> persistAndCheckpoint bufferedEvents' "buffer is full"
+                | otherwise                -> return (bufferFill', lastCheckpointTime, bufferedEvents')
 
-      currentTime :: UTCTime <- lift $ getCurrentTime
-      foldYield step (initialState currentTime) source
+        -- There are no new events
+        else if isCheckpointTime
+          -- .. but it's checkpoint time so we persist events and checkpoint
+          then persistAndCheckpoint bufferedEvents "it's checkpoint time, but buffer is not full"
+          -- Nothing to do, continue with original state
+          else return state
 
 newtype BatchSize = BatchSize Natural
-  deriving newtype (Eq, Show, Read, Num, Enum)
+  deriving newtype (Eq, Show, Read, Num, Enum, Ord)
 
 -- * Local chainsync
 

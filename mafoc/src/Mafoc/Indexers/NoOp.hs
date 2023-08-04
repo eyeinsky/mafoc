@@ -6,7 +6,7 @@ import Database.SQLite.Simple qualified as SQL
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
@@ -26,7 +26,7 @@ instance Indexer NoOp where
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
-  toEvent _runtime _state _blockInMode = pure (EmptyState, Nothing)
+  toEvents _runtime _state _blockInMode = pure (EmptyState, [])
   initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName

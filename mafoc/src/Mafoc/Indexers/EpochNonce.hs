@@ -10,7 +10,7 @@ import Database.SQLite.Simple qualified as SQL
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase, storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -44,20 +44,20 @@ instance Indexer EpochNonce where
     , maybePreviousEpochNo :: Maybe C.EpochNo
     }
 
-  toEvent (Runtime{ledgerCfg}) state blockInMode = return (State newExtLedgerState maybeEpochNo, maybeEvent)
+  toEvents (Runtime{ledgerCfg}) state blockInMode = return (State newExtLedgerState maybeEpochNo, maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeEpochNo = Marconi.getEpochNo newExtLedgerState
     epochNonce = Marconi.getEpochNonce newExtLedgerState
-    maybeEvent :: Maybe EpochNonceEvent
+    maybeEvent :: [EpochNonceEvent]
     maybeEvent = case maybeEpochNo of
       Just epochNo -> case maybePreviousEpochNo state of
         Just previousEpochNo -> case epochNo - previousEpochNo of
-          1 -> Just $ EpochNonceEvent epochNo epochNonce
-          0 -> Nothing
+          1 -> [EpochNonceEvent epochNo epochNonce]
+          0 -> []
           invalidEpochDiff -> error $ "EpochNonce indexer: assumption violated: epoch changed by " <> show invalidEpochDiff <> " instead of expected 0 or 1."
-        Nothing -> Just $ EpochNonceEvent epochNo epochNonce
-      Nothing -> Nothing
+        Nothing -> [EpochNonceEvent epochNo epochNonce]
+      Nothing -> []
 
   initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
     (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-

@@ -15,7 +15,7 @@ import Mafoc.CLI qualified as Opt
 import Cardano.Api qualified as C
 
 import Mafoc.Core (DbPathAndTableName,
-                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
@@ -43,7 +43,7 @@ instance Indexer BlockBasics where
     , tableName     :: String
     }
 
-  toEvent _runtime _state blockInMode = pure (EmptyState, Just $ blockToRow blockInMode)
+  toEvents _runtime _state blockInMode = pure (EmptyState, [blockToRow blockInMode])
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
 

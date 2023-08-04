@@ -16,7 +16,7 @@ import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (
   DbPathAndTableName,
-  Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
+  Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
   LocalChainsyncConfig_,
   defaultTableName,
   initializeLocalChainsync_,
@@ -29,7 +29,7 @@ import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
  indexer.
 -}
 data MintBurn = MintBurn
-  { chainsync          :: LocalChainsyncConfig_
+  { chainsync :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
   }
   deriving (Show)
@@ -38,9 +38,10 @@ instance Indexer MintBurn where
 
   description = "Index mint and burn events"
 
-  parseCli = MintBurn
-    <$> Opt.commonLocalChainsyncConfig
-    <*> Opt.commonDbPathAndTableName
+  parseCli =
+    MintBurn
+      <$> Opt.commonLocalChainsyncConfig
+      <*> Opt.commonDbPathAndTableName
 
   data Runtime MintBurn = Runtime
     { sqlConnection :: SQL.Connection
@@ -51,7 +52,7 @@ instance Indexer MintBurn where
 
   data State MintBurn = EmptyState
 
-  toEvent _runtime _state blockInMode = pure (EmptyState, Just $ Marconi.MintBurn.toUpdate Nothing blockInMode)
+  toEvents _runtime _state blockInMode = pure (EmptyState, [Marconi.MintBurn.toUpdate Nothing blockInMode])
 
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
