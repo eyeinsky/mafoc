@@ -80,13 +80,8 @@ class Indexer a where
   -- open the destination to where data is persisted, etc.
   initialize :: a -> Trace.Trace IO TS.Text ->  IO (State a, LocalChainsyncRuntime, Runtime a)
 
-  -- | Write event to persistent storage.
-  persist :: Runtime a -> Event a -> IO ()
-  persist runtime event = persistMany runtime [event]
-
   -- | Persist many events at a time, defaults to mapping over events with persist.
   persistMany :: Runtime a -> [Event a] -> IO ()
-  persistMany runtime events = mapM_ (persist runtime) events
 
   -- | Set a checkpoint of lates ChainPoint processed. This is used when
   -- there are no events to be persisted, but sufficient amount of

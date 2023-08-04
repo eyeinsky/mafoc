@@ -15,7 +15,7 @@ import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persist, toEvent),
+import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
@@ -49,7 +49,7 @@ instance Indexer BlockBasics where
 
   toEvent _runtime _state blockInMode = pure (EmptyState, Just $ blockToRow blockInMode)
 
-  persist Runtime{sqlConnection, tableName} event = sqliteInsert sqlConnection tableName event
+  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
 
   initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
@@ -64,8 +64,8 @@ type Row = (Word64, C.Hash C.BlockHeader, Int)
 blockToRow :: C.BlockInMode C.CardanoMode -> Row
 blockToRow (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (coerce slotNo, hash, length txs)
 
-sqliteInsert :: SQL.Connection -> String -> Row -> IO ()
-sqliteInsert sqlCon tableName row = SQL.executeMany sqlCon template [row]
+sqliteInsert :: SQL.Connection -> String -> [Row] -> IO ()
+sqliteInsert sqlCon tableName rows = SQL.executeMany sqlCon template rows
   where
     template = "INSERT INTO " <> fromString tableName <> " \
                \ ( slot_no           \
