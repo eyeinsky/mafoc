@@ -11,11 +11,11 @@ import Data.String (IsString (fromString))
 import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
-import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
@@ -26,17 +26,13 @@ data BlockBasics = BlockBasics
   , dbPathAndTableName :: DbPathAndTableName
   } deriving (Show)
 
-parseCli :: Opt.ParserInfo BlockBasics
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "blockbasics"
-  <> Opt.header "blockbasics - Index block header hash and number of transactions per block"
-  where
-    cli :: Opt.Parser BlockBasics
-    cli = BlockBasics
-      <$> Opt.commonLocalChainsyncConfig
-      <*> Opt.commonDbPathAndTableName
-
 instance Indexer BlockBasics where
+
+  description = "Index slot number, block header hash and number of transactions per block"
+
+  parseCli = BlockBasics
+    <$> Opt.commonLocalChainsyncConfig
+    <*> Opt.commonDbPathAndTableName
 
   type Event BlockBasics = Row
 

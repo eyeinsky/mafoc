@@ -1,12 +1,13 @@
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.ScriptTx where
 
 import Database.SQLite.Simple qualified as SQL
-import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
                    initializeSqlite, setCheckpointSqlite)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi
@@ -16,17 +17,13 @@ data ScriptTx = ScriptTx
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 
-parseCli :: Opt.ParserInfo ScriptTx
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "scripttx"
-  <> Opt.header "scripttx - Index transactions with scripts"
-  where
-    cli :: Opt.Parser ScriptTx
-    cli = ScriptTx
-      <$> Opt.commonLocalChainsyncConfig
-      <*> Opt.commonDbPathAndTableName
-
 instance Indexer ScriptTx where
+
+  description = "Index transactions with scripts"
+
+  parseCli = ScriptTx
+    <$> Opt.commonLocalChainsyncConfig
+    <*> Opt.commonDbPathAndTableName
 
   type Event ScriptTx = Marconi.StorableEvent Marconi.ScriptTxHandle
 

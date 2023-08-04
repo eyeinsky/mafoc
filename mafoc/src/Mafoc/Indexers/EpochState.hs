@@ -4,22 +4,15 @@ module Mafoc.Indexers.EpochState where
 import Database.SQLite.Simple qualified as SQL
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
-import Mafoc.Core (Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    initializeLedgerStateAndDatabase, storeLedgerState)
 import Mafoc.Indexers.EpochNonce (EpochNonce)
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize (EpochStakepoolSize)
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
-import Options.Applicative qualified as Opt
-
 
 newtype EpochState = EpochState EpochStakepoolSize.EpochStakepoolSize
   deriving Show
-
-parseCli :: Opt.ParserInfo EpochState
-parseCli = Opt.info (Opt.helper <*> (EpochState <$> EpochStakepoolSize.cli)) $ Opt.fullDesc
-  <> Opt.progDesc "epochstate"
-  <> Opt.header "epochstate - Index epoch nonce and stakepool sizes"
 
 data EpochStateEvent = EpochStateEvent
   { epochStake :: EpochStakepoolSize.EpochStakepoolSizeEvent
@@ -27,6 +20,10 @@ data EpochStateEvent = EpochStateEvent
   }
 
 instance Indexer EpochState where
+
+  description _ = "Index epoch nonce and stakepool sizes"
+
+  parseCli = EpochState <$> parseCli
 
   type Event EpochState = EpochStateEvent
 

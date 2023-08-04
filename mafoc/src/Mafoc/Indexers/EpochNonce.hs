@@ -7,10 +7,10 @@ import Cardano.Api qualified as C
 import Cardano.Ledger.Shelley.API qualified as Ledger
 import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
-import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase, storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -24,17 +24,13 @@ data EpochNonceEvent = EpochNonceEvent
   , epochNonce :: Ledger.Nonce
   }
 
-parseCli :: Opt.ParserInfo EpochNonce
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "epochnonce"
-  <> Opt.header "epochnonce - Index epoch nonces"
-  where
-    cli :: Opt.Parser EpochNonce
-    cli = EpochNonce
-      <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
-      <*> Opt.commonDbPathAndTableName
-
 instance Indexer EpochNonce where
+
+  description = "Index epoch numbers and epoch nonces"
+
+  parseCli = EpochNonce
+    <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
+    <*> Opt.commonDbPathAndTableName
 
   type Event EpochNonce = EpochNonceEvent
 

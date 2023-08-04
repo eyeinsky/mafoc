@@ -31,6 +31,7 @@ import Data.Word (Word32, Word64)
 import Database.SQLite.Simple qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Numeric.Natural (Natural)
+import Options.Applicative qualified as O
 import Prettyprinter (Doc, Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
 import Prettyprinter.Render.Text (renderStrict)
 import Streaming qualified as S
@@ -57,40 +58,52 @@ import Mafoc.Upstream (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, 
 
 -- * Indexer class
 
+-- | Class for an indexer. The argument @a@ doubles as both a type
+-- representation (a "tag") for the indexer, and also as the initial
+-- configuration required to run the indexer.
 class Indexer a where
+
+  -- | A text description of the indexer, used for help messages.
+  description :: TS.Text
+
+  -- | A CLI parser for @a@.
+  parseCli :: O.Parser a
 
   -- | The @a@ itself doubles as cli configuration, no need for the following:
   -- type Config a = r | r -> a
 
-  -- | Runtime configuration.
+  -- | Runtime configuration, i.e the reader for the indexer, used for
+  -- e.g the db connection, for communication with other threads
+  -- (respond to queries).
   data Runtime a
 
-  -- | Event type.
+  -- | Event type, i.e the "business requirement". Any input block is
+  -- converted to zero or more events which are then to be persisted.
   type Event a
 
-  -- | The fold state. For map type indexers where no fold state needs
-  -- to be maintained, the state is some form of empty (i.e defined to
-  -- a data type with no fields).
+  -- | The fold state. Some don't require a state so, for those it's
+  -- defined as a data type with no fields, equivalent to unit. As a
+  -- consequence these indexers can be resumed from arbitrary chain
+  -- points on request.
   data State a
 
-  -- | Fold a block into an event and produce a new state.
+  -- | Convert a state and a block to events and a new state.
   toEvent :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> IO (State a, Maybe (Event a))
 
-  -- | Initialize an indexer and return its runtime configuration. E.g
-  -- open the destination to where data is persisted, etc.
-  initialize :: a -> Trace.Trace IO TS.Text ->  IO (State a, LocalChainsyncRuntime, Runtime a)
+  -- | Initialize an indexer from @a@ to a runtime for local
+  -- chainsync, indexer's runtime configuration and the indexer state.
+  initialize :: a -> Trace.Trace IO TS.Text -> IO (State a, LocalChainsyncRuntime, Runtime a)
 
   -- | Persist many events at a time, defaults to mapping over events with persist.
   persistMany :: Runtime a -> [Event a] -> IO ()
 
-  -- | Set a checkpoint of lates ChainPoint processed. This is used when
-  -- there are no events to be persisted, but sufficient amount of
-  -- time has passed.
+  -- | Checkpoint indexer by writing the chain point and the state at
+  -- that point, destination being provided by the
+  -- runtime. Checkpoints are used for resuming
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
-
-runIndexer :: forall a . (Indexer a, Show a) => a -> IO ()
-runIndexer cli = do
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> IO ()
+runIndexer cli batchSize = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
@@ -116,20 +129,20 @@ runIndexer cli = do
 
       -- Persist events with `persist` or `persistMany` (buffering writes by
       -- batchSize in the latter case)
-      & buffered indexerRuntime trace (batchSize lcr)
+      & buffered indexerRuntime trace batchSize
 
   where
     buffered
-      :: Runtime a -> Trace.Trace IO TS.Text -> Natural
+      :: Runtime a -> Trace.Trace IO TS.Text -> BatchSize
       -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
       -> S.Stream (S.Of (SlotNoBhh, Maybe (Event a), State a)) IO ()
-    buffered indexerRuntime' trace bufferSize source = do
+    buffered indexerRuntime' trace batchSize' source = do
 
-      let initialState :: UTCTime -> (Natural, UTCTime, [Event a])
+      let initialState :: UTCTime -> (BatchSize, UTCTime, [Event a])
           initialState t = (0, t, [])
 
-          step :: (Natural, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a), State a) -> IO ((Natural, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a), State a))
-          step state@(n, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent, indexerState) = do
+          step :: (BatchSize, UTCTime, [Event a]) -> (SlotNoBhh, Maybe (Event a), State a) -> IO ((BatchSize, UTCTime, [Event a]), (SlotNoBhh, Maybe (Event a), State a))
+          step state@(batchFill, lastCheckpointTime, xs) t@(slotNoBhh, maybeEvent, indexerState) = do
             now :: UTCTime <- getCurrentTime
             let isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
                 -- Write checkpoint and return state with last checkpoint time set to `now`
@@ -141,8 +154,8 @@ runIndexer cli = do
             state' <- case maybeEvent of
               -- There is an event
               Just x -> let
-                succN = succ n
-                bufferFull = succN == bufferSize
+                succN = succ batchFill
+                bufferFull = succN == batchSize'
                 in if bufferFull || isCheckpointTime
                 -- If buffer is full or if it's checkpoint time, we flush the buffer and checkpoint
                 then do
@@ -167,6 +180,9 @@ runIndexer cli = do
       currentTime :: UTCTime <- lift $ getCurrentTime
       foldYield step (initialState currentTime) source
 
+newtype BatchSize = BatchSize Natural
+  deriving newtype (Eq, Show, Read, Num, Enum)
+
 -- * Local chainsync
 
 newtype NodeFolder = NodeFolder FilePath
@@ -184,7 +200,6 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
   , interval_             :: Interval
   , logging_              :: Bool
   , pipelineSize_         :: Word32
-  , batchSize_            :: Natural
   , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
   } deriving Show
 
@@ -233,7 +248,6 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , securityParam        :: Marconi.SecurityParam
   , logging              :: Bool
   , pipelineSize         :: Word32
-  , batchSize            :: Natural
 
   -- * Internal
   , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
@@ -250,7 +264,6 @@ initializeLocalChainsync config networkId = do
     securityParam'
     (logging_ config)
     (pipelineSize_ config)
-    (batchSize_ config)
     (concurrencyPrimitive_ config)
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
@@ -449,7 +462,6 @@ initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqlite
         securityParam'
         (logging_ chainsyncConfig)
         (pipelineSize_ chainsyncConfig)
-        (batchSize_ chainsyncConfig)
         (concurrencyPrimitive_ chainsyncConfig)
 
   return ( extLedgerState, Marconi.getEpochNo extLedgerState

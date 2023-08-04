@@ -123,6 +123,7 @@ executable mafoc
   build-depends:
     , base                  >=4.9 && <5
     , optparse-applicative
+    , text
 
 test-suite mafoc-test
   import:         lang

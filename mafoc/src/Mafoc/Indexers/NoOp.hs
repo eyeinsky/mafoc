@@ -1,11 +1,12 @@
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.NoOp where
 
 import Database.SQLite.Simple qualified as SQL
-import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
 
@@ -14,17 +15,11 @@ data NoOp = NoOp
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 
-parseCli :: Opt.ParserInfo NoOp
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "noop"
-  <> Opt.header "noop - drain blocks over local chainsync protocol"
-  where
-    cli :: Opt.Parser NoOp
-    cli = NoOp
-      <$> Opt.commonLocalChainsyncConfig
-      <*> Opt.commonDbPathAndTableName
-
 instance Indexer NoOp where
+  description = "Don't index anything, simply drain blocks over local chainsync protocol"
+  parseCli = NoOp
+    <$> Opt.commonLocalChainsyncConfig
+    <*> Opt.commonDbPathAndTableName
   type Event NoOp = ()
   data State NoOp = EmptyState
   data Runtime NoOp = Runtime

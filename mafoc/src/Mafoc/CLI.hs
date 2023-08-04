@@ -3,13 +3,12 @@ module Mafoc.CLI where
 import Data.Coerce (coerce)
 import Data.List qualified as L
 import Data.Word (Word32)
-import Numeric.Natural (Natural)
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
-import Mafoc.Core (ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
+import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo), eitherParseHashBlockHeader, leftError, parseSlotNo_)
@@ -110,7 +109,7 @@ commonUpTo = O.option (O.eitherReader parseUpTo)
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
-commonBatchSize :: O.Parser Natural
+commonBatchSize :: O.Parser BatchSize
 commonBatchSize = O.option O.auto
   $ longOpt "batch-size" "Batche size for persisting events"
   <> O.value 3000
@@ -126,7 +125,6 @@ mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
   <*> commonInterval
   <*> commonLogging
   <*> commonPipelineSize
-  <*> commonBatchSize
   <*> commonConcurrencyPrimitive
 
 -- * String parsers

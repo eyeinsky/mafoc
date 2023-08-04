@@ -12,12 +12,11 @@ This just provides the CLI interface and a streaming runtime.
 module Mafoc.Indexers.MintBurn where
 
 import Database.SQLite.Simple qualified as SQL
-import Options.Applicative qualified as Opt
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (
   DbPathAndTableName,
-  Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+  Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
   LocalChainsyncConfig_,
   defaultTableName,
   initializeLocalChainsync_,
@@ -35,20 +34,14 @@ data MintBurn = MintBurn
   }
   deriving (Show)
 
-parseCli :: Opt.ParserInfo MintBurn
-parseCli =
-  Opt.info (Opt.helper <*> cli) $
-    Opt.fullDesc
-      <> Opt.progDesc "mintburn"
-      <> Opt.header "mintburn - Index mint and burn events"
-  where
-    cli :: Opt.Parser MintBurn
-    cli =
-      MintBurn
-        <$> Opt.commonLocalChainsyncConfig
-        <*> Opt.commonDbPathAndTableName
-
 instance Indexer MintBurn where
+
+  description = "Index mint and burn events"
+
+  parseCli = MintBurn
+    <$> Opt.commonLocalChainsyncConfig
+    <*> Opt.commonDbPathAndTableName
+
   data Runtime MintBurn = Runtime
     { sqlConnection :: SQL.Connection
     , tableName :: String

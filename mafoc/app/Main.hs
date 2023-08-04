@@ -5,12 +5,13 @@ module Main where
 
 import Control.Exception qualified as IO
 import Options.Applicative qualified as Opt
+import Data.Text qualified as TS
 
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
-import Mafoc.Core (runIndexer)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
@@ -21,18 +22,25 @@ import Mafoc.Indexers.ScriptTx qualified as ScriptTx
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
-main = printRollbackException $ Opt.execParser cmdParserInfo >>= \case
+main = printRollbackException $ Opt.execParser cmdParserInfo >>= runCommand
+
+runCommand :: Command -> IO ()
+runCommand = \case
   Speed what -> case what of
     Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
     Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
     Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
-  BlockBasics configFromCli -> runIndexer configFromCli
-  MintBurn configFromCli -> runIndexer configFromCli
-  NoOp configFromCli -> runIndexer configFromCli
-  EpochStakepoolSize configFromCli -> runIndexer configFromCli
-  EpochNonce configFromCli -> runIndexer configFromCli
-  EpochState configFromCli -> runIndexer configFromCli
-  ScriptTx configFromCli -> runIndexer configFromCli
+
+  IndexerCommand indexerCommand' batchSize -> let
+    runIndexer' = case indexerCommand' of
+      BlockBasics configFromCli        -> runIndexer configFromCli
+      MintBurn configFromCli           -> runIndexer configFromCli
+      NoOp configFromCli               -> runIndexer configFromCli
+      EpochStakepoolSize configFromCli -> runIndexer configFromCli
+      EpochNonce configFromCli         -> runIndexer configFromCli
+      EpochState configFromCli         -> runIndexer configFromCli
+      ScriptTx configFromCli           -> runIndexer configFromCli
+    in runIndexer' batchSize
 
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
 
@@ -43,15 +51,18 @@ printRollbackException io = io `IO.catch` (\(a :: IO.SomeException) -> print a)
 
 data Command
   = Speed Speed.BlockSource
-  | BlockBasics BlockBasics.BlockBasics
+  | IndexerCommand IndexerCommand BatchSize
+  | FoldLedgerState FoldLedgerState.FoldLedgerState
+  deriving Show
+
+data IndexerCommand
+  = BlockBasics BlockBasics.BlockBasics
   | MintBurn MintBurn.MintBurn
   | NoOp NoOp.NoOp
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
   | EpochNonce EpochNonce.EpochNonce
   | EpochState EpochState.EpochState
   | ScriptTx ScriptTx.ScriptTx
-
-  | FoldLedgerState FoldLedgerState.FoldLedgerState
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -61,15 +72,27 @@ cmdParserInfo = Opt.info (Opt.helper <*> cmdParser) $ Opt.fullDesc
 
 cmdParser :: Opt.Parser Command
 cmdParser = Opt.subparser
-  $ Opt.command "speed" speedParserInfo
- <> Opt.command "blockbasics" (BlockBasics <$> BlockBasics.parseCli)
- <> Opt.command "mintburn" (MintBurn <$> MintBurn.parseCli)
- <> Opt.command "noop" (NoOp <$> NoOp.parseCli)
- <> Opt.command "epochstakepoolsize" (EpochStakepoolSize <$> EpochStakepoolSize.parseCli)
- <> Opt.command "epochnonce" (EpochNonce <$> EpochNonce.parseCli)
- <> Opt.command "epochstate" (EpochState <$> EpochState.parseCli)
+   $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
+  <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
+  <> indexerCommand' "blockbasics" BlockBasics
+  <> indexerCommand' "mintburn" MintBurn
+  <> indexerCommand' "noop" NoOp
+  <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
+  <> indexerCommand' "epochnonce" EpochNonce
+  <> indexerCommand' "epochstate" EpochState
+  <> indexerCommand' "scripttx" ScriptTx
+  where
+    indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
 
- <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
+indexerCommand :: forall a b . Indexer a => String -> ((a, BatchSize) -> b) -> Opt.Mod Opt.CommandFields b
+indexerCommand name f = Opt.command name (f <$> indexerParserInfo name)
+
+indexerParserInfo :: forall a . Indexer a => String -> Opt.ParserInfo (a, BatchSize)
+indexerParserInfo name = Opt.info (Opt.helper <*> parseCliWithBatchSize) $ Opt.fullDesc
+  <> Opt.progDesc name
+  <> Opt.header (name <> " - " <> TS.unpack (description @a))
+  where
+    parseCliWithBatchSize = (,) <$> parseCli @a <*> Opt.commonBatchSize
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

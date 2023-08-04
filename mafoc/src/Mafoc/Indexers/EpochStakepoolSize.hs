@@ -9,13 +9,13 @@ module Mafoc.Indexers.EpochStakepoolSize where
 import Data.Map.Strict qualified as M
 import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
-import Options.Applicative qualified as Opt
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (DbPathAndTableName, Indexer (Event, Runtime, State, checkpoint, initialize, persistMany, toEvent),
+import Mafoc.Core (DbPathAndTableName,
+                   Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvent),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase,
                    storeLedgerState)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -25,22 +25,18 @@ data EpochStakepoolSize = EpochStakepoolSize
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 
-parseCli :: Opt.ParserInfo EpochStakepoolSize
-parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc "epochstakepoolsize"
-  <> Opt.header "epochstakepoolsize - Index stakepool sizes in absolute ADA at every epoch"
-
-cli :: Opt.Parser EpochStakepoolSize
-cli = EpochStakepoolSize
-  <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
-  <*> Opt.commonDbPathAndTableName
-
 data EpochStakepoolSizeEvent = EpochStakepoolSizeEvent
   { epochNo  :: C.EpochNo
   , stakeMap :: M.Map C.PoolId C.Lovelace
   }
 
 instance Indexer EpochStakepoolSize where
+
+  description = "Index stakepool sizes per epoch in absolute ADA"
+
+  parseCli = EpochStakepoolSize
+    <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
+    <*> Opt.commonDbPathAndTableName
 
   type Event EpochStakepoolSize = EpochStakepoolSizeEvent
 
