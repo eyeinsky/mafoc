@@ -26,7 +26,7 @@ instance Indexer NoOp where
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
-  toEvents _runtime _state _blockInMode = pure (EmptyState, [])
+  toEvents _runtime _state _blockInMode = (EmptyState, [])
   initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName

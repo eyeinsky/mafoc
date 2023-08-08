@@ -44,7 +44,7 @@ instance Indexer EpochNonce where
     , maybePreviousEpochNo :: Maybe C.EpochNo
     }
 
-  toEvents (Runtime{ledgerCfg}) state blockInMode = return (State newExtLedgerState maybeEpochNo, maybeEvent)
+  toEvents (Runtime{ledgerCfg}) state blockInMode = (State newExtLedgerState maybeEpochNo, maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeEpochNo = Marconi.getEpochNo newExtLedgerState

@@ -88,7 +88,7 @@ class Indexer a where
   data State a
 
   -- | Convert a state and a block to events and a new state.
-  toEvents :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> IO (State a, [Event a])
+  toEvents :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> (State a, [Event a])
 
   -- | Initialize an indexer from @a@ to a runtime for local
   -- chainsync, indexer's runtime configuration and the indexer state.
@@ -125,7 +125,7 @@ runIndexer cli batchSize = do
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
       & foldYield (\indexerState (cp, blockInMode) -> do
-                      (indexerState', events) <- toEvents indexerRuntime indexerState blockInMode
+                      let (indexerState', events) = toEvents indexerRuntime indexerState blockInMode
                       return (indexerState', (cp, events, indexerState'))
                   ) indexerInitialState
 

@@ -50,7 +50,7 @@ instance Indexer EpochStakepoolSize where
     , maybeEpochNo   :: Maybe C.EpochNo
     }
 
-  toEvents Runtime{ledgerCfg} state blockInMode = return (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
+  toEvents Runtime{ledgerCfg} state blockInMode = (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
