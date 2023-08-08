@@ -3,6 +3,7 @@
 module Mafoc.Indexers.ScriptTx where
 
 import Database.SQLite.Simple qualified as SQL
+import Data.Coerce (coerce)
 
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
@@ -25,7 +26,7 @@ instance Indexer ScriptTx where
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName
 
-  type Event ScriptTx = Marconi.StorableEvent Marconi.ScriptTxHandle
+  newtype Event ScriptTx = Event (Marconi.StorableEvent Marconi.ScriptTxHandle)
 
   data Runtime ScriptTx = Runtime
     { sqlConnection :: SQL.Connection
@@ -33,7 +34,7 @@ instance Indexer ScriptTx where
     }
   data State ScriptTx = EmptyState
 
-  toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, event)
+  toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, coerce event)
     where
       event = let
         event'@(Marconi.ScriptTxEvent txScripts _) = Marconi.toUpdate txs (blockChainPoint blockInMode)
@@ -48,6 +49,6 @@ instance Indexer ScriptTx where
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events =
-    Marconi.sqliteInsert sqlConnection tableName events
+    Marconi.sqliteInsert sqlConnection tableName $ coerce events
 
   checkpoint Runtime{sqlConnection, tableName} _state t = setCheckpointSqlite sqlConnection tableName t

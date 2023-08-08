@@ -20,7 +20,7 @@ instance Indexer NoOp where
   parseCli = NoOp
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName
-  type Event NoOp = ()
+  newtype Event NoOp = Event ()
   data State NoOp = EmptyState
   data Runtime NoOp = Runtime
     { sqlConnection :: SQL.Connection

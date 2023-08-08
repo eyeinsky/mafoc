@@ -79,7 +79,7 @@ class Indexer a where
 
   -- | Event type, i.e the "business requirement". Any input block is
   -- converted to zero or more events which are then to be persisted.
-  type Event a
+  data Event a
 
   -- | The fold state. Some don't require a state so, for those it's
   -- defined as a data type with no fields, equivalent to unit. As a

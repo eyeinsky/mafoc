@@ -11,6 +11,7 @@ This just provides the CLI interface and a streaming runtime.
 -}
 module Mafoc.Indexers.MintBurn where
 
+import Data.Coerce (coerce)
 import Database.SQLite.Simple qualified as SQL
 
 import Mafoc.CLI qualified as Opt
@@ -48,11 +49,12 @@ instance Indexer MintBurn where
     , tableName :: String
     }
 
-  type Event MintBurn = Marconi.MintBurn.TxMintEvent
+  newtype Event MintBurn = Event Marconi.MintBurn.TxMintEvent
+    deriving Show
 
   data State MintBurn = EmptyState
 
-  toEvents _runtime _state blockInMode = (EmptyState, [Marconi.MintBurn.toUpdate Nothing blockInMode])
+  toEvents _runtime _state blockInMode = (EmptyState, coerce [Marconi.MintBurn.toUpdate Nothing blockInMode])
 
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
@@ -61,6 +63,6 @@ instance Indexer MintBurn where
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events = do
-    Marconi.MintBurn.sqliteInsert sqlConnection tableName events
+    Marconi.MintBurn.sqliteInsert sqlConnection tableName $ coerce events
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh

@@ -9,6 +9,7 @@ module Mafoc.Indexers.EpochStakepoolSize where
 import Data.Map.Strict qualified as M
 import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
+import Data.Coerce (coerce)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -26,9 +27,6 @@ data EpochStakepoolSize = EpochStakepoolSize
   } deriving Show
 
 data EpochStakepoolSizeEvent = EpochStakepoolSizeEvent
-  { epochNo  :: C.EpochNo
-  , stakeMap :: M.Map C.PoolId C.Lovelace
-  }
 
 instance Indexer EpochStakepoolSize where
 
@@ -38,7 +36,10 @@ instance Indexer EpochStakepoolSize where
     <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
     <*> Opt.commonDbPathAndTableName
 
-  type Event EpochStakepoolSize = EpochStakepoolSizeEvent
+  data Event EpochStakepoolSize = Event
+    { epochNo  :: C.EpochNo
+    , stakeMap :: M.Map C.PoolId C.Lovelace
+    }
 
   data Runtime EpochStakepoolSize = Runtime
     { sqlConnection :: SQL.Connection
@@ -50,19 +51,19 @@ instance Indexer EpochStakepoolSize where
     , maybeEpochNo   :: Maybe C.EpochNo
     }
 
-  toEvents Runtime{ledgerCfg} state blockInMode = (State newExtLedgerState maybeCurrentEpochNo, maybeEvent)
+  toEvents Runtime{ledgerCfg} state blockInMode = (State newExtLedgerState maybeCurrentEpochNo, coerce maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
     stakeMap = Marconi.getStakeMap newExtLedgerState
-    maybeEvent :: [EpochStakepoolSizeEvent]
+    maybeEvent :: [Event EpochStakepoolSize]
     maybeEvent = case maybeEpochNo state of
       Just previousEpochNo -> case maybeCurrentEpochNo of
         -- Epoch number increases: it is epoch boundary so emit an event
         Just currentEpochNo -> let epochDiff = currentEpochNo - previousEpochNo
           in case epochDiff of
                -- Epoch increased, emit an event
-               1 -> [EpochStakepoolSizeEvent currentEpochNo stakeMap]
+               1 -> [Event currentEpochNo stakeMap]
                -- Epoch remained the same, don't emit an event
                0 -> []
                _ -> error $ "EpochStakepoolSize indexer: assumption violated: epoch changed by " <> show epochDiff <> " instead of expected 0 or 1."
@@ -72,7 +73,7 @@ instance Indexer EpochStakepoolSize where
         -- There was no previous epoch no (= it was Byron era) but
         -- there is one now: emit an event as this started a new
         -- epoch.
-        Just currentEpochNo -> [EpochStakepoolSizeEvent currentEpochNo stakeMap]
+        Just currentEpochNo -> [Event currentEpochNo stakeMap]
         -- No previous epoch no and no current epoch no, the Byron
         -- era continues.
         _                   -> []
@@ -84,7 +85,7 @@ instance Indexer EpochStakepoolSize where
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 
-  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
+  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
   checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = storeLedgerState ledgerCfg slotNoBhh extLedgerState
 
@@ -97,10 +98,10 @@ sqliteInit c tableName = SQL.execute_ c $
   \   , lovelace  INT NOT NULL   \
   \   , epoch_no  INT NOT NULL   )"
 
-sqliteInsert :: SQL.Connection -> String -> [EpochStakepoolSizeEvent] -> IO ()
+sqliteInsert :: SQL.Connection -> String -> [Event EpochStakepoolSize] -> IO ()
 sqliteInsert c tableName events = SQL.executeMany c
   ("INSERT INTO " <> fromString tableName <>" (epoch_no, pool_id, lovelace) VALUES (?, ?, ?)")
   (toRows =<< events)
   where
-   toRows :: EpochStakepoolSizeEvent -> [(C.EpochNo, C.PoolId, C.Lovelace)]
-   toRows (EpochStakepoolSizeEvent epochNo m) = map (\(keyHash, lovelace) -> (epochNo, keyHash, lovelace)) $ M.toList m
+   toRows :: Event EpochStakepoolSize -> [(C.EpochNo, C.PoolId, C.Lovelace)]
+   toRows (Event epochNo m) = map (\(keyHash, lovelace) -> (epochNo, keyHash, lovelace)) $ M.toList m

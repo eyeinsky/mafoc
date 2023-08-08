@@ -3,6 +3,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.EpochNonce where
 
+import Data.Coerce (coerce)
+
 import Cardano.Api qualified as C
 import Cardano.Ledger.Shelley.API qualified as Ledger
 import Data.String (fromString)
@@ -19,11 +21,6 @@ data EpochNonce = EpochNonce
   , dbPathAndTableName :: DbPathAndTableName
   } deriving Show
 
-data EpochNonceEvent = EpochNonceEvent
-  { epochNo    :: C.EpochNo
-  , epochNonce :: Ledger.Nonce
-  }
-
 instance Indexer EpochNonce where
 
   description = "Index epoch numbers and epoch nonces"
@@ -32,7 +29,10 @@ instance Indexer EpochNonce where
     <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
     <*> Opt.commonDbPathAndTableName
 
-  type Event EpochNonce = EpochNonceEvent
+  data Event EpochNonce = Event
+    { epochNo    :: C.EpochNo
+    , epochNonce :: Ledger.Nonce
+    }
 
   data Runtime EpochNonce = Runtime
     { sqlConnection :: SQL.Connection
@@ -44,19 +44,19 @@ instance Indexer EpochNonce where
     , maybePreviousEpochNo :: Maybe C.EpochNo
     }
 
-  toEvents (Runtime{ledgerCfg}) state blockInMode = (State newExtLedgerState maybeEpochNo, maybeEvent)
+  toEvents (Runtime{ledgerCfg}) state blockInMode = (State newExtLedgerState maybeEpochNo, coerce maybeEvent)
     where
     newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
     maybeEpochNo = Marconi.getEpochNo newExtLedgerState
     epochNonce = Marconi.getEpochNonce newExtLedgerState
-    maybeEvent :: [EpochNonceEvent]
+    maybeEvent :: [Event EpochNonce]
     maybeEvent = case maybeEpochNo of
       Just epochNo -> case maybePreviousEpochNo state of
         Just previousEpochNo -> case epochNo - previousEpochNo of
-          1 -> [EpochNonceEvent epochNo epochNonce]
+          1 -> [Event epochNo epochNonce]
           0 -> []
           invalidEpochDiff -> error $ "EpochNonce indexer: assumption violated: epoch changed by " <> show invalidEpochDiff <> " instead of expected 0 or 1."
-        Nothing -> [EpochNonceEvent epochNo epochNonce]
+        Nothing -> [Event epochNo epochNonce]
       Nothing -> []
 
   initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
@@ -66,7 +66,7 @@ instance Indexer EpochNonce where
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 
-  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
+  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
   checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = storeLedgerState ledgerCfg slotNoBhh extLedgerState
 
@@ -78,7 +78,7 @@ sqliteInit c tableName = SQL.execute_ c $
   \   ( epoch_no INT NOT NULL  \
   \   , nonce    BLOB NOT NULL ) "
 
-sqliteInsert :: SQL.Connection -> String -> [EpochNonceEvent] -> IO ()
+sqliteInsert :: SQL.Connection -> String -> [Event EpochNonce] -> IO ()
 sqliteInsert c tableName events = SQL.executeMany c
   ("INSERT INTO " <> fromString tableName <>" (epoch_no, nonce) VALUES (?, ?)")
-  (map (\(EpochNonceEvent epochNo nonce) -> (epochNo, nonce)) events)
+  (map (\(Event epochNo nonce) -> (epochNo, nonce)) events)

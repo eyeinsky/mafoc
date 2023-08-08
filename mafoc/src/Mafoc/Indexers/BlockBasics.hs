@@ -34,7 +34,7 @@ instance Indexer BlockBasics where
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName
 
-  type Event BlockBasics = Row
+  newtype Event BlockBasics = Event (Word64, C.Hash C.BlockHeader, Int)
 
   data State BlockBasics = EmptyState
 
@@ -43,9 +43,9 @@ instance Indexer BlockBasics where
     , tableName     :: String
     }
 
-  toEvents _runtime _state blockInMode = (EmptyState, [blockToRow blockInMode])
+  toEvents _runtime _state blockInMode = (EmptyState, [coerce $ blockToRow blockInMode])
 
-  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
+  persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
   initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync
