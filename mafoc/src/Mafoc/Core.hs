@@ -17,6 +17,7 @@ module Mafoc.Core
 import Control.Concurrent qualified as IO
 import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
+import Control.Exception qualified as E
 import Control.Monad.Trans.Class (lift)
 import Data.ByteString.Char8 qualified as C8
 import Data.Coerce (coerce)
@@ -51,8 +52,9 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Ouroboros.Consensus.Config qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 
-import Mafoc.RollbackRingBuffer qualified as RB
+import Mafoc.Exceptions qualified as E
 import Mafoc.Logging qualified as Logging
+import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
                        getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
 
@@ -422,8 +424,8 @@ loadLedgerState (NodeConfig nodeConfig) ledgerStatePath = do
   cfg <- Marconi.getLedgerConfig nodeConfig
   let O.ExtLedgerCfg topLevelConfig = cfg
   extLedgerState <- Marconi.loadExtLedgerState (O.configCodec topLevelConfig) ledgerStatePath >>= \case
-    Right (_, extLedgerState) -> return extLedgerState
-    Left msg                  -> error $ "Error while deserialising file " <> ledgerStatePath <> ", error: " <> show msg
+    Right (_, extLedgerState)   -> return extLedgerState
+    Left cborDeserialiseFailure -> E.throwIO $ E.Can't_deserialise_LedgerState_from_CBOR ledgerStatePath cborDeserialiseFailure
   return (cfg, extLedgerState)
 
 storeLedgerState :: Marconi.ExtLedgerCfg_ -> SlotNoBhh -> Marconi.ExtLedgerState_ -> IO ()
@@ -474,7 +476,9 @@ initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqlite
 -- | Load ledger state from disk
 initializeLedgerState :: NodeConfig -> FilePath -> IO (SlotNoBhh, Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
 initializeLedgerState nodeConfig ledgerStatePath = do
-  slotNoBhh <- either (error $ "Can't parse chain-point from filename: " <> ledgerStatePath) return $ bhhFromFileName ledgerStatePath
+  slotNoBhh <- bhhFromFileName ledgerStatePath & \case
+     Left errMsg -> E.throwIO $ E.Can't_parse_chain_point_from_LedgerState_file_name ledgerStatePath errMsg
+     Right slotNoBhh' -> return slotNoBhh'
   (ledgerCfg, extLedgerState) <- loadLedgerState nodeConfig ledgerStatePath
   return (slotNoBhh, ledgerCfg, extLedgerState)
 
@@ -540,7 +544,7 @@ getCheckpointSqlite sqlCon name = do
   case list of
     [(slotNo, bhh)] -> return $ Just $ C.ChainPoint slotNo bhh
     []              -> return Nothing
-    _               -> error "getCheckpointSqlite: this should never happen!!"
+    _               -> E.throwIO $ E.TextException "Indexer can't have more than one checkpoint in sqlite"
 
 -- ** Database path and table(s)
 

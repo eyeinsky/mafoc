@@ -6,6 +6,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Mafoc.Indexers.EpochStakepoolSize where
 
+import Control.Exception (throw)
 import Data.Map.Strict qualified as M
 import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
@@ -19,6 +20,7 @@ import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase,
                    storeLedgerState)
+import Mafoc.Exceptions qualified as E
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
@@ -66,9 +68,8 @@ instance Indexer EpochStakepoolSize where
                1 -> [Event currentEpochNo stakeMap]
                -- Epoch remained the same, don't emit an event
                0 -> []
-               _ -> error $ "EpochStakepoolSize indexer: assumption violated: epoch changed by " <> show epochDiff <> " instead of expected 0 or 1."
-        _ -> error $ "EpochStakepoolSize indexer: assumption violated: there was a previous epoch no, but there is none now — this can't be!"
-        -- todo: Replace the errors above with specific exceptions
+               _ -> throw $ E.Epoch_difference_other_than_0_or_1 previousEpochNo currentEpochNo
+        _ -> throw $ E.Epoch_number_disappears previousEpochNo
       _ -> case maybeCurrentEpochNo of
         -- There was no previous epoch no (= it was Byron era) but
         -- there is one now: emit an event as this started a new

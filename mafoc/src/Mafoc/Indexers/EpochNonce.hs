@@ -7,6 +7,7 @@ import Data.Coerce (coerce)
 
 import Cardano.Api qualified as C
 import Cardano.Ledger.Shelley.API qualified as Ledger
+import Control.Exception qualified as E
 import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
 
@@ -14,6 +15,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase, storeLedgerState)
+import Mafoc.Exceptions qualified as E
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochNonce = EpochNonce
@@ -55,7 +57,7 @@ instance Indexer EpochNonce where
         Just previousEpochNo -> case epochNo - previousEpochNo of
           1 -> [Event epochNo epochNonce]
           0 -> []
-          invalidEpochDiff -> error $ "EpochNonce indexer: assumption violated: epoch changed by " <> show invalidEpochDiff <> " instead of expected 0 or 1."
+          _ -> E.throw $ E.Epoch_difference_other_than_0_or_1 previousEpochNo epochNo
         Nothing -> [Event epochNo epochNonce]
       Nothing -> []
 

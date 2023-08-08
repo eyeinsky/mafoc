@@ -1,0 +1,37 @@
+{-# LANGUAGE DerivingStrategies #-}
+module Mafoc.Exceptions
+  ( module Mafoc.Exceptions
+  , throw
+  , throwIO
+  ) where
+
+import Control.Exception (Exception, throw, throwIO)
+import Data.Text qualified as TS
+import Codec.CBOR.Read (DeserialiseFailure)
+import Cardano.Api qualified as C
+
+data CardanoAssumptionBroken
+  = Epoch_difference_other_than_0_or_1
+    { epochNo :: C.EpochNo
+    , followingEpochNo :: C.EpochNo
+    }
+  | Epoch_number_disappears { previouslyExistingEpochNo :: C.EpochNo }
+  | UTxO_not_found { attemptedToSpend :: C.TxIn }
+  | Block_number_ahead_of_tip
+    { blockNumberInBlock :: C.BlockNo
+    , blockNumberInChainTip :: C.ChainTip
+    }
+  deriving stock Show
+  deriving anyclass Exception
+
+-- | An exception where we don't bother with structure, but just
+-- explain in text.
+data TextException = TextException TS.Text
+  deriving stock Show
+  deriving anyclass Exception
+
+data MafocIOException
+  = Can't_deserialise_LedgerState_from_CBOR FilePath DeserialiseFailure
+  | Can't_parse_chain_point_from_LedgerState_file_name FilePath String
+  deriving stock Show
+  deriving anyclass Exception

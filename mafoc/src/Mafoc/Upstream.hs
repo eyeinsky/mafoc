@@ -3,7 +3,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
 
-import Control.Exception (throwIO, Exception)
+import Control.Exception (throwIO, Exception, throw)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Coerce (coerce)
 import Data.Word (Word64)
@@ -17,6 +17,7 @@ import Cardano.Streaming.Helpers qualified as CS
 import Marconi.ChainIndex.Types qualified as Marconi
 import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
+import Mafoc.Exceptions qualified as E
 
 -- * Additions to cardano-api
 
@@ -44,7 +45,10 @@ tipDistance blk ct = let
   tipBlockNo = case ct of
     C.ChainTipAtGenesis     -> 0
     C.ChainTip _ _ blockNo' -> blockNo'
-  in blockNoToNatural tipBlockNo - blockNoToNatural (blockNo blk)
+  blockBlockNo = blockNo blk
+  in case blockNoToNatural tipBlockNo `minusNaturalMaybe` blockNoToNatural blockBlockNo of
+       Just n -> n
+       Nothing -> throw $ E.Block_number_ahead_of_tip blockBlockNo ct
 
 -- ** Query node
 

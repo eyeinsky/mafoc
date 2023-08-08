@@ -49,6 +49,7 @@ library
     Mafoc.CLI
     Mafoc.Cmds.FoldLedgerState
     Mafoc.Core
+    Mafoc.Exceptions
     Mafoc.Indexer.Class
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
@@ -86,6 +87,7 @@ library
     , async
     , base                  >=4.9 && <5
     , bytestring
+    , cborg
     , containers
     , directory
     , filepath

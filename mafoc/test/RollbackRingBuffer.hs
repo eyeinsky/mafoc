@@ -27,6 +27,7 @@ import Test.Tasty.Hedgehog (testPropertyNamed)
 
 import Mafoc.RollbackRingBuffer (rollbackRingBuffer)
 import Mafoc.Upstream (SlotNoBhh, minusNaturalMaybe)
+import Mafoc.Exceptions qualified as E
 import Spec.Helpers (classifier, footnotes)
 
 tests :: TestTree
@@ -35,6 +36,8 @@ tests = testGroup "RollbackRingBuffer"
     "Rollback ring buffer buffers, overflows and handles rollbacks as expected"
     "prop_rollbackRingBuffer" prop_rollbackRingBuffer
   ]
+
+type Event = (C.BlockNo, C.SlotNo)
 
 -- | Generates random number of events and a random security
 -- param. Event type is SlotNo so it's easy to derive a ChainPoint and
@@ -48,7 +51,7 @@ prop_rollbackRingBuffer = H.property $ do
 
   let stream = mapM_ S.yield events
   overflow <- liftIO $ IO.try $ S.toList_ $ rollbackRingBuffer securityParam tipDiff eventSlotNoBhh stream
-  let expected = snd <$> toExpected securityParam events :: Either CS.RollbackException [C.SlotNo]
+  let expected = snd <$> toExpected securityParam events :: Either CS.RollbackException [Event]
 
   classifier "A"
     [ ("Test cases with only \"roll forwards\"", hasRollForwards && not hasRollbacks)
@@ -78,25 +81,26 @@ prop_rollbackRingBuffer = H.property $ do
   expected === overflow
 
 -- | Generate a list of chainsync events, both "roll forwards" and
--- rollbacks. Our event type is C.SlotNo.
-genEvents :: H.Gen ([CS.ChainSyncEvent C.SlotNo], Natural, Natural)
+-- rollbacks. Our event type is Event.
+genEvents :: H.Gen ([CS.ChainSyncEvent Event], Natural, Natural)
 genEvents = do
   let n = 5
   securityParam :: Natural <- Gen.integral $ Range.linear 0 $ 2 * n
   numberOfEvents :: Natural <- Gen.integral $ Range.linear 0 $ 3 * n
   let loop _ acc 0 = return acc
-      loop prevEvent acc countdown = do
+      loop prevEventNum acc countdown = do
         step <- Gen.frequency
           [ (1, Gen.integral $ Range.linear (-5) 0) -- roll backward
           , (8, Gen.integral $ Range.linear 1 5)    -- roll forward
           ]
         tipStep <- Gen.integral $ Range.linear 0 5  -- tip distance from current event
-        let event = prevEvent + step
-            tip' = C.ChainTip (fromInteger $ event + tipStep) dummyBhh 0
-            chainSyncEvent = if prevEvent < event
-              then CS.RollForward (fromInteger event) tip'
-              else CS.RollBackward (C.ChainPoint (fromInteger event) dummyBhh) tip'
-        loop event (chainSyncEvent : acc) (countdown - 1)
+        let eventNum = prevEventNum + step
+            tipNum = eventNum + tipStep
+            tip' = C.ChainTip (fromInteger tipNum) dummyBhh (fromInteger tipNum)
+            chainSyncEvent = if prevEventNum < eventNum
+              then CS.RollForward (fromInteger eventNum, fromInteger eventNum) tip'
+              else CS.RollBackward (C.ChainPoint (fromInteger eventNum) dummyBhh) tip'
+        loop eventNum (chainSyncEvent : acc) (countdown - 1)
 
   let start' = (maxBound - minBound) `div` 4 :: Word64 -- we start from the middle Word64, so that rollbacks wont wrap
       start = fromIntegral start' :: Integer
@@ -104,14 +108,14 @@ genEvents = do
   return (events, securityParam, numberOfEvents)
 
 -- | List-based test oracle for the ring buffer.
-toExpected :: Natural -> [CS.ChainSyncEvent C.SlotNo] -> Either CS.RollbackException ([C.SlotNo], [C.SlotNo])
+toExpected :: Natural -> [CS.ChainSyncEvent Event] -> Either CS.RollbackException ([Event], [Event])
 toExpected securityParam list = case foldl step (Right ([], [])) list of
   Left e                   -> Left e
   Right (buffer, overflow) -> Right (reverse buffer, reverse overflow)
   where
-  step :: Either CS.RollbackException ([C.SlotNo], [C.SlotNo])
-    -> CS.ChainSyncEvent C.SlotNo
-    -> Either CS.RollbackException ([C.SlotNo], [C.SlotNo])
+  step :: Either CS.RollbackException ([Event], [Event])
+    -> CS.ChainSyncEvent Event
+    -> Either CS.RollbackException ([Event], [Event])
   step e@(Left{}) _ = e
   step (Right (buffer, overflow)) csEvent = case csEvent of
     CS.RollForward event ct
@@ -123,17 +127,17 @@ toExpected securityParam list = case foldl step (Right ([], [])) list of
       | otherwise -> error "buffer larger than security param"
     CS.RollBackward cp ct -> case cp of
       C.ChainPointAtGenesis -> Right ([], overflow)
-      C.ChainPoint slotNo bhh -> let
-        (_, remaining) = L.break ((slotNo, bhh) ==) $ map eventSlotNoBhh buffer
+      C.ChainPoint slotNo _bhh -> let
+        (_, remaining) = L.break ((slotNo ==) . snd) $ buffer
         in case remaining of
              [] -> Left $ CS.RollbackLocationNotFound (C.ChainPoint slotNo dummyBhh) ct
-             _  -> Right (map fst remaining, overflow)
+             _  -> Right (remaining, overflow)
 
   flush ct (buffer, overflow) = Right $ let
     (unstable, stable) = span (\event -> tipDiff event ct < securityParam) buffer
     in (unstable, stable <> overflow)
 
-showEvents :: [CS.ChainSyncEvent C.SlotNo] -> String
+showEvents :: [CS.ChainSyncEvent Event] -> String
 showEvents = concat . map (\case
   CS.RollForward e ct   -> "\n - forward " <> show e <> " " <> showCtSlot ct
   CS.RollBackward cp ct -> "\n - backward " <> showCpSlot cp <> " " <> showCtSlot ct)
@@ -149,18 +153,18 @@ showEvents = concat . map (\case
 
 -- * SlotNo
 
-eventSlotNoBhh :: C.SlotNo -> SlotNoBhh
-eventSlotNoBhh event = (event, dummyBhh)
+eventSlotNoBhh :: Event -> SlotNoBhh
+eventSlotNoBhh (_, slotNo) = (slotNo, dummyBhh)
 
-tipDiff :: C.SlotNo -> C.ChainTip -> Natural
-tipDiff event (C.ChainTip slotNo _ _) = let
-  eventSlotNo = fromIntegral (coerce event :: Word64) :: Natural
-  tipSlot = fromIntegral (coerce slotNo :: Word64) :: Natural
-  in case tipSlot `minusNaturalMaybe` eventSlotNo of
+tipDiff :: Event -> C.ChainTip -> Natural
+tipDiff (eventBlockNo, _) ct@(C.ChainTip _ _ tipBlockNo) = let
+  eventBlockNo' = fromIntegral (coerce eventBlockNo :: Word64) :: Natural
+  tipBlockNo' = fromIntegral (coerce tipBlockNo :: Word64) :: Natural
+  in case tipBlockNo' `minusNaturalMaybe` eventBlockNo' of
   Just n  -> n
-  Nothing -> error $ "Subtraction with a larger natural! " <> show (tipSlot, eventSlotNo, eventSlotNo - tipSlot)
-tipDiff (C.SlotNo 0) C.ChainTipAtGenesis = 0
-tipDiff slotNo C.ChainTipAtGenesis = error $ "Tip can't be at genesis when event slot number is " <> show slotNo
+  Nothing -> IO.throw $ E.Block_number_ahead_of_tip tipBlockNo ct
+tipDiff (C.BlockNo 0, _) C.ChainTipAtGenesis = 0
+tipDiff (blockNo, _) ct@C.ChainTipAtGenesis = IO.throw $ E.Block_number_ahead_of_tip blockNo ct
 
 dummyBhh :: C.Hash C.BlockHeader
 dummyBhh = fromString "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"

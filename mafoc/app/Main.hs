@@ -12,6 +12,7 @@ import Cardano.Streaming.Callbacks qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
+import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
@@ -43,7 +44,14 @@ runCommand = \case
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
 
 printRollbackException :: IO () -> IO ()
-printRollbackException io = io `IO.catch` (\(a :: IO.SomeException) -> print a)
+printRollbackException io = io `IO.catches`
+  -- Draw attention to broken assumptions
+  [ IO.Handler $ \(a :: E.CardanoAssumptionBroken) -> do
+      putStrLn "An assumption about how Cardano works was broken:"
+      print a
+      putStrLn "Either the assumption is not true or there is a bug."
+      IO.throwIO a
+  ]
 
 -- * Arguments
 

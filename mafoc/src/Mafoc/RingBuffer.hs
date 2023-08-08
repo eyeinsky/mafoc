@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE DerivingStrategies #-}
 
 module Mafoc.RingBuffer
   ( RingBuffer(ringBufferFill),  new, peek, reset
@@ -14,6 +15,7 @@ module Mafoc.RingBuffer
   ) where
 
 import Control.Arrow (second)
+import Control.Exception (Exception, throwIO)
 import Control.Monad (foldM)
 import Control.Monad.Primitive (PrimState)
 import Data.Vector qualified as V
@@ -30,6 +32,11 @@ data RingBuffer a = RingBuffer
   , _ringBufferIndex :: Int
   , ringBufferFill   :: Natural
   }
+
+data RingBufferException
+  = Fill_larger_than_size
+  deriving Show
+  deriving anyclass Exception
 
 new :: Natural -> IO (RingBuffer a)
 new size = do
@@ -49,7 +56,7 @@ push a (RingBuffer vector size index fill) = case fill `compare` size of
     a' <- VGM.exchange vector index a
     let rb' = RingBuffer vector size (next index) fill
     return (rb', Just a')
-  GT -> error "RingBuffer.push: RingBuffer can't be more full than it's size. This should never happen!"
+  GT -> throwIO Fill_larger_than_size
 
   where
     next i = (i + 1) `rem` fromIntegral size
