@@ -44,7 +44,6 @@ import Text.Read qualified as Read
 import Cardano.Api qualified as C
 import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
-import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 import Marconi.ChainIndex.Indexers.MintBurn ()
@@ -55,8 +54,8 @@ import Ouroboros.Consensus.Ledger.Extended qualified as O
 import Mafoc.Exceptions qualified as E
 import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
-import Mafoc.Upstream (SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, foldYield,
-                       getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
+import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderr
+                      , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
 
 -- * Indexer class
 
@@ -106,7 +105,7 @@ class Indexer a where
 
 runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> IO ()
 runIndexer cli batchSize = do
-  c <- defaultConfigStdout
+  c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace

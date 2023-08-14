@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
@@ -18,6 +19,11 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 import Mafoc.Exceptions qualified as E
+
+import Cardano.BM.Configuration.Model qualified as CM
+import Cardano.BM.Data.BackendKind qualified as CM
+import Cardano.BM.Data.Output qualified as CM
+import Cardano.BM.Data.Severity qualified as CM
 
 -- * Additions to cardano-api
 
@@ -151,3 +157,36 @@ minusNaturalMaybe :: Natural -> Natural -> Maybe Natural
 minusNaturalMaybe a b
   | a < b = Nothing
   | otherwise = Just (a - b)
+
+-- * Send traces to stdout
+
+-- Copy of defaultConfigStdout with s/out/err/ in
+-- iohk-monitoring/src/Cardano/BM/Configuration/Static.lhs in
+-- https://github.com/input-output-hk/iohk-monitoring-framework
+defaultConfigStderr :: IO CM.Configuration
+defaultConfigStderr = do
+    c <- CM.empty
+    CM.setMinSeverity c CM.Debug
+    CM.setSetupBackends c [CM.KatipBK]
+    CM.setDefaultBackends c [CM.KatipBK]
+    CM.setSetupScribes c [ CM.ScribeDefinition {
+                              CM.scName = "text"
+                            , CM.scFormat = CM.ScText
+                            , CM.scKind = CM.StderrSK
+                            , CM.scPrivacy = CM.ScPublic
+                            , CM.scRotation = Nothing
+                            , CM.scMinSev = minBound
+                            , CM.scMaxSev = maxBound
+                            }
+                         ,  CM.ScribeDefinition {
+                              CM.scName = "json"
+                            , CM.scFormat = CM.ScJson
+                            , CM.scKind = CM.StderrSK
+                            , CM.scPrivacy = CM.ScPublic
+                            , CM.scRotation = Nothing
+                            , CM.scMinSev = minBound
+                            , CM.scMaxSev = maxBound
+                            }
+                         ]
+    CM.setDefaultScribes c ["StderrSK::text"]
+    return c
