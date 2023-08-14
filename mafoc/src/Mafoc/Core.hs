@@ -22,16 +22,13 @@ import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
 import Control.Exception qualified as E
 import Control.Monad.Trans.Class (lift)
-import Data.ByteString.Char8 qualified as C8
 import Data.Coerce (coerce)
-import Data.Function (on, (&))
-import Data.List qualified as L
-import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Proxy (Proxy (Proxy))
+import Data.Function ((&))
+import Data.Maybe (fromMaybe)
 import Data.String (IsString)
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Numeric.Natural (Natural)
@@ -40,9 +37,7 @@ import Prettyprinter (Doc, Pretty (pretty), defaultLayoutOptions, layoutPretty, 
 import Prettyprinter.Render.Text (renderStrict)
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
-import System.Directory (listDirectory, removeFile)
 import System.FilePath ((</>))
-import Text.Read qualified as Read
 
 import Cardano.Api qualified as C
 import Cardano.BM.Setup (withTrace)
@@ -59,6 +54,7 @@ import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderr
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
+import Mafoc.StateFile qualified as StateFile
 
 -- * Indexer class
 
@@ -400,26 +396,14 @@ traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaul
 
 -- * Ledger state checkpoint
 
-listExtLedgerStates :: FilePath -> IO [(FilePath, SlotNoBhh)]
-listExtLedgerStates dirPath = L.sortBy (flip compare `on` snd) . mapMaybe parse <$> listDirectory dirPath
-  where
-    parse :: FilePath -> Maybe (FilePath, SlotNoBhh)
-    parse fn = either (const Nothing) Just . fmap (fn,) $ bhhFromFileName fn
-
 -- | Load ledger state from file, while taking the chain point it's at from the file name.
 loadLedgerStateWithChainpoint :: NodeConfig -> Trace.Trace IO TS.Text -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_, C.ChainPoint)
-loadLedgerStateWithChainpoint nodeConfig@(NodeConfig nodeConfig') trace = listExtLedgerStates "." >>= \case
-  -- A ledger state exists on disk, resume from there
-  (fn, (slotNo, bhh)) : _ -> do
-    (cfg, extLedgerState) <- loadLedgerState nodeConfig fn
-    let cp = C.ChainPoint slotNo bhh
-    traceInfo trace $ "Found on-disk ledger state, resuming from: " <> pretty cp
-    return (cfg, extLedgerState, cp)
-  -- No existing ledger states, start from the beginning
-  [] -> do
-    (cfg, st) <- Marconi.getInitialExtLedgerState nodeConfig'
-    traceInfo trace "No on-disk ledger state found, resuming from genesis"
-    return (cfg, st, C.ChainPointAtGenesis)
+loadLedgerStateWithChainpoint nodeConfig@(NodeConfig nodeConfig') trace = do
+  ((cfg, ls), cp) <- StateFile.loadLatest "ledgerState" (loadLedgerState nodeConfig) (Marconi.getInitialExtLedgerState nodeConfig')
+  case cp of
+    C.ChainPointAtGenesis -> traceInfo trace "No ledger state found, initiated from genesis"
+    C.ChainPoint{} -> traceInfo trace $ "Found ledger state from " <> pretty cp
+  return (cfg, ls, cp)
 
 loadLedgerState :: NodeConfig -> FilePath -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
 loadLedgerState (NodeConfig nodeConfig) ledgerStatePath = do
@@ -431,13 +415,8 @@ loadLedgerState (NodeConfig nodeConfig) ledgerStatePath = do
   return (cfg, extLedgerState)
 
 storeLedgerState :: Marconi.ExtLedgerCfg_ -> SlotNoBhh -> Marconi.ExtLedgerState_ -> IO ()
-storeLedgerState ledgerCfg slotNoBhh extLedgerState = do
-  let O.ExtLedgerCfg topLevelConfig = ledgerCfg
-  putStrLn $ "Write ledger state"
-  Marconi.writeExtLedgerState (bhhToFileName slotNoBhh) (O.configCodec topLevelConfig) extLedgerState
-  putStrLn $ "Wrote ledger state"
-  mapM_ (removeFile . bhhToFileName) . drop 2 . map snd =<< listExtLedgerStates "."
-  putStrLn $ "Removed other files"
+storeLedgerState (O.ExtLedgerCfg topLevelConfig) slotNoBhh extLedgerState =
+  Marconi.writeExtLedgerState (StateFile.toName "ledgerState" slotNoBhh) (O.configCodec topLevelConfig) extLedgerState
 
 -- | Initialization for ledger state indexers
 initializeLedgerStateAndDatabase
@@ -478,47 +457,11 @@ initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqlite
 -- | Load ledger state from disk
 initializeLedgerState :: NodeConfig -> FilePath -> IO (SlotNoBhh, Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
 initializeLedgerState nodeConfig ledgerStatePath = do
-  slotNoBhh <- bhhFromFileName ledgerStatePath & \case
+  slotNoBhh <- StateFile.bhhFromFileName ledgerStatePath & \case
      Left errMsg -> E.throwIO $ E.Can't_parse_chain_point_from_LedgerState_file_name ledgerStatePath errMsg
      Right slotNoBhh' -> return slotNoBhh'
   (ledgerCfg, extLedgerState) <- loadLedgerState nodeConfig ledgerStatePath
   return (slotNoBhh, ledgerCfg, extLedgerState)
-
-bhhToFileName :: SlotNoBhh -> FilePath
-bhhToFileName (slotNo, blockHeaderHash) = L.intercalate "_"
-  [ "ledgerState"
-  , show slotNo'
-  , TS.unpack (C.serialiseToRawBytesHexText blockHeaderHash)
-  ]
-  where
-    slotNo' = coerce slotNo :: Word64
-
-bhhFromFileName :: String -> Either String SlotNoBhh
-bhhFromFileName str = case splitOn '_' str of
-  _ : slotNoStr : blockHeaderHashHex : _ -> (,)
-    <$> parseSlotNo_ slotNoStr
-    <*> eitherParseHashBlockHeader_ blockHeaderHashHex
-  _ -> Left "Can't parse ledger state file name, must be <slot no> _ <block header hash>"
-  where
-
-splitOn :: Eq a => a -> [a] -> [[a]]
-splitOn x xs = case span (/= x) xs of
-  (prefix, _x : rest) -> prefix : recurse rest
-  (lastChunk, [])     -> [lastChunk]
-  where
-    recurse = splitOn x
-
-parseSlotNo_ :: String -> Either String C.SlotNo
-parseSlotNo_ str = maybe (leftError "Can't read SlotNo" str) (Right . C.SlotNo) $ Read.readMaybe str
-
--- eitherParseHashBlockHeader :: String -> Either RawBytesHexError (C.Hash C.BlockHeader) -- cardano-api-1.35.4:Cardano.Api.SerialiseRaw.
-eitherParseHashBlockHeader = C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy) . C8.pack
-
-eitherParseHashBlockHeader_ :: String -> Either String (C.Hash C.BlockHeader)
-eitherParseHashBlockHeader_ = either (Left . show) Right . eitherParseHashBlockHeader
-
-leftError :: String -> String -> Either String a
-leftError label str = Left $ label <> ": '" <> str <> "'"
 
 -- * Sqlite
 

@@ -11,7 +11,8 @@ import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
-                   UpTo (CurrentTip, Infinity, SlotNo), eitherParseHashBlockHeader, leftError, parseSlotNo_)
+                   UpTo (CurrentTip, Infinity, SlotNo))
+import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
 import Marconi.ChainIndex.Types qualified as Marconi
 
 -- * Options

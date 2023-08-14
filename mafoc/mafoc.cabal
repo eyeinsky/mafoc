@@ -51,6 +51,7 @@ library
     Mafoc.Core
     Mafoc.Exceptions
     Mafoc.Indexer.Class
+    Mafoc.StateFile
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
