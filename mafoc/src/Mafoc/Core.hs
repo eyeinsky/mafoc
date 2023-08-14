@@ -12,6 +12,9 @@
 module Mafoc.Core
   ( module Mafoc.Core
   , module Mafoc.Upstream
+
+  -- * Re-exports
+  , Marconi.CurrentEra
   ) where
 
 import Control.Concurrent qualified as IO

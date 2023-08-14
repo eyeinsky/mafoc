@@ -80,10 +80,10 @@ cmdParser = Opt.subparser
    $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
   <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
   <> indexerCommand' "blockbasics" BlockBasics
+  <> indexerCommand' "epochnonce" EpochNonce
+  <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
   <> indexerCommand' "mintburn" MintBurn
   <> indexerCommand' "noop" NoOp
-  <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
-  <> indexerCommand' "epochnonce" EpochNonce
   <> indexerCommand' "scripttx" ScriptTx
   where
     indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
