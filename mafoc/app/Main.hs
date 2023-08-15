@@ -14,6 +14,7 @@ import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
+import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
 import Mafoc.Indexers.MintBurn qualified as MintBurn
@@ -39,6 +40,7 @@ runCommand = \case
       EpochStakepoolSize configFromCli -> runIndexer configFromCli
       EpochNonce configFromCli         -> runIndexer configFromCli
       ScriptTx configFromCli           -> runIndexer configFromCli
+      Deposit configFromCli            -> runIndexer configFromCli
     in runIndexer' batchSize
 
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
@@ -68,6 +70,7 @@ data IndexerCommand
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
   | EpochNonce EpochNonce.EpochNonce
   | ScriptTx ScriptTx.ScriptTx
+  | Deposit Deposit.Deposit
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -80,6 +83,7 @@ cmdParser = Opt.subparser
    $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
   <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
   <> indexerCommand' "blockbasics" BlockBasics
+  <> indexerCommand' "deposit" Deposit
   <> indexerCommand' "epochnonce" EpochNonce
   <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
   <> indexerCommand' "mintburn" MintBurn

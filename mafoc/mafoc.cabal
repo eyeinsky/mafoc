@@ -52,6 +52,7 @@ library
     Mafoc.Exceptions
     Mafoc.Indexer.Class
     Mafoc.StateFile
+    Mafoc.Indexers.Deposit
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
@@ -86,6 +87,7 @@ library
   -- Non-IOG dependencies
   ------------------------
   build-depends:
+    , aeson
     , async
     , base                  >=4.9 && <5
     , bytestring
