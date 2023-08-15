@@ -26,6 +26,7 @@ import Data.Coerce (coerce)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import Data.String (IsString)
+import Data.Set qualified as Set
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word32)
@@ -153,7 +154,7 @@ batchedPersist indexerRuntime trace batchSize source = do
     emptyBuffer t = (0, t, [])
 
     step :: BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
-    step state@(batchFill, lastCheckpointTime, bufferedEvents) t@(slotNoBhh, newEvents, indexerState) = do
+    step state@(batchFill, lastCheckpointTime, bufferedEvents) (slotNoBhh, newEvents, indexerState) = do
       now :: UTCTime <- getCurrentTime
       let persistAndCheckpoint :: [[Event a]] -> Doc () -> IO (BatchState a)
           persistAndCheckpoint bufferedEvents' msg = do
@@ -537,3 +538,10 @@ sqliteOpen dbPath = do
   sqlCon <- SQL.open dbPath
   SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
   return sqlCon
+
+-- * Address filter
+
+mkMaybeAddressFilter :: [C.Address C.ShelleyAddr] -> Maybe (C.Address C.ShelleyAddr -> Bool)
+mkMaybeAddressFilter addresses = case addresses of
+  [] -> Nothing
+  _  -> Just $ \address -> address `elem` Set.fromList addresses

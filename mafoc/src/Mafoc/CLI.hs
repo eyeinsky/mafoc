@@ -2,10 +2,13 @@ module Mafoc.CLI where
 
 import Data.Coerce (coerce)
 import Data.List qualified as L
+import Data.Proxy (Proxy (Proxy))
+import Data.Text qualified as TS
 import Data.Word (Word32)
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
+import Data.List.NonEmpty qualified as NE
 
 import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
@@ -128,6 +131,12 @@ mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
   <*> commonPipelineSize
   <*> commonConcurrencyPrimitive
 
+commonAddress :: O.Parser (C.Address C.ShelleyAddr)
+commonAddress = O.option (O.eitherReader (deserializeToCardano' . TS.pack)) $ opt 'a' "address" "Cardano Shelly address"
+  where
+    deserializeToCardano = C.deserialiseFromBech32 (C.proxyToAsType Proxy)
+    deserializeToCardano' = either (Left . show) Right . deserializeToCardano
+
 -- * String parsers
 
 maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
@@ -188,6 +197,13 @@ commonConcurrencyPrimitive = O.option reader $
       <|> O.readerError ("Can't parse concurrency primitive, must be one of: " <> values)
 
 -- * Helpers
+
+-- | The "real" @some@.
+--
+-- optparse-applicative's @some@ returns a list, which doesn't reflect
+-- on the type level that it must have at least one member.
+some_ :: O.Parser a -> O.Parser (NE.NonEmpty a)
+some_ p = O.liftA2 (NE.:|) p (O.many p)
 
 simpleCmd :: String -> a -> O.Mod O.CommandFields a
 simpleCmd str a = O.command str $ O.info (pure a) mempty

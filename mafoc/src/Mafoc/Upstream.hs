@@ -1,9 +1,12 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
 
+import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Control.Exception (throwIO, Exception, throw)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Data.Coerce (coerce)
@@ -117,6 +120,83 @@ chainPointSlotNo :: C.ChainPoint -> C.SlotNo
 chainPointSlotNo = \case
   C.ChainPoint slotNo _ -> slotNo
   C.ChainPointAtGenesis -> C.SlotNo 0
+
+-- blockTxs :: forall mode era . C.IsCardanoEra era => C.BlockInMode mode -> (C.EraInMode era mode, [C.Tx era])
+-- blockTxs (C.BlockInMode (C.Block _bh txs :: C.Block era) (_eim :: C.EraInMode era mode)) = txs
+
+txoAddressAny :: C.TxOut ctx era -> C.AddressAny
+txoAddressAny (C.TxOut address _value _TxOutDatum _ReferenceScript) = toAddressAny address
+
+toAddressAny :: C.AddressInEra era -> C.AddressAny
+toAddressAny = \case
+  C.AddressInEra C.ByronAddressInAnyEra addr -> C.AddressByron addr
+  C.AddressInEra (C.ShelleyAddressInEra _) addr -> C.AddressShelley addr
+
+-- ** Labels
+
+-- | We use overloaded labels instead of lens as we don't need to
+-- change the values we access.
+
+-- *** TxId
+
+-- | We say /calculate/ because transaction body is actually hashed.
+instance IsLabel "calculateTxId" (C.TxBody era -> C.TxId) where
+  fromLabel = C.getTxId
+
+instance IsLabel "calculateTxId" (C.Tx era -> C.TxId) where
+  fromLabel (C.Tx txb _) = fromLabel @"calculateTxId" @(C.TxBody era -> C.TxId) txb
+
+-- *** ChainPoint
+
+instance IsLabel "chainPoint" (C.BlockHeader -> C.ChainPoint) where
+  fromLabel (C.BlockHeader slotNo bhh _) = C.ChainPoint slotNo bhh
+
+instance IsLabel "chainPoint" (C.Block era -> C.ChainPoint) where
+  fromLabel (C.Block bh _txs) = fromLabel @"chainPoint" bh
+
+instance IsLabel "chainPoint" (C.BlockInMode era -> C.ChainPoint) where
+  fromLabel (C.BlockInMode block _eim) = fromLabel @"chainPoint" block
+
+-- *** BlockNo
+
+instance IsLabel "blockNo" (C.BlockHeader -> C.BlockNo) where
+  fromLabel (C.BlockHeader _slotNo _bhh blockNo') = blockNo'
+
+instance IsLabel "blockNo" (C.Block era -> C.BlockNo) where
+  fromLabel (C.Block bh _txs) = fromLabel @"blockNo" bh
+
+instance IsLabel "blockNo" (C.BlockInMode mode -> C.BlockNo) where
+  fromLabel (C.BlockInMode block _eim) = fromLabel @"blockNo" block
+
+-- *** SlotNo
+
+instance IsLabel "slotNo" (C.BlockInMode era -> C.SlotNo) where
+  fromLabel (C.BlockInMode block _eim) = fromLabel @"slotNo" block
+
+instance IsLabel "slotNo" (C.Block era -> C.SlotNo) where
+  fromLabel (C.Block blockHeader _) = fromLabel @"slotNo" blockHeader
+
+instance IsLabel "slotNo" (C.BlockHeader -> C.SlotNo) where
+  fromLabel (C.BlockHeader slotNo _bhh _) = slotNo
+
+instance IsLabel "slotNo" (Either C.SlotNo C.ChainPoint -> C.SlotNo) where
+  fromLabel = either id (fromLabel @"slotNo")
+
+instance IsLabel "slotNo" (C.ChainPoint -> C.SlotNo) where
+  fromLabel = \case
+    C.ChainPoint slotNo _bhh -> slotNo
+    C.ChainPointAtGenesis -> 0
+
+-- *** Block header hash
+
+instance IsLabel "blockHeaderHash" (C.BlockInMode era -> C.Hash C.BlockHeader) where
+  fromLabel (C.BlockInMode block _eim) = fromLabel @"blockHeaderHash" block
+
+instance IsLabel "blockHeaderHash" (C.Block era -> C.Hash C.BlockHeader) where
+  fromLabel (C.Block blockHeader _) = fromLabel @"blockHeaderHash" blockHeader
+
+instance IsLabel "blockHeaderHash" (C.BlockHeader -> C.Hash C.BlockHeader) where
+  fromLabel (C.BlockHeader _slotNo bhh _) = bhh
 
 -- * Streaming
 
