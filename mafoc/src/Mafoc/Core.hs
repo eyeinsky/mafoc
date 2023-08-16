@@ -158,7 +158,7 @@ batchedPersist indexerRuntime trace batchSize source = do
       now :: UTCTime <- getCurrentTime
       let persistAndCheckpoint :: [[Event a]] -> Doc () -> IO (BatchState a)
           persistAndCheckpoint bufferedEvents' msg = do
-            case concat bufferedEvents' of
+            case concat $ reverse bufferedEvents' of
               events@(_ : _) -> persistMany indexerRuntime events
               []             -> pure ()
             checkpoint indexerRuntime indexerState slotNoBhh
