@@ -52,6 +52,7 @@ library
     Mafoc.Exceptions
     Mafoc.Indexer.Class
     Mafoc.StateFile
+    Mafoc.Indexers.AddressBalance
     Mafoc.Indexers.Deposit
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce

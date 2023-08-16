@@ -13,6 +13,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Exceptions qualified as E
+import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
@@ -41,6 +42,7 @@ runCommand = \case
       EpochNonce configFromCli         -> runIndexer configFromCli
       ScriptTx configFromCli           -> runIndexer configFromCli
       Deposit configFromCli            -> runIndexer configFromCli
+      AddressBalance configFromCli     -> runIndexer configFromCli
     in runIndexer' batchSize
 
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
@@ -71,6 +73,7 @@ data IndexerCommand
   | EpochNonce EpochNonce.EpochNonce
   | ScriptTx ScriptTx.ScriptTx
   | Deposit Deposit.Deposit
+  | AddressBalance AddressBalance.AddressBalance
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -82,6 +85,7 @@ cmdParser :: Opt.Parser Command
 cmdParser = Opt.subparser
    $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
   <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
+  <> indexerCommand' "addressbalance" AddressBalance
   <> indexerCommand' "blockbasics" BlockBasics
   <> indexerCommand' "deposit" Deposit
   <> indexerCommand' "epochnonce" EpochNonce
