@@ -32,6 +32,15 @@ import Cardano.BM.Data.Severity qualified as CM
 
 type SlotNoBhh = (C.SlotNo, C.Hash C.BlockHeader)
 
+instance IsLabel "slotNoBhh" (C.BlockHeader -> SlotNoBhh) where
+  fromLabel (C.BlockHeader slotNo bhh _) = (slotNo, bhh)
+
+instance IsLabel "slotNoBhh" (C.Block era -> SlotNoBhh) where
+  fromLabel (C.Block bh _txs) = fromLabel @"slotNoBhh" bh
+
+instance IsLabel "slotNoBhh" (C.BlockInMode era -> SlotNoBhh) where
+  fromLabel (C.BlockInMode block _eim) = fromLabel @"slotNoBhh" block
+
 getSecurityParamAndNetworkId :: FilePath -> IO (Marconi.SecurityParam, C.NetworkId)
 getSecurityParamAndNetworkId nodeConfig = do
   (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig

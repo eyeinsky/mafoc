@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Utxo where
 
 import Data.Map qualified as Map
@@ -7,6 +8,7 @@ import Data.List.NonEmpty qualified as NE
 
 import Cardano.Api qualified as C
 import Marconi.ChainIndex.Types qualified as Marconi
+import Mafoc.Exceptions qualified as E
 
 type UtxoMapEra era = Map.Map C.TxIn (C.TxOut C.CtxTx era)
 type UtxoMap = UtxoMapEra Marconi.CurrentEra
@@ -37,7 +39,9 @@ unsafeCastEra
   -> [(a, C.TxOut C.CtxTx Marconi.CurrentEra)]
 unsafeCastEra list = case traverse (traverse castToCurrentEra) list of
   Right a -> a
-  Left _ -> error "todo"
+  -- TODO: change to The_impossible_happened
+  Left _ -> E.throw $ E.TextException "It should always be possible to cast `TxOut ctx era` to CurrentEra"
+
 
 castToCurrentEra
   :: (C.IsCardanoEra fromEra, C.EraCast f)

@@ -65,6 +65,7 @@ library
     Mafoc.RollbackRingBuffer
     Mafoc.Speed
     Mafoc.Upstream
+    Mafoc.Upstream.Formats
     Mafoc.Utxo
 
   --------------------

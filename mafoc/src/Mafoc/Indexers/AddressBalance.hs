@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -8,6 +7,7 @@ module Mafoc.Indexers.AddressBalance where
 
 import System.IO qualified as IO
 import Data.Map.Strict qualified as Map
+import Data.Map.Merge.Strict qualified as Map
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.List.NonEmpty qualified as NE
 import Data.Aeson qualified as A
@@ -23,6 +23,9 @@ import Mafoc.Core (
   LocalChainsyncConfig_,
   initialize,
   initializeLocalChainsync_,
+  SlotNoBhh,
+  SlotNoBhhString(SlotNoBhhString),
+  AssetIdString(AssetIdString),
  )
 import Mafoc.Utxo qualified as Utxo
 import Mafoc.Upstream (txoAddressAny, toAddressAny)
@@ -45,12 +48,11 @@ instance Indexer AddressBalance where
 
   data Event AddressBalance = Event
     -- when
-    { chainPoint :: C.ChainPoint
+    { chainPoint :: SlotNoBhh
     , blockNo :: C.BlockNo
     , txId :: C.TxId
     -- what
-    , balanceBefore :: Map.Map C.AddressAny C.Value
-    , balanceAfter :: Map.Map C.AddressAny C.Value
+    , balance :: Map.Map C.AddressAny (Map.Map C.AssetId (C.Quantity, C.Quantity))
     , changes :: Map.Map C.AddressAny
                    ( [C.Value] -- spends
                    , [C.Value] -- deposits
@@ -88,17 +90,28 @@ instance Indexer AddressBalance where
           maybeEvent = if null spentTxos && null createdTxos
             then Nothing -- No event when no txos for requested addresses were spent or created
             else let
+              toMap :: forall era' . [(C.AddressAny, C.TxOut C.CtxTx era')] -> Map.Map C.AddressAny [C.Value]
               toMap txos = Map.fromListWith (<>) $ map (\(a, C.TxOut _ value _ _) -> (a, [C.txOutValueToValue value])) txos :: Map.Map C.AddressAny [C.Value]
 
               deposits = fmap (\xs -> ([], xs)) $ toMap $ map snd createdTxos'
               spends = fmap (\xs -> (xs, [])) $ toMap $ map (\(_txIn, txo) -> (txoAddressAny txo, txo)) spentTxos
 
+              toAddressValueMap = Map.fromListWith (<>) . map txoValue . Map.elems
+
+              balance = Map.merge
+                (Map.mapMissing $ \_k v -> mergeBeforeAfter v mempty)
+                (Map.mapMissing $ \_k v -> mergeBeforeAfter mempty v)
+                (Map.zipWithMatched $ \_k b a -> mergeBeforeAfter b a)
+                (toAddressValueMap utxosBefore)
+                (toAddressValueMap utxosAfter)
+                -- newtype Value = Value (Map AssetId Quantity)
+                -- Map AddressAny (Map AssetId (Quantity, Quantity))
+
               in Just $ Event
-                   (#chainPoint blockInMode)
+                   (#slotNoBhh blockInMode)
                    (#blockNo blockInMode)
                    txId
-                   (Map.fromListWith (<>) $ map txoValue $ Map.elems utxosBefore)
-                   (Map.fromListWith (<>) $ map txoValue $ Map.elems utxosAfter)
+                   balance
                    (Map.unionWith (<>) deposits spends)
 
   initialize AddressBalance{chainsync, addresses} _trace = do
@@ -113,11 +126,10 @@ instance Indexer AddressBalance where
 instance A.ToJSON (Event AddressBalance) where
   toJSON Event{..} = A.object
     [ "blockNo" .= blockNo
-    , "chainPoint" .= chainPoint
+    , "chainPoint" .= SlotNoBhhString chainPoint
     , "txId" .= txId
-    , "balanceBefore" .= addressMapToObject balanceBefore
+    , "balance" .= addressMapToObject (Map.mapKeys AssetIdString <$> balance)
     , "changes" .= addressMapToObject (fmap spendsDeposits changes)
-    , "balanceAfter" .= addressMapToObject balanceAfter
     ]
     where
       spendsDeposits :: ([C.Value], [C.Value]) -> A.Value
@@ -126,15 +138,20 @@ instance A.ToJSON (Event AddressBalance) where
         , if null deposits then Nothing else Just $ "deposits" .= deposits
         ]
 
-      addressToKey :: C.AddressAny -> A.Key
-      addressToKey = A.fromText . C.serialiseAddress
-
       addressMapToObject :: A.ToJSON v => Map.Map C.AddressAny v -> A.Value
-      addressMapToObject = A.object . map (\(k, v) -> addressToKey k .= A.toJSON v) . Map.toList
-
+      addressMapToObject = A.object . map (\(k, v) -> A.fromText (C.serialiseAddress k) .= A.toJSON v) . Map.toList
 
 txoValue :: C.TxOut ctx era -> (C.AddressAny, C.Value)
 txoValue (C.TxOut address value _TxOutDatum _ReferenceScript) = (toAddressAny address, C.txOutValueToValue value)
 
--- instance A.ToJSONKey C.AddressAny where
---   toJSONKey = undefined -- default instance goes through ToJSON C.AddressAny
+
+-- | Merge balance before and after @Value@s by setting non-existent @AssetId@ to zero.
+mergeBeforeAfter :: C.Value -> C.Value -> Map.Map C.AssetId (C.Quantity, C.Quantity)
+mergeBeforeAfter before after = Map.merge
+  (Map.mapMissing $ \_k v -> (v, mempty))
+  (Map.mapMissing $ \_k v -> (mempty, v))
+  (Map.zipWithMatched $ \_k b a -> (b, a))
+  before' after'
+  where
+    before' = Map.fromList $ C.valueToList before
+    after' = Map.fromList $ C.valueToList after

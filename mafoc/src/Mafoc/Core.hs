@@ -12,6 +12,7 @@
 module Mafoc.Core
   ( module Mafoc.Core
   , module Mafoc.Upstream
+  , module Mafoc.Upstream.Formats
 
   -- * Re-exports
   , Marconi.CurrentEra
@@ -55,6 +56,7 @@ import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderr
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
+import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.StateFile qualified as StateFile
 
 -- * Indexer class
