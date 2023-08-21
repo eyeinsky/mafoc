@@ -112,11 +112,11 @@ import Marconi.ChainIndex.Indexers.ScriptTx qualified as ScriptTx
 import Marconi.ChainIndex.Indexers.Utxo qualified as Utxo
 import Marconi.ChainIndex.Logging (chainSyncEventStreamLogging)
 import Marconi.ChainIndex.Node.Client.GenesisConfig (
-  NetworkConfigFile (NetworkConfigFile),
+  NodeConfigPath (NodeConfigPath),
   initExtLedgerStateVar,
   mkProtocolInfoCardano,
   readCardanoGenesisConfig,
-  readNetworkConfig,
+  readNodeConfig,
   renderGenesisConfigError,
  )
 import Marconi.ChainIndex.Types (
@@ -388,7 +388,7 @@ epochStateWorker_
   Coordinator{_barrier, _errorVar}
   ch
   dbPath = do
-    nodeConfigE <- runExceptT $ readNetworkConfig (NetworkConfigFile nodeConfigPath)
+    nodeConfigE <- runExceptT $ readNodeConfig (NodeConfigPath nodeConfigPath)
     nodeConfig <- either (throw . CantStartIndexer @Void . Text.pack . show) pure nodeConfigE
     genesisConfigE <- runExceptT $ readCardanoGenesisConfig nodeConfig
     genesisConfig <-
