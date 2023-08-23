@@ -495,7 +495,7 @@ getCheckpointSqlite sqlCon name = do
   case list of
     [(slotNo, bhh)] -> return $ Just $ C.ChainPoint slotNo bhh
     []              -> return Nothing
-    _               -> E.throwIO $ E.TextException "Indexer can't have more than one checkpoint in sqlite"
+    _               -> E.throwIO $ E.The_impossible_happened "Indexer can't have more than one checkpoint in sqlite"
 
 -- ** Database path and table(s)
 

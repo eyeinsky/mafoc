@@ -60,6 +60,7 @@ library
     Mafoc.Indexers.MintBurn
     Mafoc.Indexers.NoOp
     Mafoc.Indexers.ScriptTx
+    Mafoc.Indexers.Utxo
     Mafoc.Logging
     Mafoc.RingBuffer
     Mafoc.RollbackRingBuffer
@@ -81,6 +82,7 @@ library
   --------------------------
   build-depends:
     , cardano-api
+    , cardano-binary
     , cardano-ledger-shelley
     , iohk-monitoring
     , ouroboros-consensus

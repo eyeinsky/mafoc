@@ -33,5 +33,7 @@ data TextException = TextException TS.Text
 data MafocIOException
   = Can't_deserialise_LedgerState_from_CBOR FilePath DeserialiseFailure
   | Can't_parse_chain_point_from_LedgerState_file_name FilePath String
+  -- | Impossible
+  | The_impossible_happened { whatItWas :: TS.Text }
   deriving stock Show
   deriving anyclass Exception

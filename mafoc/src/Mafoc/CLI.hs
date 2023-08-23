@@ -137,6 +137,9 @@ commonAddress = O.option (O.eitherReader (deserializeToCardano' . TS.pack)) $ op
     deserializeToCardano = C.deserialiseFromBech32 (C.proxyToAsType Proxy)
     deserializeToCardano' = either (Left . show) Right . deserializeToCardano
 
+commonUtxoState :: O.Parser FilePath
+commonUtxoState = O.option O.auto (O.long "utxo-state" <> O.value "utxoState")
+
 -- * String parsers
 
 maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)

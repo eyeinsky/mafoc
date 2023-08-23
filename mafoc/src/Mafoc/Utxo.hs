@@ -39,9 +39,7 @@ unsafeCastEra
   -> [(a, C.TxOut C.CtxTx Marconi.CurrentEra)]
 unsafeCastEra list = case traverse (traverse castToCurrentEra) list of
   Right a -> a
-  -- TODO: change to The_impossible_happened
-  Left _ -> E.throw $ E.TextException "It should always be possible to cast `TxOut ctx era` to CurrentEra"
-
+  Left _ -> E.throw $ E.The_impossible_happened "It should always be possible to cast `TxOut ctx era` to CurrentEra"
 
 castToCurrentEra
   :: (C.IsCardanoEra fromEra, C.EraCast f)

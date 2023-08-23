@@ -21,6 +21,7 @@ import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
 import Mafoc.Indexers.ScriptTx qualified as ScriptTx
+import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
@@ -42,6 +43,7 @@ runCommand = \case
       EpochNonce configFromCli         -> runIndexer configFromCli
       ScriptTx configFromCli           -> runIndexer configFromCli
       Deposit configFromCli            -> runIndexer configFromCli
+      Utxo configFromCli               -> runIndexer configFromCli
       AddressBalance configFromCli     -> runIndexer configFromCli
     in runIndexer' batchSize
 
@@ -73,6 +75,7 @@ data IndexerCommand
   | EpochNonce EpochNonce.EpochNonce
   | ScriptTx ScriptTx.ScriptTx
   | Deposit Deposit.Deposit
+  | Utxo Utxo.Utxo
   | AddressBalance AddressBalance.AddressBalance
   deriving Show
 
@@ -93,6 +96,7 @@ cmdParser = Opt.subparser
   <> indexerCommand' "mintburn" MintBurn
   <> indexerCommand' "noop" NoOp
   <> indexerCommand' "scripttx" ScriptTx
+  <> indexerCommand' "utxo" Utxo
   where
     indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
 
