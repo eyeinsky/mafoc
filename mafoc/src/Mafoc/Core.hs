@@ -245,6 +245,9 @@ instance IsLabel "getNetworkId" (LocalChainsyncConfig_ -> IO C.NetworkId) where
       Right (_socketPath, networkIdOrNodeConfig) -> do
         either pure (getNetworkId . coerce) networkIdOrNodeConfig
 
+instance IsLabel "getNetworkId" (LocalChainsyncConfig NodeConfig -> IO C.NetworkId) where
+  fromLabel lcc = #getNetworkId (#nodeConfig lcc :: NodeConfig)
+
 -- * LocalChainsyncRuntime
 
 -- | Static configuration for block source
