@@ -19,6 +19,7 @@ import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
+import Mafoc.Indexers.Mamba qualified as Mamba
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
 import Mafoc.Indexers.ScriptTx qualified as ScriptTx
@@ -47,6 +48,7 @@ runCommand = \case
       Utxo configFromCli               -> runIndexer configFromCli
       AddressBalance configFromCli     -> runIndexer configFromCli
       AddressDatum configFromCli       -> runIndexer configFromCli
+      Mamba configFromCli              -> runIndexer configFromCli
     in runIndexer' batchSize
 
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
@@ -80,6 +82,7 @@ data IndexerCommand
   | Utxo Utxo.Utxo
   | AddressBalance AddressBalance.AddressBalance
   | AddressDatum AddressDatum.AddressDatum
+  | Mamba Mamba.Mamba
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -97,6 +100,7 @@ cmdParser = Opt.subparser
   <> indexerCommand' "deposit" Deposit
   <> indexerCommand' "epochnonce" EpochNonce
   <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
+  <> indexerCommand' "mamba" Mamba
   <> indexerCommand' "mintburn" MintBurn
   <> indexerCommand' "noop" NoOp
   <> indexerCommand' "scripttx" ScriptTx
