@@ -14,6 +14,7 @@ import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
+import Mafoc.Indexers.AddressDatum qualified as AddressDatum
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
 import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
@@ -45,6 +46,7 @@ runCommand = \case
       Deposit configFromCli            -> runIndexer configFromCli
       Utxo configFromCli               -> runIndexer configFromCli
       AddressBalance configFromCli     -> runIndexer configFromCli
+      AddressDatum configFromCli       -> runIndexer configFromCli
     in runIndexer' batchSize
 
   FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
@@ -77,6 +79,7 @@ data IndexerCommand
   | Deposit Deposit.Deposit
   | Utxo Utxo.Utxo
   | AddressBalance AddressBalance.AddressBalance
+  | AddressDatum AddressDatum.AddressDatum
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -89,6 +92,7 @@ cmdParser = Opt.subparser
    $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
   <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
   <> indexerCommand' "addressbalance" AddressBalance
+  <> indexerCommand' "addressdatum" AddressDatum
   <> indexerCommand' "blockbasics" BlockBasics
   <> indexerCommand' "deposit" Deposit
   <> indexerCommand' "epochnonce" EpochNonce
