@@ -43,6 +43,7 @@ data Utxo = Utxo
   deriving (Show)
 
 instance Indexer Utxo where
+
   description = "Index transaction outputs"
 
   parseCli =
