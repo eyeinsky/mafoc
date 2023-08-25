@@ -43,7 +43,7 @@ instance Indexer BlockBasics where
     , tableName     :: String
     }
 
-  toEvents _runtime _state blockInMode = (EmptyState, [coerce $ blockToRow blockInMode])
+  toEvents _runtime _state (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (EmptyState, [coerce (coerce slotNo :: Word64, hash, length txs)])
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
@@ -55,13 +55,15 @@ instance Indexer BlockBasics where
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
 
-type Row = (Word64, C.Hash C.BlockHeader, Int)
+eventsToSingleChainpoint :: [(Word64, C.Hash C.BlockHeader, Int)] -> Maybe C.ChainPoint
+eventsToSingleChainpoint = \case
+  ((slotNo, hash,_) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
+  _                            -> Nothing
 
-blockToRow :: C.BlockInMode C.CardanoMode -> Row
-blockToRow (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (coerce slotNo, hash, length txs)
+-- * SQLite
 
-sqliteInsert :: SQL.Connection -> String -> [Row] -> IO ()
-sqliteInsert sqlCon tableName rows = SQL.executeMany sqlCon template rows
+sqliteInsert :: SQL.Connection -> String -> [Event BlockBasics] -> IO ()
+sqliteInsert sqlCon tableName rows = SQL.executeMany sqlCon template (coerce rows :: [(Word64, C.Hash C.BlockHeader, Int)])
   where
     template = "INSERT INTO " <> fromString tableName <> " \
                \ ( slot_no           \
@@ -78,12 +80,8 @@ sqliteInit sqlCon tableName = SQL.execute_ sqlCon $
   \ , tx_count INT NOT NULL )         "
 
 lastCp :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
-lastCp sqlCon tableName = do
-  rows :: [Row] <- SQL.query_ sqlCon $
-    "   SELECT slot_no, block_header_hash, tx_count \
-    \     FROM " <> fromString tableName <> "       \
-    \ ORDER BY slot_no DESC                         \
-    \    LIMIT 1"
-  pure $ case rows of
-    ((slotNo, hash,_) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
-    _                      -> Nothing
+lastCp sqlCon tableName = fmap eventsToSingleChainpoint $ SQL.query_ sqlCon $
+  "   SELECT slot_no, block_header_hash, tx_count \
+  \     FROM " <> fromString tableName <> "       \
+  \ ORDER BY slot_no DESC                         \
+  \    LIMIT 1"

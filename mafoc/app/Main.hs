@@ -10,10 +10,12 @@ import Options.Applicative qualified as Opt
 import Data.Text qualified as TS
 import System.Posix.Signals qualified as Signals
 
+import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
+import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), StopSignal (StopSignal), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
@@ -55,6 +57,8 @@ main = do
         in runIndexer' batchSize stopSignal
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
+      SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
+
 
 -- | Returns an MVar which when filled, means that the program should close.
 setupCtrlCHandler :: Int -> IO StopSignal
@@ -90,6 +94,7 @@ data Command
   = Speed Speed.BlockSource
   | IndexerCommand IndexerCommand BatchSize
   | FoldLedgerState FoldLedgerState.FoldLedgerState
+  | SlotNoChainPoint FilePath C.SlotNo
   deriving Show
 
 data IndexerCommand
@@ -115,6 +120,7 @@ cmdParser :: Opt.Parser Command
 cmdParser = Opt.subparser
    $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
   <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
+  <> Opt.command "slot-chainpoint" (parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
   <> indexerCommand' "addressbalance" AddressBalance
   <> indexerCommand' "addressdatum" AddressDatum
   <> indexerCommand' "blockbasics" BlockBasics
@@ -128,6 +134,12 @@ cmdParser = Opt.subparser
   <> indexerCommand' "utxo" Utxo
   where
     indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
+
+-- | Take program description, header and CLI parser, and turn it into a ParserInfo
+parserToParserInfo :: String -> String -> Opt.Parser a -> Opt.ParserInfo a
+parserToParserInfo progDescr header cli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
+  <> Opt.progDesc progDescr
+  <> Opt.header header
 
 indexerCommand :: forall a b . Indexer a => String -> ((a, BatchSize) -> b) -> Opt.Mod Opt.CommandFields b
 indexerCommand name f = Opt.command name (f <$> indexerParserInfo name)

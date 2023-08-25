@@ -53,6 +53,7 @@ library
   exposed-modules:
     Mafoc.CLI
     Mafoc.Cmds.FoldLedgerState
+    Mafoc.Cmds.SlotNoChainPoint
     Mafoc.Core
     Mafoc.Exceptions
     Mafoc.Indexer.Class
@@ -132,6 +133,8 @@ executable mafoc
   --------------------------
   -- Other IOG dependencies
   --------------------------
+  build-depends:
+    , cardano-api
 
   ------------------------
   -- Non-IOG dependencies

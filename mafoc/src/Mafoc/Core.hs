@@ -463,6 +463,9 @@ traceInfoStr trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defau
 traceDebug :: Trace.Trace IO TS.Text -> Doc () -> IO ()
 traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaultLayoutOptions msg
 
+renderPretty :: Pretty a => a -> TS.Text
+renderPretty = renderStrict . layoutPretty defaultLayoutOptions . pretty
+
 -- * Ledger state checkpoint
 
 -- | Load ledger state from file, while taking the chain point it's at from the file name.
