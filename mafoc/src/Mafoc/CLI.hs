@@ -59,7 +59,7 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
       <*> O.option hashReader (opt 'b' "block-hash" "Hash of block header" <> O.metavar "BLOCK-HASH")
 
     hashReader :: O.ReadM (C.Hash C.BlockHeader)
-    hashReader = O.maybeReader maybeParseHashBlockHeader <|> O.readerError "Malformed block hash"
+    hashReader = O.eitherReader eitherParseHashBlockHeader <|> O.readerError "Malformed block hash"
 
 commonPipelineSize :: O.Parser Word32
 commonPipelineSize = O.option O.auto
@@ -142,9 +142,6 @@ commonUtxoState = O.option O.auto (O.long "utxo-state" <> O.value "utxoState")
 
 -- * String parsers
 
-maybeParseHashBlockHeader :: String -> Maybe (C.Hash C.BlockHeader)
-maybeParseHashBlockHeader = either (const Nothing) Just . eitherParseHashBlockHeader
-
 -- ** Interval
 
 parseIntervalEither :: String -> Either String Interval
@@ -159,7 +156,7 @@ parseFrom str = case str of
     let (fromSlotNo, bhh) = L.span (/= ':') str
     slotNo <- parseSlotNo_ fromSlotNo
     blockHeaderHash <- case bhh of
-      ':' : str' -> either (Left . show) Right $ eitherParseHashBlockHeader str'
+      ':' : str' -> eitherParseHashBlockHeader str'
       _          -> leftError "No block header hash" ""
     return $ C.ChainPoint slotNo blockHeaderHash
 

@@ -42,6 +42,11 @@ common lang
     -Wnoncanonical-monad-instances -Wredundant-constraints
     -Wunused-packages
 
+  -- This addresses mmap cannot allocate memory issue for ghc < 9.2.8 and linux kernel >= 6.1.
+  -- See: https://discourse.haskell.org/t/facing-mmap-4096-bytes-at-nil-cannot-allocate-memory-youre-not-alone/6259/18
+  -- ghc-options:
+  --   +RTS -xp -RTS
+
 library
   import:          lang
   hs-source-dirs:  src

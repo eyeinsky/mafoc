@@ -111,7 +111,9 @@ runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> 
 runIndexer cli batchSize stopSignal = do
   c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
-    traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
+    traceInfo trace
+       $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
+                     <> "\n  Batch size: " <> pretty (show batchSize)
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
 
     -- Start streaming blocks over local chainsync
@@ -174,17 +176,18 @@ batchedPersist indexerRuntime trace batchSize source = do
   batchState <- S.foldM_ step (pure $ NoProgress now) pure source
   case batchState of
     BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
-      persistAndCheckpoint bufferedEvents "last requested block" indexerState slotNoBhh
-      traceInfo trace "Checkpoint written, exiting."
-    BatchEmpty{slotNoBhh, indexerState} ->
+      persistAndCheckpoint bufferedEvents "exiting" indexerState slotNoBhh
+    BatchEmpty{slotNoBhh, indexerState} -> do
+      traceInfo trace $ "Checkpointing with empty batch at " <+> pretty slotNoBhh
       checkpoint indexerRuntime indexerState slotNoBhh
     NoProgress{} ->
       traceInfo trace "No progress made, exiting."
+  traceInfo trace "Done."
   where
     persistAndCheckpoint :: [[Event a]] -> Doc () -> State a -> SlotNoBhh -> IO ()
     persistAndCheckpoint bufferedEvents msg indexerState slotNoBhh = do
       let (slotNo, bhh) = slotNoBhh
-      traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
+      traceInfo trace $ "Persisting and checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
       case concat $ reverse bufferedEvents of
         events@(_ : _) -> persistMany indexerRuntime events
         []             -> pure ()
@@ -609,4 +612,4 @@ sqliteOpen dbPath = do
 mkMaybeAddressFilter :: [C.Address C.ShelleyAddr] -> Maybe (C.Address C.ShelleyAddr -> Bool)
 mkMaybeAddressFilter addresses = case addresses of
   [] -> Nothing
-  _  -> Just $ \address -> address `elem` Set.fromList addresses
+  _ -> Just $ \address -> address `elem` Set.fromList addresses
