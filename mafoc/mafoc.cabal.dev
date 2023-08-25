@@ -49,7 +49,6 @@ library
     Mafoc.CLI
     Mafoc.Cmds.FoldLedgerState
     Mafoc.Core
-    Mafoc.Indexer.Class
     Mafoc.Indexers.AddressDatum
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
