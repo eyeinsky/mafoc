@@ -18,8 +18,8 @@ import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (ConcurrencyPrimitive, Interval (Interval), NodeConfig (NodeConfig), NodeInfo,
-                   SocketPath (SocketPath), UpTo (SlotNo), blockChainPoint, blockSource, initializeLedgerState,
-                   storeLedgerState)
+                   SocketPath (SocketPath), StopSignal, UpTo (SlotNo), blockChainPoint, blockSource,
+                   initializeLedgerState, storeLedgerState)
 import Mafoc.Upstream (querySecurityParam)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -46,8 +46,8 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonPipelineSize
       <*> Opt.commonConcurrencyPrimitive
 
-run :: FoldLedgerState -> IO ()
-run config = do
+run :: FoldLedgerState -> StopSignal -> IO ()
+run config stopSignal = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
     -- Get initial ledger state. This is at genesis when
@@ -70,7 +70,7 @@ run config = do
     securityParam <- querySecurityParam lnc
     let interval = Interval cp (SlotNo $ toSlotNo config)
         blockSource' = blockSource securityParam lnc interval (pipelineSize config)
-          (concurrencyPrimitive config) (logging config) trace
+          (concurrencyPrimitive config) (logging config) trace stopSignal
 
     maybeLast <- S.last_
       $ blockSource'

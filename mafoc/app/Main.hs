@@ -3,15 +3,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import Control.Concurrent qualified as IO
 import Control.Exception qualified as IO
+import Control.Monad (void, when)
 import Options.Applicative qualified as Opt
 import Data.Text qualified as TS
+import System.Posix.Signals qualified as Signals
 
 import Cardano.Streaming.Callbacks qualified as CS
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), StopSignal (StopSignal), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -27,31 +30,49 @@ import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
-main = printRollbackException $ Opt.execParser cmdParserInfo >>= runCommand
+main = do
+  stopSignal <- setupCtrlCHandler 3
+  printRollbackException $ do
+    Opt.execParser cmdParserInfo >>= \case
+      Speed what -> case what of
+        Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
+        Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
+        Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-runCommand :: Command -> IO ()
-runCommand = \case
-  Speed what -> case what of
-    Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
-    Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
-    Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
+      IndexerCommand indexerCommand' batchSize -> let
+        runIndexer' = case indexerCommand' of
+          BlockBasics configFromCli        -> runIndexer configFromCli
+          MintBurn configFromCli           -> runIndexer configFromCli
+          NoOp configFromCli               -> runIndexer configFromCli
+          EpochStakepoolSize configFromCli -> runIndexer configFromCli
+          EpochNonce configFromCli         -> runIndexer configFromCli
+          ScriptTx configFromCli           -> runIndexer configFromCli
+          Deposit configFromCli            -> runIndexer configFromCli
+          AddressDatum configFromCli       -> runIndexer configFromCli
+          Utxo configFromCli               -> runIndexer configFromCli
+          AddressBalance configFromCli     -> runIndexer configFromCli
+          Mamba configFromCli              -> runIndexer configFromCli
+        in runIndexer' batchSize stopSignal
 
-  IndexerCommand indexerCommand' batchSize -> let
-    runIndexer' = case indexerCommand' of
-      BlockBasics configFromCli        -> runIndexer configFromCli
-      MintBurn configFromCli           -> runIndexer configFromCli
-      NoOp configFromCli               -> runIndexer configFromCli
-      EpochStakepoolSize configFromCli -> runIndexer configFromCli
-      EpochNonce configFromCli         -> runIndexer configFromCli
-      ScriptTx configFromCli           -> runIndexer configFromCli
-      Deposit configFromCli            -> runIndexer configFromCli
-      Utxo configFromCli               -> runIndexer configFromCli
-      AddressBalance configFromCli     -> runIndexer configFromCli
-      AddressDatum configFromCli       -> runIndexer configFromCli
-      Mamba configFromCli              -> runIndexer configFromCli
-    in runIndexer' batchSize
+      FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
 
-  FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli
+-- | Returns an MVar which when filled, means that the program should close.
+setupCtrlCHandler :: Int -> IO StopSignal
+setupCtrlCHandler max' = do
+  countMVar <- IO.newMVar 0
+  signalMVar <- IO.newMVar False
+  let ctrlcHandler = Signals.Catch $ do
+        count <- IO.modifyMVar countMVar incr
+        void $ IO.swapMVar signalMVar (count >= 0)
+        if count == 1
+          then putStrLn "Shutting down gracefully.."
+          else putStrLn "Press Ctrl-C few more times to terminate without a final checkpoint."
+        when (count >= max') $ Signals.raiseSignal Signals.sigTERM
+  _ <- Signals.installHandler Signals.sigINT ctrlcHandler Nothing
+  return $ StopSignal signalMVar
+  where
+    incr :: Int -> IO (Int, Int)
+    incr count = let count' = count + 1 in return (count', count')
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catches`

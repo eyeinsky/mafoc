@@ -3,6 +3,7 @@
 {-# LANGUAGE DerivingStrategies     #-}
 {-# LANGUAGE LambdaCase             #-}
 {-# LANGUAGE MultiWayIf             #-}
+{-# LANGUAGE NamedFieldPuns         #-}
 {-# LANGUAGE OverloadedLabels       #-}
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE RankNTypes             #-}
@@ -26,8 +27,8 @@ import Control.Monad.Trans.Class (lift)
 import Data.Coerce (coerce)
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
-import Data.String (IsString)
 import Data.Set qualified as Set
+import Data.String (IsString)
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word32)
@@ -105,8 +106,9 @@ class Indexer a where
   -- runtime. Checkpoints are used for resuming
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> IO ()
-runIndexer cli batchSize = do
+-- | Run an indexer
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> IO ()
+runIndexer cli batchSize stopSignal = do
   c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace $ "Indexer started with configuration: " <> pretty (show cli)
@@ -121,15 +123,13 @@ runIndexer cli batchSize = do
           (concurrencyPrimitive lcr)
           (logging lcr)
           trace
-
-      -- Pick out ChainPoint
-      & S.map (\blk -> (blockSlotNoBhh blk, blk))
+          stopSignal
 
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
-      & foldYield (\indexerState (cp, blockInMode) -> do
+      & foldYield (\indexerState blockInMode -> do
                       let (indexerState', events) = toEvents indexerRuntime indexerState blockInMode
-                      return (indexerState', (cp, events, indexerState'))
+                      return (indexerState', (blockSlotNoBhh blockInMode, events, indexerState'))
                   ) indexerInitialState
 
       -- Persist events in batches and write a checkpoint. Do this
@@ -137,7 +137,30 @@ runIndexer cli batchSize = do
       -- a time limit is reached.
       & batchedPersist indexerRuntime trace batchSize
 
-type BatchState a = (BatchSize, UTCTime, [[Event a]])
+-- * Buffered output
+
+data BatchState a
+  = BatchState { lastCheckpointTime :: UTCTime
+               , slotNoBhh          :: SlotNoBhh
+               , indexerState       :: State a
+               , batchFill          :: BatchSize
+               , bufferedEvents     :: [[Event a]]
+               }
+  | BatchEmpty { lastCheckpointTime :: UTCTime
+               , slotNoBhh          :: SlotNoBhh
+               , indexerState       :: State a
+               }
+  | NoProgress { lastCheckpointTime :: UTCTime }
+
+getBatchFill :: BatchState a -> BatchSize
+getBatchFill = \case
+  BatchState{batchFill} -> batchFill
+  _                     -> 0
+
+getBufferedEvents :: BatchState a -> [[Event a]]
+getBufferedEvents = \case
+  BatchState{bufferedEvents} -> bufferedEvents
+  _                          -> []
 
 batchedPersist
   :: forall a . Indexer a
@@ -148,46 +171,78 @@ batchedPersist
   -> IO ()
 batchedPersist indexerRuntime trace batchSize source = do
   now :: UTCTime <- getCurrentTime
-  let initialBatchState = emptyBuffer now
-  S.foldM_ step (pure initialBatchState) (\_ -> pure ()) source
-
+  batchState <- S.foldM_ step (pure $ NoProgress now) pure source
+  case batchState of
+    BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
+      persistAndCheckpoint bufferedEvents "last requested block" indexerState slotNoBhh
+      traceInfo trace "Checkpoint written, exiting."
+    BatchEmpty{slotNoBhh, indexerState} ->
+      checkpoint indexerRuntime indexerState slotNoBhh
+    NoProgress{} ->
+      traceInfo trace "No progress made, exiting."
   where
-    emptyBuffer :: UTCTime -> BatchState a
-    emptyBuffer t = (0, t, [])
+    persistAndCheckpoint :: [[Event a]] -> Doc () -> State a -> SlotNoBhh -> IO ()
+    persistAndCheckpoint bufferedEvents msg indexerState slotNoBhh = do
+      let (slotNo, bhh) = slotNoBhh
+      traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
+      case concat $ reverse bufferedEvents of
+        events@(_ : _) -> persistMany indexerRuntime events
+        []             -> pure ()
+      checkpoint indexerRuntime indexerState slotNoBhh
 
     step :: BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
-    step state@(batchFill, lastCheckpointTime, bufferedEvents) (slotNoBhh, newEvents, indexerState) = do
-      now :: UTCTime <- getCurrentTime
-      let persistAndCheckpoint :: [[Event a]] -> Doc () -> IO (BatchState a)
-          persistAndCheckpoint bufferedEvents' msg = do
-            case concat $ reverse bufferedEvents' of
-              events@(_ : _) -> persistMany indexerRuntime events
-              []             -> pure ()
-            checkpoint indexerRuntime indexerState slotNoBhh
-            let (slotNo, bhh) = slotNoBhh
-            traceInfo trace $ "Checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
-            return $ emptyBuffer now
+    step batchState (slotNoBhh, newEvents, indexerState) = do
+      let lastCheckpointTime' = lastCheckpointTime batchState
 
-          isCheckpointTime = diffUTCTime now lastCheckpointTime > 10
+      now :: UTCTime <- getCurrentTime
+      let persistAndCheckpoint' :: [[Event a]] -> Doc () -> IO (BatchState a)
+          persistAndCheckpoint' bufferedEvents' msg = do
+            persistAndCheckpoint bufferedEvents' msg indexerState slotNoBhh
+            return $ BatchEmpty now slotNoBhh indexerState
+
+          isCheckpointTime :: Bool
+          isCheckpointTime = diffUTCTime now lastCheckpointTime' > 10
 
       if not (null newEvents)
         -- There are new events
         then let
+          batchFill = getBatchFill batchState
+          bufferedEvents = getBufferedEvents batchState
           bufferFill' = batchFill + toEnum (length newEvents)
           bufferedEvents' = newEvents : bufferedEvents
-          in if | isCheckpointTime         -> persistAndCheckpoint bufferedEvents' "it's checkpoint time"
-                | bufferFill' >= batchSize -> persistAndCheckpoint bufferedEvents' "buffer is full"
-                | otherwise                -> return (bufferFill', lastCheckpointTime, bufferedEvents')
+          in if | isCheckpointTime         ->
+                  persistAndCheckpoint' bufferedEvents' "it's checkpoint time"
+                | bufferFill' >= batchSize ->
+                  persistAndCheckpoint' bufferedEvents' "buffer is full"
+                | otherwise                -> let
+                    batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedEvents'
+                    in return batchState'
 
         -- There are no new events
-        else if isCheckpointTime
+        else if
           -- .. but it's checkpoint time so we persist events and checkpoint
-          then persistAndCheckpoint bufferedEvents "it's checkpoint time, but buffer is not full"
+          | isCheckpointTime
+          , bufferedEvents@(_ : _) <- getBufferedEvents batchState
+            -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
           -- Nothing to do, continue with original state
-          else return state
+          | isCheckpointTime
+            -> do
+              checkpoint indexerRuntime indexerState slotNoBhh
+              return $ BatchEmpty now slotNoBhh indexerState
+          -- Nothing to do, continue with original state
+          | otherwise
+            -> return batchState
 
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
+
+-- * Stop signal
+
+newtype StopSignal = StopSignal (IO.MVar Bool)
+
+-- | Stop streaming when the signal MVar is filled with a True.
+takeWhileStopSignal :: StopSignal -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
+takeWhileStopSignal (StopSignal stopSignalMVar) = S.takeWhileM (\_ -> not <$> IO.readMVar stopSignalMVar)
 
 -- * Local chainsync
 
@@ -286,15 +341,15 @@ initializeLocalChainsync_ config = do
 blockSourceFromLocalChainsyncRuntime
   :: LocalChainsyncRuntime
   -> Trace.Trace IO TS.Text
+  -> StopSignal
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSourceFromLocalChainsyncRuntime lcr trace = blockSource
+blockSourceFromLocalChainsyncRuntime lcr = blockSource
   (securityParam lcr)
   (localNodeConnection lcr)
   (interval lcr)
   (pipelineSize lcr)
   (concurrencyPrimitive lcr)
   (logging lcr)
-  trace
 
 blockSource
   :: Marconi.SecurityParam
@@ -304,10 +359,11 @@ blockSource
   -> Maybe ConcurrencyPrimitive
   -> Bool
   -> Trace.Trace IO TS.Text
+  -> StopSignal
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource securityParam' lnc interval' pipelineSize' concurrencyPrimitive' logging' trace = blocks'
+blockSource securityParam' lnc interval' pipelineSize' concurrencyPrimitive' logging' trace stopSignal = blocks'
   & (if logging' then Logging.logging trace else id)
-  & takeUpTo trace upTo'
+  & takeUpTo trace upTo' stopSignal
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
@@ -361,15 +417,16 @@ chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
 takeUpTo
   :: Trace.Trace IO TS.Text
   -> UpTo
+  -> StopSignal
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
-takeUpTo trace upTo' source = case upTo' of
+takeUpTo trace upTo' stopSignal source = case upTo' of
   SlotNo slotNo -> do
     lift $ traceDebug trace $ "Will index up to " <> pretty slotNo
-    flip S.takeWhile source $ \case
+    flip takeWhile' source $ \case
       CS.RollForward blk _ -> blockSlotNo blk <= slotNo
       CS.RollBackward{}    -> True
-  Infinity -> source
+  Infinity -> takeWhile' (const True) source
   CurrentTip -> S.lift (S.next source) >>= \case
     Left r -> return r
     Right (event, source') -> do
@@ -377,7 +434,7 @@ takeUpTo trace upTo' source = case upTo' of
       lift $ traceDebug trace $ "Will index up to current tip, which is: " <> pretty tip
       S.yield event -- We can always yield the current event, as that
                     -- is the source for the upper bound anyway.
-      flip S.takeWhile source' $ \case
+      flip takeWhile' source' $ \case
         CS.RollForward blk _ct -> blockChainPoint blk <= tip
         CS.RollBackward{}      -> True -- We skip rollbacks as these can ever only to an earlier point
       lift $ traceInfo trace $ "Reached current tip as of when indexing started (this was: " <+> pretty (getTipPoint event) <+> ")"
@@ -388,6 +445,9 @@ takeUpTo trace upTo' source = case upTo' of
       CS.RollForward _blk ct -> C.chainTipToChainPoint ct
       CS.RollBackward _cp ct -> C.chainTipToChainPoint ct
 
+    -- | Take while either a stop signal is received or when the predicate becomes false.
+    takeWhile' :: (a -> Bool) -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
+    takeWhile' p = S.takeWhile p . takeWhileStopSignal stopSignal
 
 -- * Trace
 
