@@ -43,7 +43,7 @@ instance Indexer ScriptTx where
              _  -> [event']
 
   initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)

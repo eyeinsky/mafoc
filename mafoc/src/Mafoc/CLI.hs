@@ -1,21 +1,28 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedLabels #-}
 module Mafoc.CLI where
 
 import Data.Coerce (coerce)
+import Data.Char (isDigit)
 import Data.List qualified as L
 import Data.Proxy (Proxy (Proxy))
 import Data.Text qualified as TS
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
 import Data.List.NonEmpty qualified as NE
+import Numeric.Natural (Natural)
 
 import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo))
+import Mafoc.Upstream ()
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
+
 import Marconi.ChainIndex.Types qualified as Marconi
 
 -- * Options
@@ -27,12 +34,12 @@ commonDbPath :: O.Parser FilePath
 commonDbPath = O.strOption (opt 'd' "db-path" "Path to sqlite database.")
 
 commonDbPathAndTableName :: O.Parser DbPathAndTableName
-commonDbPathAndTableName = O.option (O.eitherReader parse) $ opt 'd' "db"
+commonDbPathAndTableName = O.option (O.eitherReader parseDbPathAndTableName) $ opt 'd' "db"
   "Optional path to sqlite database (defaults to default.db) and a table name (default is indexer-specific)."
   <> O.value (DbPathAndTableName Nothing Nothing)
-  where
-    parse :: String -> Either String DbPathAndTableName
-    parse str = let
+
+parseDbPathAndTableName :: String -> Either String DbPathAndTableName
+parseDbPathAndTableName str = let
       (dbPath, tableName) = L.span (/= ':') str
       dbPath' = if L.null dbPath then Nothing else Just dbPath
       tableName' = case tableName of
@@ -104,11 +111,7 @@ commonNodeConnectionAndConfig = coerce
 commonInterval :: O.Parser Interval
 commonInterval = O.option (O.eitherReader parseIntervalEither)
   $ opt 'i' "interval" "Chain interval to index, defaults to from genesis to infinity"
-  <> O.value (Interval C.ChainPointAtGenesis Infinity)
-
-commonUpTo :: O.Parser UpTo
-commonUpTo = O.option (O.eitherReader parseUpTo)
-  $ opt 'u' "upto" "An up-to point: <slot no> or '@' which stands for current tip."
+  <> O.value (Interval (False, Right C.ChainPointAtGenesis) Infinity)
 
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
@@ -145,27 +148,60 @@ commonUtxoState = O.option O.auto (O.long "utxo-state" <> O.value "utxoState")
 -- ** Interval
 
 parseIntervalEither :: String -> Either String Interval
-parseIntervalEither str = Interval <$> parseFrom from <*> parseUpTo upTo
-  where (from, upTo) = L.span (/= '-') str
+parseIntervalEither str = do
+  from'@(_, eitherSlotNoOrCp) <- parseFrom from
+  Interval from' <$> parseUpTo (#slotNo eitherSlotNoOrCp) upTo
+  where (from, upTo) = L.span (\c -> not $ c `elem` ("-+" :: String)) str
 
-parseFrom :: String -> Either String C.ChainPoint
+parseFrom :: String -> Either String (Bool, Either C.SlotNo C.ChainPoint)
 parseFrom str = case str of
-  "" -> Right C.ChainPointAtGenesis
-  "0" -> Right C.ChainPointAtGenesis
-  _ -> do
-    let (fromSlotNo, bhh) = L.span (/= ':') str
-    slotNo <- parseSlotNo_ fromSlotNo
-    blockHeaderHash <- case bhh of
-      ':' : str' -> eitherParseHashBlockHeader str'
-      _          -> leftError "No block header hash" ""
-    return $ C.ChainPoint slotNo blockHeaderHash
+  "" -> Right (False, Right C.ChainPointAtGenesis)
+  "0" -> Right (False, Right C.ChainPointAtGenesis)
+  '@' : str' -> (True, ) <$> parseSlotNoOrChainPoint str'
+  str' -> (False, ) <$> parseSlotNoOrChainPoint str'
 
-parseUpTo :: String -> Either String UpTo
-parseUpTo str = case str of
-  '-' : rest -> case rest of
+-- parseChainPoint :: String -> Either String C.ChainPoint
+-- parseChainPoint str = do
+--   let (fromSlotNo, bhh) = L.span (/= ':') str
+--   slotNo <- parseSlotNo_ fromSlotNo
+--   blockHeaderHash <- case bhh of
+--     ':' : str' -> eitherParseHashBlockHeader str'
+--     _          -> leftError "No block header hash" ""
+--   return $ C.ChainPoint slotNo blockHeaderHash
+
+parseSlotNoOrChainPoint :: String -> Either String (Either C.SlotNo C.ChainPoint)
+parseSlotNoOrChainPoint str = do
+  slotNo <- parseSlotNo_ fromSlotNo
+  case bhh of
+    [] -> return $ Left slotNo
+    ':' : bhh' -> do
+      blockHeaderHash <- eitherParseHashBlockHeader bhh'
+      pure $ Right $ C.ChainPoint slotNo blockHeaderHash
+    _ -> error "!! This is impossible"
+  where (fromSlotNo, bhh) = L.span (/= ':') str
+
+parseUpTo :: C.SlotNo -> String -> Either String UpTo
+parseUpTo fromSlotNo str = case str of
+  '-' : absoluteUpTo -> case absoluteUpTo of
     "@" -> Right CurrentTip
     ""  -> Right Infinity
-    _   -> SlotNo <$> parseSlotNo_ rest
+    _   -> SlotNo <$> parseSlotNo_ absoluteUpTo
+  '+' : relativeUpTo
+    | not (null digits) && null rest -> do
+        toSlotNoNatural <- toSlotNoNaturalEither
+        SlotNo <$> naturalSlotNo (fromSlotNoNatural + toSlotNoNatural)
+    | otherwise -> Left "Can't parse relativeUpTo"
+    where
+      (digits, rest) = L.span isDigit relativeUpTo
+      toSlotNoNaturalEither = Read.readEither digits :: Either String Natural
+
+      fromSlotNoNatural = fromIntegral @_ @Natural $ coerce @_ @Word64 fromSlotNo
+
+      naturalSlotNo :: Natural -> Either String C.SlotNo
+      naturalSlotNo slotNo = if slotNo > fromIntegral (maxBound :: Word64)
+        then Left $ "Slot number can't be larger than Word64 maxBound: " <> show slotNo
+        else Right $ C.SlotNo (fromIntegral slotNo :: Word64)
+
   "" -> Right Infinity
   _ -> leftError "Can't read slot interval end" str
 

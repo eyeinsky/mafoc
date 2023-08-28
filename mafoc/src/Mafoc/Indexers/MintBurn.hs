@@ -57,7 +57,7 @@ instance Indexer MintBurn where
   toEvents _runtime _state blockInMode = (EmptyState, coerce [Marconi.MintBurn.toUpdate Nothing blockInMode])
 
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.MintBurn.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)

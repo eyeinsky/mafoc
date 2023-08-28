@@ -14,7 +14,7 @@ import Mafoc.CLI qualified as Opt
 
 import Cardano.Api qualified as C
 
-import Mafoc.Core (DbPathAndTableName,
+import Mafoc.Core (chainPointForSlotNo, DbPathAndTableName, eventsToSingleChainpoint,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
                    setCheckpointSqlite)
@@ -48,17 +48,12 @@ instance Indexer BlockBasics where
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
   initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
-
-eventsToSingleChainpoint :: [(Word64, C.Hash C.BlockHeader, Int)] -> Maybe C.ChainPoint
-eventsToSingleChainpoint = \case
-  ((slotNo, hash,_) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
-  _                            -> Nothing
 
 -- * SQLite
 
@@ -81,7 +76,7 @@ sqliteInit sqlCon tableName = SQL.execute_ sqlCon $
 
 lastCp :: SQL.Connection -> String -> IO (Maybe C.ChainPoint)
 lastCp sqlCon tableName = fmap eventsToSingleChainpoint $ SQL.query_ sqlCon $
-  "   SELECT slot_no, block_header_hash, tx_count \
-  \     FROM " <> fromString tableName <> "       \
-  \ ORDER BY slot_no DESC                         \
+  "   SELECT slot_no, block_header_hash     \
+  \     FROM " <> fromString tableName <> " \
+  \ ORDER BY slot_no DESC                   \
   \    LIMIT 1"

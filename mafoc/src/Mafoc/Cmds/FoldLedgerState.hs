@@ -17,9 +17,9 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (ConcurrencyPrimitive, Interval (Interval), NodeConfig (NodeConfig), NodeInfo,
+import Mafoc.Core (ConcurrencyPrimitive, NodeConfig (NodeConfig), NodeInfo,
                    SocketPath (SocketPath), StopSignal, UpTo (SlotNo), blockChainPoint, blockSource,
-                   initializeLedgerState, storeLedgerState)
+                   initializeLedgerState, storeLedgerState, takeUpTo)
 import Mafoc.Upstream (querySecurityParam)
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -56,7 +56,7 @@ run config stopSignal = do
     -- from the file content.
     let nodeInfo' = nodeInfo config
     let nodeConfig@(NodeConfig nodeConfig') = #nodeConfig nodeInfo'
-    (cp, ledgerCfg, extLedgerState) <- case maybeFromLedgerState config of
+    (fromCp, ledgerCfg, extLedgerState) <- case maybeFromLedgerState config of
       Just path -> do
         ((slotNo', bhh), ledgerCfg, extLedgerState) <- initializeLedgerState nodeConfig path
         return (C.ChainPoint slotNo' bhh, ledgerCfg, extLedgerState)
@@ -68,9 +68,9 @@ run config stopSignal = do
     networkId <- #getNetworkId nodeInfo'
     let lnc = CS.mkLocalNodeConnectInfo networkId socketPath'
     securityParam <- querySecurityParam lnc
-    let interval = Interval cp (SlotNo $ toSlotNo config)
-        blockSource' = blockSource securityParam lnc interval (pipelineSize config)
-          (concurrencyPrimitive config) (logging config) trace stopSignal
+    let takeUpTo' = takeUpTo trace (SlotNo $ toSlotNo config) stopSignal
+        blockSource' = blockSource securityParam lnc (pipelineSize config)
+          (concurrencyPrimitive config) (logging config) trace fromCp takeUpTo'
 
     maybeLast <- S.last_
       $ blockSource'

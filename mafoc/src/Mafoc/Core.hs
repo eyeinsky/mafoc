@@ -23,6 +23,7 @@ import Control.Concurrent qualified as IO
 import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
 import Control.Exception qualified as E
+import Data.String (fromString)
 import Control.Monad.Trans.Class (lift)
 import Data.Coerce (coerce)
 import Data.Function ((&))
@@ -107,8 +108,8 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> IO ()
-runIndexer cli batchSize stopSignal = do
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> Maybe DbPathAndTableName -> IO ()
+runIndexer cli batchSize stopSignal maybeDbPathAndTableName = do
   c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace
@@ -116,16 +117,21 @@ runIndexer cli batchSize stopSignal = do
                      <> "\n  Batch size: " <> pretty (show batchSize)
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
 
+    -- Try resolve slotNo if no block header hash defined:
+    let (fromCp, upTo') = interval lcr
+    -- fromCp <- intervalStartToChainSyncStart trace maybeDbPathAndTableName include from'
+    let takeUpTo' = takeUpTo trace upTo' stopSignal
+
     -- Start streaming blocks over local chainsync
     blockSource
           (securityParam lcr)
           (localNodeConnection lcr)
-          (interval lcr)
           (pipelineSize lcr)
           (concurrencyPrimitive lcr)
           (logging lcr)
           trace
-          stopSignal
+          fromCp
+          takeUpTo'
 
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
@@ -311,7 +317,7 @@ instance IsLabel "getNetworkId" (LocalChainsyncConfig NodeConfig -> IO C.Network
 -- | Static configuration for block source
 data LocalChainsyncRuntime = LocalChainsyncRuntime
   { localNodeConnection  :: C.LocalNodeConnectInfo C.CardanoMode
-  , interval             :: Interval
+  , interval             :: (C.ChainPoint, UpTo)
   , securityParam        :: Marconi.SecurityParam
   , logging              :: Bool
   , pipelineSize         :: Word32
@@ -320,14 +326,18 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
   }
 
-initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId -> IO LocalChainsyncRuntime
-initializeLocalChainsync config networkId = do
+initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId  -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
+initializeLocalChainsync config networkId trace = do
   let SocketPath socketPath' = #socketPath config
   let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
+
+  let Interval (include, fromEither) upTo = interval_ config
+  fromCp <- intervalStartToChainSyncStart trace Nothing include fromEither
+
   return $ LocalChainsyncRuntime
     localNodeCon
-    (interval_ config)
+    (fromCp, upTo)
     securityParam'
     (logging_ config)
     (pipelineSize_ config)
@@ -336,45 +346,31 @@ initializeLocalChainsync config networkId = do
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
 -- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
 -- config which can be used to generate a stream of blocks.
-initializeLocalChainsync_ :: LocalChainsyncConfig_ -> IO LocalChainsyncRuntime
-initializeLocalChainsync_ config = do
+initializeLocalChainsync_ :: LocalChainsyncConfig_ -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
+initializeLocalChainsync_ config trace = do
   networkId <- #getNetworkId config
-  initializeLocalChainsync config networkId
-
-blockSourceFromLocalChainsyncRuntime
-  :: LocalChainsyncRuntime
-  -> Trace.Trace IO TS.Text
-  -> StopSignal
-  -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSourceFromLocalChainsyncRuntime lcr = blockSource
-  (securityParam lcr)
-  (localNodeConnection lcr)
-  (interval lcr)
-  (pipelineSize lcr)
-  (concurrencyPrimitive lcr)
-  (logging lcr)
+  initializeLocalChainsync config networkId trace
 
 blockSource
   :: Marconi.SecurityParam
   -> C.LocalNodeConnectInfo C.CardanoMode
-  -> Interval
   -> Word32
   -> Maybe ConcurrencyPrimitive
   -> Bool
   -> Trace.Trace IO TS.Text
-  -> StopSignal
+  -> C.ChainPoint
+  -> (S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO () -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO ())
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource securityParam' lnc interval' pipelineSize' concurrencyPrimitive' logging' trace stopSignal = blocks'
+blockSource securityParam' lnc pipelineSize' concurrencyPrimitive' logging' trace fromCp takeUpTo' = blocks'
   & (if logging' then Logging.logging trace else id)
-  & takeUpTo trace upTo' stopSignal
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.
+  & takeUpTo'
   & RB.rollbackRingBuffer (fromIntegral securityParam')
        tipDistance
        blockSlotNoBhh
   where
-    Interval fromCp upTo' = interval'
     blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
     blocks' = if pipelineSize' > 1
       then CS.blocksPipelined pipelineSize' lnc fromCp
@@ -410,12 +406,14 @@ data UpTo
   deriving (Show)
 
 data Interval = Interval
-  { from :: C.ChainPoint
+  { from :: (Bool, Either C.SlotNo C.ChainPoint)
   , upTo :: UpTo
   } deriving (Show)
 
 chainPointLaterThanFrom :: C.ChainPoint -> Interval -> Bool
-chainPointLaterThanFrom cp (Interval from' _) = from' <= cp
+chainPointLaterThanFrom cp (Interval (_, eitherSlotNoOrChainPoint) _) = case eitherSlotNoOrChainPoint of
+  Left slotNo -> slotNo <= #slotNo cp
+  Right from' -> from' <= cp
 
 takeUpTo
   :: Trace.Trace IO TS.Text
@@ -514,9 +512,11 @@ initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqlite
 
   (ledgerConfig, extLedgerState, startFrom) <- loadLedgerStateWithChainpoint nodeConfig trace
 
+  let Interval (_include, fromEither) upTo = interval_ chainsyncConfig -- todo
+
   let chainsyncRuntime' = LocalChainsyncRuntime
         localNodeConnectInfo
-        ((interval_ chainsyncConfig) {from = startFrom})
+        (startFrom, upTo)
         securityParam'
         (logging_ chainsyncConfig)
         (pipelineSize_ chainsyncConfig)
@@ -587,28 +587,83 @@ initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
   -- Find ChainPoint from checkpoints table and update chainsync
   -- runtime configuration if that is later than what was passed in
   -- from cli configuration.
-  let cliInterval = interval chainsyncRuntime
-  maybeChainPoint <- getCheckpointSqlite sqlCon tableName
-  newInterval <- case maybeChainPoint of
-    Just cp -> if chainPointLaterThanFrom cp cliInterval
+  let (fromCp, upTo) = interval chainsyncRuntime
+  maybeCheckpointedChainPoint <- getCheckpointSqlite sqlCon tableName
+  newFrom <- case maybeCheckpointedChainPoint of
+    Just checkpointedChainPoint -> if fromCp <= checkpointedChainPoint --  chainPointLaterThanFrom cp cliInterval
       then do
-      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> pretty cp
-      return $ cliInterval { from = cp }
+      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> pretty checkpointedChainPoint
+      return checkpointedChainPoint
       else do
-      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> pretty cp <> ", cli: " <> pretty (from cliInterval)
-      return cliInterval
+      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> pretty checkpointedChainPoint <> ", cli: " <> pretty fromCp
+      return fromCp
     _ -> do
-      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> pretty (from cliInterval)
-      return cliInterval
-  let chainsyncRuntime' = chainsyncRuntime { interval = newInterval }
-
-  return (sqlCon, chainsyncRuntime')
+      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> pretty fromCp
+      return fromCp
+  return (sqlCon, chainsyncRuntime { interval = (newFrom, upTo) })
 
 sqliteOpen :: FilePath -> IO SQL.Connection
 sqliteOpen dbPath = do
   sqlCon <- SQL.open dbPath
   SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
   return sqlCon
+
+-- ** ChainPoint
+
+eventsToSingleChainpoint :: [(C.SlotNo, C.Hash C.BlockHeader)] -> Maybe C.ChainPoint
+eventsToSingleChainpoint = \case
+  ((slotNo, hash) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
+  _                    -> Nothing
+
+
+chainPointForSlotNo :: SQL.Connection -> String -> C.SlotNo -> IO (Maybe C.ChainPoint)
+chainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
+  where
+    query :: SQL.Query
+    query = "SELECT slot_no, block_header_hash     \
+            \  FROM " <> fromString tableName <> " \
+            \ WHERE slot_no = ?                    "
+
+previousChainPointForSlotNo :: SQL.Connection -> String -> C.SlotNo -> IO (Maybe C.ChainPoint)
+previousChainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
+  where
+    query :: SQL.Query
+    query = "SELECT slot_no, block_header_hash     \
+            \  FROM " <> fromString tableName <> " \
+            \ WHERE slot_no < ?                    \
+            \ ORDER BY slot_no DESC                \
+            \ LIMIT 1                              "
+
+-- | Convert starting point from CLI to chainpoint, possibly with the help of header DB.
+intervalStartToChainSyncStart
+  :: Trace.Trace IO TS.Text
+  -> Maybe DbPathAndTableName
+  -> Bool
+  -> Either C.SlotNo C.ChainPoint
+  -> IO C.ChainPoint
+intervalStartToChainSyncStart trace maybeDbPathAndTableName include eitherSlotOrCp
+  | Just dbPathAndTableName <- maybeDbPathAndTableName, Left slotNo <- eitherSlotOrCp =
+    let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
+    in do
+      sqlCon <- SQL.open dbPath
+      if include
+        then let
+          in case slotNo of
+               0 -> pure C.ChainPointAtGenesis
+               _slotNo -> do
+                 maybeChainPoint <- previousChainPointForSlotNo sqlCon tableName slotNo
+                 case maybeChainPoint of
+                   Just cp -> pure cp
+                   Nothing -> E.throwIO $ E.Can't_find_previous_ChainPoint_to_slot slotNo
+
+        else chainPointForSlotNo sqlCon tableName slotNo >>= \case
+          Nothing -> E.throwIO $ E.SlotNo_not_found slotNo
+          Just cp -> do
+            traceInfo trace $ pretty slotNo <> " resolved to " <> pretty cp
+            pure cp
+
+  | Right cp <- eitherSlotOrCp = pure cp
+  | otherwise = E.throwIO E.No_headerDb_specified
 
 -- * Address filter
 

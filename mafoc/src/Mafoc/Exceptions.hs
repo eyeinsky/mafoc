@@ -24,16 +24,23 @@ data CardanoAssumptionBroken
   deriving stock Show
   deriving anyclass Exception
 
--- | An exception where we don't bother with structure, but just
--- explain in text.
-data TextException = TextException TS.Text
-  deriving stock Show
-  deriving anyclass Exception
-
 data MafocIOException
   = Can't_deserialise_LedgerState_from_CBOR FilePath DeserialiseFailure
   | Can't_parse_chain_point_from_LedgerState_file_name FilePath String
   -- | Impossible
   | The_impossible_happened { whatItWas :: TS.Text }
+  -- | Header-DB
+  | SlotNo_not_found C.SlotNo
+  | No_headerDb_specified
+  | Can't_find_previous_ChainPoint_to_slot C.SlotNo
+  -- | ChainPoints from multiple state sources
+  | ChainPoints_don't_match [(String, Maybe C.ChainPoint)]
+  deriving stock Show
+  deriving anyclass Exception
+
+-- | An escape-hatch exception: an exception where we don't bother
+-- with structure, but just explain in text. Perhaps we'll find a
+-- category later.
+data TextException = TextException TS.Text
   deriving stock Show
   deriving anyclass Exception
