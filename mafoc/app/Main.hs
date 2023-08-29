@@ -35,7 +35,7 @@ main :: IO ()
 main = do
   stopSignal <- setupCtrlCHandler 3
   printRollbackException $ do
-    Opt.execParser cmdParserInfo >>= \case
+    Opt.customExecParser (Opt.prefs Opt.showHelpOnEmpty) cmdParserInfo >>= \case
       Speed what -> case what of
         Speed.Callback socketPath nodeConfig start end -> Speed.mkCallback CS.blocksCallback socketPath nodeConfig start end
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
@@ -117,23 +117,30 @@ cmdParserInfo = Opt.info (Opt.helper <*> cmdParser) $ Opt.fullDesc
   <> Opt.header "mafoc - Maps and folds over Cardano blockchain"
 
 cmdParser :: Opt.Parser Command
-cmdParser = Opt.subparser
-   $ Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
-  <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
-  <> Opt.command "slot-chainpoint" (parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
-  <> indexerCommand' "addressbalance" AddressBalance
-  <> indexerCommand' "addressdatum" AddressDatum
-  <> indexerCommand' "blockbasics" BlockBasics
-  <> indexerCommand' "deposit" Deposit
-  <> indexerCommand' "epochnonce" EpochNonce
-  <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
-  <> indexerCommand' "mamba" Mamba
-  <> indexerCommand' "mintburn" MintBurn
-  <> indexerCommand' "noop" NoOp
-  <> indexerCommand' "scripttx" ScriptTx
-  <> indexerCommand' "utxo" Utxo
+cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
+    Opt.<|> Opt.subparser (other <> Opt.commandGroup "Other:")
+
   where
+    other :: Opt.Mod Opt.CommandFields Command
+    other =
+         Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
+      <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
+      <> Opt.command "slot-chainpoint" (parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
+
     indexerCommand' name f = indexerCommand name (\(i, bs, db) -> IndexerCommand (f i) bs db)
+    indexers :: Opt.Mod Opt.CommandFields Command
+    indexers =
+         indexerCommand' "addressbalance" AddressBalance
+      <> indexerCommand' "addressdatum" AddressDatum
+      <> indexerCommand' "blockbasics" BlockBasics
+      <> indexerCommand' "deposit" Deposit
+      <> indexerCommand' "epochnonce" EpochNonce
+      <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
+      <> indexerCommand' "mamba" Mamba
+      <> indexerCommand' "mintburn" MintBurn
+      <> indexerCommand' "noop" NoOp
+      <> indexerCommand' "scripttx" ScriptTx
+      <> indexerCommand' "utxo" Utxo
 
 -- | Take program description, header and CLI parser, and turn it into a ParserInfo
 parserToParserInfo :: String -> String -> Opt.Parser a -> Opt.ParserInfo a
