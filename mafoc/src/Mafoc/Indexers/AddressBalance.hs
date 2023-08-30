@@ -8,7 +8,6 @@ module Mafoc.Indexers.AddressBalance where
 import System.IO qualified as IO
 import Data.Map.Strict qualified as Map
 import Data.Map.Merge.Strict qualified as Map
-import Data.Maybe (catMaybes, mapMaybe)
 import Data.List.NonEmpty qualified as NE
 import Data.Aeson qualified as A
 import Data.Aeson ((.=))

@@ -4,10 +4,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Upstream.Formats where
 
-import Data.Coerce (coerce)
 import Data.Text qualified as TS
 import Data.Aeson.Types qualified as A
-import Data.Word (Word64)
 
 import Cardano.Api qualified as C
 

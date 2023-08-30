@@ -2,9 +2,6 @@
 module RingBuffer where
 
 import Control.Monad (replicateM)
-import Control.Monad.IO.Class (liftIO)
-import Data.Maybe (listToMaybe)
-import Numeric.Natural (Natural)
 
 import Hedgehog ((===))
 import Hedgehog qualified as H

@@ -76,6 +76,9 @@ library
     Mafoc.Upstream.Formats
     Mafoc.Utxo
 
+  mixins:          base (Prelude as BasePrelude), base hiding (Prelude)
+  exposed-modules: Prelude
+
   --------------------
   -- Local components
   --------------------
@@ -122,6 +125,8 @@ executable mafoc
   hs-source-dirs: app
   main-is:        Main.hs
 
+  mixins:         base (Prelude as BasePrelude), base hiding (Prelude)
+
   --------------------
   -- Local components
   --------------------
@@ -149,6 +154,7 @@ test-suite mafoc-test
   hs-source-dirs: test
   main-is:        Spec.hs
   type:           exitcode-stdio-1.0
+  mixins:         base (Prelude as BasePrelude), base hiding (Prelude)
   other-modules:
     RingBuffer
     RollbackRingBuffer

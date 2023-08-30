@@ -5,9 +5,7 @@
 
 module Mafoc.Indexers.Mamba where
 
-import Control.Monad (when)
 import Data.Map qualified as M
-import Data.Maybe (fromMaybe, mapMaybe)
 import Database.SQLite.Simple qualified as SQL
 
 import Cardano.Api qualified as C

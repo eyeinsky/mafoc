@@ -8,10 +8,6 @@ module Mafoc.Upstream where
 
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Control.Exception (throwIO, Exception, throw)
-import Control.Monad.Trans.Class (MonadTrans, lift)
-import Data.Coerce (coerce)
-import Data.Word (Word64)
-import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C

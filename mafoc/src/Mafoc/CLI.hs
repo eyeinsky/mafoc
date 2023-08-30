@@ -3,17 +3,13 @@
 {-# LANGUAGE OverloadedLabels #-}
 module Mafoc.CLI where
 
-import Data.Coerce (coerce)
-import Data.Char (isDigit)
 import Data.List qualified as L
-import Data.Proxy (Proxy (Proxy))
 import Data.Text qualified as TS
-import Data.Word (Word32, Word64)
+import Data.Text.Encoding qualified as TS
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
 import Data.List.NonEmpty qualified as NE
-import Numeric.Natural (Natural)
 
 import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),

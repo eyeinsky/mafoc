@@ -11,7 +11,6 @@ This just provides the CLI interface and a streaming runtime.
 -}
 module Mafoc.Indexers.MintBurn where
 
-import Data.Coerce (coerce)
 import Database.SQLite.Simple qualified as SQL
 
 import Mafoc.CLI qualified as Opt

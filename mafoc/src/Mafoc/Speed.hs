@@ -7,10 +7,6 @@ import Control.Concurrent.Async qualified as IO
 import Control.Concurrent.QSemN (signalQSemN)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TChan (dupTChan, readTChan)
-import Control.Monad (void, when)
-import Data.Coerce (coerce)
-import Data.Maybe (fromMaybe)
-import Data.Word (Word32, Word64)
 
 import Cardano.Api qualified as C
 import Cardano.Streaming qualified as CS

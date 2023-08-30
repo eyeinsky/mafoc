@@ -6,8 +6,6 @@
 module Mafoc.RollbackRingBuffer where
 
 import Control.Exception qualified as IO
-import Control.Monad.IO.Class (liftIO)
-import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C

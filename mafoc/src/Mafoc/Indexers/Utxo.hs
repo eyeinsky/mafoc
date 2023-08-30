@@ -11,10 +11,7 @@ module Mafoc.Indexers.Utxo where
 import Control.Exception qualified as E
 import Data.ByteString qualified as BS
 import Data.Either (rights)
-import Data.Function ((&))
 import Data.Map qualified as Map
-import Data.String (fromString)
-import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
 

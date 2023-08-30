@@ -3,7 +3,6 @@
 module Mafoc.Indexers.ScriptTx where
 
 import Database.SQLite.Simple qualified as SQL
-import Data.Coerce (coerce)
 
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt

@@ -6,7 +6,6 @@
 module Mafoc.Indexers.Deposit where
 
 import System.IO qualified as IO
-import Data.Maybe (mapMaybe)
 import Data.ByteString.Lazy.Char8 qualified as BL8
 import Data.Aeson qualified as A
 import Data.Aeson ((.=))

@@ -14,15 +14,11 @@ module Mafoc.RingBuffer
   , unpushWhile, unpushWhile_
   ) where
 
-import Control.Arrow (second)
 import Control.Exception (Exception, throwIO)
-import Control.Monad (foldM)
 import Control.Monad.Primitive (PrimState)
 import Data.Vector qualified as V
 import Data.Vector.Generic qualified as VG
 import Data.Vector.Generic.Mutable qualified as VGM
-
-import Numeric.Natural (Natural)
 
 -- * RingBuffer
 

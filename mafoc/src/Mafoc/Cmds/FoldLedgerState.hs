@@ -6,8 +6,6 @@
 
 module Mafoc.Cmds.FoldLedgerState where
 
-import Data.Function ((&))
-import Data.Word (Word32)
 import Options.Applicative qualified as Opt
 import Streaming qualified as S
 import Streaming.Prelude qualified as S

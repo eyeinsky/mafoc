@@ -5,10 +5,6 @@
 
 module Mafoc.Indexers.BlockBasics where
 
-import Data.Coerce (coerce)
-import Data.String (IsString (fromString))
-
-import Data.Word (Word64)
 import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 

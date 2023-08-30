@@ -23,19 +23,11 @@ import Control.Concurrent qualified as IO
 import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
 import Control.Exception qualified as E
-import Data.String (fromString)
-import Control.Monad.Trans.Class (lift)
-import Data.Coerce (coerce)
-import Data.Function ((&))
-import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
-import Data.String (IsString)
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import Data.Word (Word32)
 import Database.SQLite.Simple qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
-import Numeric.Natural (Natural)
 import Options.Applicative qualified as O
 import Prettyprinter (Doc, Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
 import Prettyprinter.Render.Text (renderStrict)

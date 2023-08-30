@@ -3,12 +3,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.EpochNonce where
 
-import Data.Coerce (coerce)
-
 import Cardano.Api qualified as C
 import Cardano.Ledger.Shelley.API qualified as Ledger
 import Control.Exception qualified as E
-import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
 
 import Mafoc.CLI qualified as Opt

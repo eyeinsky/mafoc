@@ -2,7 +2,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.AddressDatum where
 
-import Data.Coerce (coerce)
 import Cardano.Api qualified as C
 import Database.SQLite.Simple qualified as SQL
 import Marconi.ChainIndex.Indexers.AddressDatum qualified as Marconi

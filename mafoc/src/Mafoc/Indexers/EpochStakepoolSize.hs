@@ -8,9 +8,7 @@ module Mafoc.Indexers.EpochStakepoolSize where
 
 import Control.Exception (throw)
 import Data.Map.Strict qualified as M
-import Data.String (fromString)
 import Database.SQLite.Simple qualified as SQL
-import Data.Coerce (coerce)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C

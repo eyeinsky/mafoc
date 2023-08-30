@@ -4,13 +4,8 @@
 module Mafoc.StateFile where
 
 import Data.ByteString.Char8 qualified as C8
-import Data.Coerce (coerce)
-import Data.Function (on)
 import Data.List qualified as L
-import Data.Maybe (mapMaybe)
-import Data.Proxy (Proxy (Proxy))
 import Data.Text qualified as TS
-import Data.Word (Word64)
 import System.Directory (listDirectory, removeFile)
 import Text.Read qualified as Read
 

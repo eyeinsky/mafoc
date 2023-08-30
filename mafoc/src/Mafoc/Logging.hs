@@ -15,9 +15,9 @@ import Cardano.Api (
   SlotNo (SlotNo),
  )
 import Cardano.BM.Trace (Trace, logInfo)
-import Control.Monad (when)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Text (Text)
+
 import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
 import Prettyprinter.Render.Text (renderStrict)

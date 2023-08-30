@@ -1,7 +1,5 @@
 module Spec.Helpers where
 
-import Control.Monad (forM_)
-import Data.String (fromString)
 import Hedgehog qualified as H
 
 footnotes :: H.MonadTest m => [(String, String)] -> m ()

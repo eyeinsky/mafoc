@@ -5,18 +5,12 @@
 module RollbackRingBuffer where
 
 import Control.Exception qualified as IO
-import Control.Monad.IO.Class (liftIO)
-import Data.Coerce (coerce)
 import Data.List qualified as L
-import Data.String (fromString)
-import Data.Word (Word64)
-import Numeric.Natural (Natural)
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
-
 
 import Hedgehog ((===))
 import Hedgehog qualified as H
