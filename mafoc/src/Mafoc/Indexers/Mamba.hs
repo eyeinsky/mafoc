@@ -18,7 +18,6 @@ import Mafoc.Core
   , LocalChainsyncConfig
   , NodeConfig
   , defaultTableName
-  , from
   , getCheckpointSqlite
   , initialize
   , initializeLocalChainsync
@@ -138,9 +137,9 @@ instance Indexer Mamba where
 
     localChainsyncRuntime <- do
       networkId <- #getNetworkId nodeConfig
-      localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId
-      let cliInterval = interval localChainsyncRuntime'
-          newInterval = cliInterval{from = (False, Right cp)}
+      localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+      let (_cliCp, cliUpTo) = interval localChainsyncRuntime'
+          newInterval = (cp, cliUpTo)
       return $ localChainsyncRuntime'{interval = newInterval}
 
     let state = State extLedgerState (getEpochNo extLedgerState) utxoState

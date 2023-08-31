@@ -113,8 +113,8 @@ instance Indexer AddressBalance where
                    balance
                    (Map.unionWith (<>) deposits spends)
 
-  initialize AddressBalance{chainsync, addresses} _trace = do
-    lcr <- initializeLocalChainsync_ chainsync
+  initialize AddressBalance{chainsync, addresses} trace = do
+    lcr <- initializeLocalChainsync_ chainsync trace
     IO.hSetBuffering IO.stdout IO.LineBuffering
     return (State mempty, lcr, Runtime $ Utxo.addressListFilter addresses)
 

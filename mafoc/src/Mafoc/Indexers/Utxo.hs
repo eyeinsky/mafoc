@@ -132,7 +132,7 @@ instance Indexer Utxo where
 
   initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
     networkId <- #getNetworkId chainsync
-    chainsyncRuntime <- initializeLocalChainsync chainsync networkId
+    chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
     let (dbPath, tableName) = defaultTableName "utxo" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName

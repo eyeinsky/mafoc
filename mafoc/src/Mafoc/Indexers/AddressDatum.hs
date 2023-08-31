@@ -47,7 +47,7 @@ instance Indexer AddressDatum where
     Marconi.sqliteInsert sqlConnection tableName $ coerce events
 
   initialize AddressDatum{chainsync, dbPathAndTableName, addresses} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "address_datums" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.sqliteInit chainsyncRuntime trace
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName $ mkMaybeAddressFilter addresses)
