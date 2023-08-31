@@ -22,6 +22,7 @@ import Mafoc.Core (
   initializeLocalChainsync_,
   initializeSqlite,
   setCheckpointSqlite,
+  modifyStartingPoint,
  )
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
@@ -58,7 +59,9 @@ instance Indexer MintBurn where
   initialize MintBurn{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.MintBurn.sqliteInit chainsyncRuntime trace
+    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    Marconi.MintBurn.sqliteInit sqlCon tableName
+    let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\cliChainPoint -> max checkpointedChainPoint cliChainPoint)
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events = do

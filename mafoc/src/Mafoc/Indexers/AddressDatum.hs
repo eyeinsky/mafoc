@@ -10,7 +10,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite)
+                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, modifyStartingPoint)
 import Options.Applicative qualified as Opt
 
 
@@ -49,7 +49,9 @@ instance Indexer AddressDatum where
   initialize AddressDatum{chainsync, dbPathAndTableName, addresses} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "address_datums" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName Marconi.sqliteInit chainsyncRuntime trace
+    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    Marconi.sqliteInit sqlCon tableName
+    let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\cliChainPoint -> max checkpointedChainPoint cliChainPoint)
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName $ mkMaybeAddressFilter addresses)
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh =

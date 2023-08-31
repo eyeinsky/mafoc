@@ -10,9 +10,9 @@ import Mafoc.CLI qualified as Opt
 
 import Cardano.Api qualified as C
 
-import Mafoc.Core (chainPointForSlotNo, DbPathAndTableName, eventsToSingleChainpoint,
+import Mafoc.Core (DbPathAndTableName, eventsToSingleChainpoint,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
-                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite,
+                   LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite, modifyStartingPoint,
                    setCheckpointSqlite)
 
 -- * Block transaction count indexer
@@ -46,7 +46,9 @@ instance Indexer BlockBasics where
   initialize BlockBasics{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
-    (sqlCon, chainsyncRuntime') <- initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace
+    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    sqliteInit sqlCon tableName
+    let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\cliChainPoint -> max checkpointedChainPoint cliChainPoint)
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh

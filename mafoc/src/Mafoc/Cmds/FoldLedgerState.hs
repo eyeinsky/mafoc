@@ -17,8 +17,11 @@ import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (ConcurrencyPrimitive, NodeConfig (NodeConfig), NodeInfo,
                    SocketPath (SocketPath), StopSignal, UpTo (SlotNo), blockChainPoint, blockSource,
-                   initializeLedgerState, storeLedgerState, takeUpTo)
+                   takeUpTo)
 import Mafoc.Upstream (querySecurityParam)
+import Mafoc.LedgerState qualified as LedgerState
+import Mafoc.StateFile qualified as StateFile
+import Mafoc.Exceptions qualified as E
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data FoldLedgerState = FoldLedgerState
@@ -56,8 +59,12 @@ run config stopSignal = do
     let nodeConfig@(NodeConfig nodeConfig') = #nodeConfig nodeInfo'
     (fromCp, ledgerCfg, extLedgerState) <- case maybeFromLedgerState config of
       Just path -> do
-        ((slotNo', bhh), ledgerCfg, extLedgerState) <- initializeLedgerState nodeConfig path
-        return (C.ChainPoint slotNo' bhh, ledgerCfg, extLedgerState)
+        (slotNo, bhh) <- StateFile.bhhFromFileName path & \case
+           Left errMsg -> E.throwIO $ E.Can't_parse_chain_point_from_LedgerState_file_name path errMsg
+           Right slotNoBhh' -> return slotNoBhh'
+        (ledgerCfg, extLedgerState) <- LedgerState.load nodeConfig path
+        return (C.ChainPoint slotNo bhh, ledgerCfg, extLedgerState)
+
       Nothing -> do
         (ledgerCfg, extLedgerState) <- Marconi.getInitialExtLedgerState nodeConfig'
         return (C.ChainPointAtGenesis, ledgerCfg, extLedgerState)
@@ -77,7 +84,8 @@ run config stopSignal = do
     case maybeLast of
       Just (cp', extLedgerState') -> case cp' of
         C.ChainPoint slotNo' bhh -> do
-          storeLedgerState ledgerCfg (slotNo', bhh) extLedgerState'
+          let slotNoBhh = (slotNo', bhh)
+          LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState'
         C.ChainPointAtGenesis -> putStrLn "No reason to store ledger state for genesis"
       Nothing -> putStrLn "Empty stream"
 

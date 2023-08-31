@@ -5,7 +5,6 @@ module Main where
 
 import Control.Concurrent qualified as IO
 import Control.Exception qualified as IO
-import Control.Monad (void, when)
 import Options.Applicative qualified as Opt
 import Data.Text qualified as TS
 import System.Posix.Signals qualified as Signals

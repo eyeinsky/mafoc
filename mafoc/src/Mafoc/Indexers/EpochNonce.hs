@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE OverloadedLabels        #-}
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.EpochNonce where
@@ -11,8 +12,12 @@ import Database.SQLite.Simple qualified as SQL
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
-                   LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase, storeLedgerState)
+                   LocalChainsyncConfig, NodeConfig, sqliteOpen, defaultTableName, initializeLocalChainsync,
+                   loadLatestTrace
+                  )
 import Mafoc.Exceptions qualified as E
+import Mafoc.LedgerState qualified as LedgerState
+import Mafoc.StateFile qualified as StateFile
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochNonce = EpochNonce
@@ -59,15 +64,23 @@ instance Indexer EpochNonce where
       Nothing -> []
 
   initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
-    (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-
-      initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit "epoch_nonce"
-    return ( State extLedgerState epochNo
+    let nodeConfig = #nodeConfig chainsyncConfig
+    networkId <- #getNetworkId nodeConfig
+    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+
+    let (dbPath, tableName) = defaultTableName "epoch_nonce" dbPathAndTableName
+    sqlCon <- sqliteOpen dbPath
+    sqliteInit sqlCon tableName
+
+    ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
+
+    return ( State extLedgerState (Marconi.getEpochNo extLedgerState)
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
-  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = storeLedgerState ledgerCfg slotNoBhh extLedgerState
+  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState
 
 -- * Sqlite
 

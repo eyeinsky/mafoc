@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedLabels        #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE NamedFieldPuns    #-}
@@ -16,9 +17,11 @@ import Cardano.Api.Shelley qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
-                   LocalChainsyncConfig, NodeConfig, initializeLedgerStateAndDatabase,
-                   storeLedgerState)
+                   LocalChainsyncConfig, NodeConfig,
+                   loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
 import Mafoc.Exceptions qualified as E
+import Mafoc.StateFile qualified as StateFile
+import Mafoc.LedgerState qualified as LedgerState
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
@@ -78,15 +81,20 @@ instance Indexer EpochStakepoolSize where
         _                   -> []
 
   initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
-    (extLedgerState, epochNo, chainsyncRuntime', sqlCon, tableName, ledgerConfig) <-
-      initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit "stakepool_delegation"
-    return ( State extLedgerState epochNo
+    let nodeConfig = #nodeConfig chainsyncConfig
+    networkId <- #getNetworkId nodeConfig
+    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+    let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
+    sqlCon <- sqliteOpen dbPath
+    sqliteInit sqlCon tableName
+    ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
+    return ( State extLedgerState (Marconi.getEpochNo extLedgerState)
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
-  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = storeLedgerState ledgerCfg slotNoBhh extLedgerState
+  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState
 
 -- * Sqlite
 

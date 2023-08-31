@@ -39,17 +39,15 @@ import Cardano.Api qualified as C
 import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
 import Cardano.Streaming qualified as CS
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Types qualified as Marconi
-import Ouroboros.Consensus.Config qualified as O
-import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Mafoc.Exceptions qualified as E
 import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderr
-                      , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance)
+                      , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
+                      , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath))
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.StateFile qualified as StateFile
 
@@ -112,6 +110,7 @@ runIndexer cli batchSize stopSignal = do
 
     -- Start streaming blocks over local chainsync
     let (fromChainPoint, upTo) = interval lcr
+    traceInfo trace $ "Starting local chainsync at: " <> pretty fromChainPoint
     blockSource
           (securityParam lcr)
           (localNodeConnection lcr)
@@ -167,8 +166,7 @@ batchedPersist
   -> S.Stream (S.Of (SlotNoBhh, [Event a], State a)) IO ()
   -> IO ()
 batchedPersist indexerRuntime trace batchSize source = do
-  now :: UTCTime <- getCurrentTime
-  batchState <- S.foldM_ step (pure $ NoProgress now) pure source
+  batchState <- S.foldM_ step (NoProgress <$> getCurrentTime) pure source
   case batchState of
     BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
       persistAndCheckpoint bufferedEvents "exiting" indexerState slotNoBhh
@@ -242,14 +240,8 @@ newtype StopSignal = StopSignal (IO.MVar Bool)
 takeWhileStopSignal :: StopSignal -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
 takeWhileStopSignal (StopSignal stopSignalMVar) = S.takeWhileM (\_ -> not <$> IO.readMVar stopSignalMVar)
 
--- * Local chainsync
+-- * Local chainsync: config and runtime
 
-newtype NodeFolder = NodeFolder FilePath
-  deriving newtype (Show, IsString)
-newtype NodeConfig = NodeConfig FilePath
-  deriving newtype (Show, IsString)
-newtype SocketPath = SocketPath FilePath
-  deriving newtype (Show, IsString)
 newtype NodeInfo a = NodeInfo (Either NodeFolder (SocketPath, a))
   deriving Show
 
@@ -266,11 +258,6 @@ type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig
 
 -- ** Get and derive stuff from LocalChainsyncConfig
 
-instance IsLabel "nodeConfig" (NodeFolder -> NodeConfig) where
-  fromLabel (NodeFolder nodeFolder) = NodeConfig (mkPath nodeFolder)
-    where
-      mkPath :: FilePath -> FilePath
-      mkPath nodeFolder' = nodeFolder' </> "config" </> "config.json"
 instance IsLabel "nodeConfig" (LocalChainsyncConfig NodeConfig -> NodeConfig) where
   fromLabel = #nodeConfig . nodeInfo
 instance IsLabel "nodeConfig" (NodeInfo NodeConfig -> NodeConfig) where
@@ -284,8 +271,6 @@ instance IsLabel "socketPath" (NodeInfo a -> SocketPath) where
       mkPath :: FilePath -> FilePath
       mkPath nodeFolder' = nodeFolder' </> "socket" </> "node.socket"
 
-instance IsLabel "getNetworkId" (NodeConfig -> IO C.NetworkId) where
-  fromLabel (NodeConfig nodeConfig') = getNetworkId nodeConfig'
 instance IsLabel "getNetworkId" (NodeInfo NodeConfig -> IO C.NetworkId) where
   fromLabel (NodeInfo nodeInfo') = case nodeInfo' of
       Left nodeFolder                 -> #getNetworkId (#nodeConfig nodeFolder :: NodeConfig)
@@ -315,22 +300,27 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
   }
 
+modifyStartingPoint :: LocalChainsyncRuntime -> (C.ChainPoint -> C.ChainPoint) -> LocalChainsyncRuntime
+modifyStartingPoint lcr f = lcr { interval = (f oldCp, upTo) }
+  where (oldCp, upTo) = interval lcr
+
 initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId  -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
-initializeLocalChainsync config networkId trace = do
-  let SocketPath socketPath' = #socketPath config
+initializeLocalChainsync localChainsyncConfig networkId trace = do
+  let SocketPath socketPath' = #socketPath localChainsyncConfig
   let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
 
-  let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo config
-  fromCp <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
+  -- Resolve possible SlotNo in interval start:
+  let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo localChainsyncConfig
+  cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
 
   return $ LocalChainsyncRuntime
     localNodeCon
-    (fromCp, upTo)
+    (cliChainPoint, upTo)
     securityParam'
-    (logging_ config)
-    (pipelineSize_ config)
-    (concurrencyPrimitive_ config)
+    (logging_ localChainsyncConfig)
+    (pipelineSize_ localChainsyncConfig)
+    (concurrencyPrimitive_ localChainsyncConfig)
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
 -- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
@@ -399,11 +389,6 @@ data Interval = Interval
   , upTo :: UpTo
   } deriving (Show)
 
-chainPointLaterThanFrom :: C.ChainPoint -> Interval -> Bool
-chainPointLaterThanFrom cp (Interval (_, eitherSlotNoOrChainPoint) _) = case eitherSlotNoOrChainPoint of
-  Left slotNo -> slotNo <= #slotNo cp
-  Right from' -> from' <= cp
-
 takeUpTo
   :: Trace.Trace IO TS.Text
   -> UpTo
@@ -455,79 +440,23 @@ renderPretty = renderStrict . layoutPretty defaultLayoutOptions . pretty
 
 -- * Ledger state checkpoint
 
--- | Load ledger state from file, while taking the chain point it's at from the file name.
-loadLedgerStateWithChainpoint :: NodeConfig -> Trace.Trace IO TS.Text -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_, C.ChainPoint)
-loadLedgerStateWithChainpoint nodeConfig@(NodeConfig nodeConfig') trace = do
-  ((cfg, ls), cp) <- StateFile.loadLatest "ledgerState" (loadLedgerState nodeConfig) (Marconi.getInitialExtLedgerState nodeConfig')
+loadLatestTrace :: String -> IO a ->(FilePath -> IO a) -> Trace.Trace IO TS.Text -> IO (a, C.ChainPoint)
+loadLatestTrace prefix init_ load trace = do
+  (a, cp) <- StateFile.loadLatest prefix load init_
   case cp of
-    C.ChainPointAtGenesis -> traceInfo trace "No ledger state found, initiated from genesis"
-    C.ChainPoint{} -> traceInfo trace $ "Found ledger state from " <> pretty cp
-  return (cfg, ls, cp)
-
-loadLedgerState :: NodeConfig -> FilePath -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
-loadLedgerState (NodeConfig nodeConfig) ledgerStatePath = do
-  cfg <- Marconi.getLedgerConfig nodeConfig
-  let O.ExtLedgerCfg topLevelConfig = cfg
-  extLedgerState <- Marconi.loadExtLedgerState (O.configCodec topLevelConfig) ledgerStatePath >>= \case
-    Right (_, extLedgerState)   -> return extLedgerState
-    Left cborDeserialiseFailure -> E.throwIO $ E.Can't_deserialise_LedgerState_from_CBOR ledgerStatePath cborDeserialiseFailure
-  return (cfg, extLedgerState)
-
-storeLedgerState :: Marconi.ExtLedgerCfg_ -> SlotNoBhh -> Marconi.ExtLedgerState_ -> IO ()
-storeLedgerState (O.ExtLedgerCfg topLevelConfig) slotNoBhh extLedgerState =
-  Marconi.writeExtLedgerState (StateFile.toName "ledgerState" slotNoBhh) (O.configCodec topLevelConfig) extLedgerState
-
--- | Initialization for ledger state indexers
-initializeLedgerStateAndDatabase
-  :: LocalChainsyncConfig NodeConfig
-  -> Trace.Trace IO TS.Text
-  -> DbPathAndTableName                  -- ^ Path to sqlite db and table name from cli
-  -> (SQL.Connection -> String -> IO ()) -- ^ Function which takes a connection and a table name and creates the table.
-  -> String
-  -> IO ( Marconi.ExtLedgerState_, Maybe C.EpochNo
-        , LocalChainsyncRuntime
-        , SQL.Connection, String, Marconi.ExtLedgerCfg_)
-initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqliteInit defaultTableName' = do
-  let nodeConfig = #nodeConfig chainsyncConfig
-  let (SocketPath socketPath') = #socketPath chainsyncConfig
-
-  networkId <- #getNetworkId nodeConfig
-  let localNodeConnectInfo = CS.mkLocalNodeConnectInfo networkId socketPath'
-  securityParam' <- querySecurityParam localNodeConnectInfo
-
-  let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo chainsyncConfig -- todo
-  cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
-
-  let (dbPath, tableName) = defaultTableName defaultTableName' dbPathAndTableName
-  sqlCon <- sqliteOpen dbPath
-  sqliteInit sqlCon tableName
-
-  (ledgerConfig, extLedgerState, stateChainPoint) <- loadLedgerStateWithChainpoint nodeConfig trace
-
-  -- todo cliChainPoint stateChainPoint
-
-  let chainsyncRuntime' = LocalChainsyncRuntime
-        localNodeConnectInfo
-        (stateChainPoint, upTo)
-        securityParam'
-        (logging_ chainsyncConfig)
-        (pipelineSize_ chainsyncConfig)
-        (concurrencyPrimitive_ chainsyncConfig)
-
-  return ( extLedgerState, Marconi.getEpochNo extLedgerState
-         , chainsyncRuntime'
-         , sqlCon, tableName, ledgerConfig)
-
--- | Load ledger state from disk
-initializeLedgerState :: NodeConfig -> FilePath -> IO (SlotNoBhh, Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
-initializeLedgerState nodeConfig ledgerStatePath = do
-  slotNoBhh <- StateFile.bhhFromFileName ledgerStatePath & \case
-     Left errMsg -> E.throwIO $ E.Can't_parse_chain_point_from_LedgerState_file_name ledgerStatePath errMsg
-     Right slotNoBhh' -> return slotNoBhh'
-  (ledgerCfg, extLedgerState) <- loadLedgerState nodeConfig ledgerStatePath
-  return (slotNoBhh, ledgerCfg, extLedgerState)
+    C.ChainPointAtGenesis -> traceInfo trace $ "Load state: " <> pretty prefix <> " not found, starting with initial state from genesis"
+    C.ChainPoint{} -> traceInfo trace $ "Load state: " <> pretty prefix <> " found at "  <> pretty cp
+  return (a, cp)
 
 -- * Sqlite
+
+-- ** Database path and table name defaulting
+
+data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
+  deriving (Show)
+
+defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
+defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
 
 -- ** Checkpoint
 
@@ -555,44 +484,15 @@ getCheckpointSqlite sqlCon name = do
     []              -> return Nothing
     _               -> E.throwIO $ E.The_impossible_happened "Indexer can't have more than one checkpoint in sqlite"
 
--- ** Database path and table(s)
-
-data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
-  deriving (Show)
-
-defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
-defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
-
 -- ** Initialise
 
--- | Initialize sqlite: create connection, run init (e.g create
--- destination table), create checkpoints table if doesn't exist,
--- update interval in runtime config by whether there is anywhere to
--- resume from.
-initializeSqlite
-  :: FilePath -> String -> (SQL.Connection -> String -> IO ()) -> LocalChainsyncRuntime -> Trace.Trace IO TS.Text -> IO (SQL.Connection, LocalChainsyncRuntime)
-initializeSqlite dbPath tableName sqliteInit chainsyncRuntime trace = do
+-- | If ChainPointAtGenesis is returned, then there was no chain point in the database.
+initializeSqlite :: FilePath -> String -> IO (SQL.Connection, C.ChainPoint)
+initializeSqlite dbPath tableName = do
   sqlCon <- sqliteOpen dbPath
-  sqliteInit sqlCon tableName
   sqliteInitCheckpoints sqlCon
-
-  -- Find ChainPoint from checkpoints table and update chainsync
-  -- runtime configuration if that is later than what was passed in
-  -- from cli configuration.
-  let (fromCp, upTo) = interval chainsyncRuntime
-  maybeCheckpointedChainPoint <- getCheckpointSqlite sqlCon tableName
-  newFrom <- case maybeCheckpointedChainPoint of
-    Just checkpointedChainPoint -> if fromCp <= checkpointedChainPoint --  chainPointLaterThanFrom cp cliInterval
-      then do
-      traceInfo trace $ "Found checkpoint that is later than CLI argument from checkpoints table: " <> pretty checkpointedChainPoint
-      return checkpointedChainPoint
-      else do
-      traceInfo trace $ "Found checkpoint that is not later than CLI argument, checkpoint: " <> pretty checkpointedChainPoint <> ", cli: " <> pretty fromCp
-      return fromCp
-    _ -> do
-      traceInfo trace $ "No checkpoint found, going with CLI starting point: " <> pretty fromCp
-      return fromCp
-  return (sqlCon, chainsyncRuntime { interval = (newFrom, upTo) })
+  checkpointedChainPoint <- fromMaybe C.ChainPointAtGenesis <$> getCheckpointSqlite sqlCon tableName
+  return (sqlCon, checkpointedChainPoint)
 
 sqliteOpen :: FilePath -> IO SQL.Connection
 sqliteOpen dbPath = do

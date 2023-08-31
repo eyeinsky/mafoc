@@ -24,12 +24,11 @@ import Mafoc.Core
   , initialize
   , initializeLocalChainsync
   , interval
-  , loadLedgerStateWithChainpoint
   , persistMany
   , setCheckpointSqlite
   , sqliteOpen
-  , storeLedgerState
   , sqliteInitCheckpoints
+  , loadLatestTrace
   )
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
@@ -37,6 +36,7 @@ import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.StateFile qualified as StateFile
+import Mafoc.LedgerState qualified as LedgerState
 
 import Marconi.ChainIndex.Indexers.EpochState
   ( ExtLedgerCfg_
@@ -118,7 +118,7 @@ instance Indexer Mamba where
   initialize Mamba{chainsyncConfig, dbPathAndTableName, utxoStateFilePrefix_} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig
 
-    (ledgerCfg, extLedgerState, ledgerStateCp) <- loadLedgerStateWithChainpoint nodeConfig trace
+    ((ledgerCfg, extLedgerState), ledgerStateCp) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
     (utxoState, utxoCp) <- StateFile.loadLatest utxoStateFilePrefix_ Utxo.parseState (return mempty)
 
     let (dbPath, tablePrefix) = defaultTableName "mamba" dbPathAndTableName
@@ -162,7 +162,7 @@ instance Indexer Mamba where
     persistMany (EpochStakepoolSize.Runtime sqlConnection (tblEss tablePrefix) ledgerCfg) essEvents
 
   checkpoint Runtime{sqlConnection, ledgerCfg, utxoStateFilePrefix} State{extLedgerState, utxoState} slotNoBhh = do
-    storeLedgerState ledgerCfg slotNoBhh extLedgerState -- epochstakepoolsize, epochnonce
+    LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState -- epochstakepoolsize, epochnonce
     Utxo.storeState utxoState $ StateFile.toName utxoStateFilePrefix slotNoBhh
     setCheckpointSqlite sqlConnection "mamba" slotNoBhh
 

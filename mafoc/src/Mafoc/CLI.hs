@@ -5,7 +5,6 @@ module Mafoc.CLI where
 
 import Data.List qualified as L
 import Data.Text qualified as TS
-import Data.Text.Encoding qualified as TS
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read

@@ -3,9 +3,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE DataKinds         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
 
+import System.FilePath ((</>))
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Control.Exception (throwIO, Exception, throw)
 import Streaming.Prelude qualified as S
@@ -275,3 +277,23 @@ defaultConfigStderr = do
                          ]
     CM.setDefaultScribes c ["StderrSK::text"]
     return c
+
+-- * Newtypes for file paths
+--
+-- | Not sure if anyone actually wants these upstreamed
+
+newtype NodeFolder = NodeFolder FilePath
+  deriving newtype (Show, IsString)
+newtype NodeConfig = NodeConfig FilePath
+  deriving newtype (Show, IsString)
+newtype SocketPath = SocketPath FilePath
+  deriving newtype (Show, IsString)
+
+instance IsLabel "nodeConfig" (NodeFolder -> NodeConfig) where
+  fromLabel (NodeFolder nodeFolder) = NodeConfig (mkPath nodeFolder)
+    where
+      mkPath :: FilePath -> FilePath
+      mkPath nodeFolder' = nodeFolder' </> "config" </> "config.json"
+
+instance IsLabel "getNetworkId" (NodeConfig -> IO C.NetworkId) where
+  fromLabel (NodeConfig nodeConfig') = getNetworkId nodeConfig'
