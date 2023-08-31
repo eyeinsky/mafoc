@@ -16,7 +16,7 @@ import Cardano.Streaming.Callbacks qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, DbPathAndTableName, Indexer (description, parseCli), StopSignal (StopSignal), runIndexer)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), StopSignal (StopSignal), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -41,7 +41,7 @@ main = do
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-      IndexerCommand indexerCommand' batchSize dbPathAndTableName -> let
+      IndexerCommand indexerCommand' batchSize -> let
         runIndexer' = case indexerCommand' of
           BlockBasics configFromCli        -> runIndexer configFromCli
           MintBurn configFromCli           -> runIndexer configFromCli
@@ -54,7 +54,7 @@ main = do
           Utxo configFromCli               -> runIndexer configFromCli
           AddressBalance configFromCli     -> runIndexer configFromCli
           Mamba configFromCli              -> runIndexer configFromCli
-        in runIndexer' batchSize stopSignal dbPathAndTableName
+        in runIndexer' batchSize stopSignal
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
@@ -92,7 +92,7 @@ printRollbackException io = io `IO.catches`
 
 data Command
   = Speed Speed.BlockSource
-  | IndexerCommand IndexerCommand BatchSize (Maybe DbPathAndTableName)
+  | IndexerCommand IndexerCommand BatchSize
   | FoldLedgerState FoldLedgerState.FoldLedgerState
   | SlotNoChainPoint FilePath C.SlotNo
   deriving Show
@@ -127,7 +127,7 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
       <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
       <> Opt.command "slot-chainpoint" (parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
 
-    indexerCommand' name f = indexerCommand name (\(i, bs, db) -> IndexerCommand (f i) bs db)
+    indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
     indexers :: Opt.Mod Opt.CommandFields Command
     indexers =
          indexerCommand' "addressbalance" AddressBalance
@@ -148,21 +148,18 @@ parserToParserInfo progDescr header cli = Opt.info (Opt.helper <*> cli) $ Opt.fu
   <> Opt.progDesc progDescr
   <> Opt.header header
 
-indexerCommand :: forall a b . Indexer a => String -> ((a, BatchSize, Maybe DbPathAndTableName) -> b) -> Opt.Mod Opt.CommandFields b
+indexerCommand :: forall a b . Indexer a => String -> ((a, BatchSize) -> b) -> Opt.Mod Opt.CommandFields b
 indexerCommand name f = Opt.command name (f <$> indexerParserInfo name)
 
-indexerParserInfo :: forall a . Indexer a => String -> Opt.ParserInfo (a, BatchSize, Maybe DbPathAndTableName)
+indexerParserInfo :: forall a . Indexer a => String -> Opt.ParserInfo (a, BatchSize)
 indexerParserInfo name = Opt.info (Opt.helper <*> parseCliWithBatchSize) $ Opt.fullDesc
   <> Opt.progDesc name
   <> Opt.header (name <> " - " <> TS.unpack (description @a))
   where
-    parseCliWithBatchSize :: Opt.Parser (a, BatchSize, Maybe DbPathAndTableName)
-    parseCliWithBatchSize = (,,)
+    parseCliWithBatchSize :: Opt.Parser (a, BatchSize)
+    parseCliWithBatchSize = (,)
       <$> parseCli @a
       <*> Opt.commonBatchSize
-      <*> Opt.option
-            (Opt.eitherReader $ fmap Just . Opt.parseDbPathAndTableName)
-            (Opt.value Nothing <> Opt.longOpt "header-db" "Optional path to sqlite database for block headers.")
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

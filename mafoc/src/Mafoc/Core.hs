@@ -100,21 +100,18 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> Maybe DbPathAndTableName -> IO ()
-runIndexer cli batchSize stopSignal maybeDbPathAndTableName = do
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> IO ()
+runIndexer cli batchSize stopSignal = do
   c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace
        $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
                      <> "\n  Batch size: " <> pretty (show batchSize)
+
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
 
-    -- Try resolve slotNo if no block header hash defined:
-    let (fromCp, upTo') = interval lcr
-    -- fromCp <- intervalStartToChainSyncStart trace maybeDbPathAndTableName include from'
-    let takeUpTo' = takeUpTo trace upTo' stopSignal
-
     -- Start streaming blocks over local chainsync
+    let (fromChainPoint, upTo) = interval lcr
     blockSource
           (securityParam lcr)
           (localNodeConnection lcr)
@@ -122,8 +119,8 @@ runIndexer cli batchSize stopSignal maybeDbPathAndTableName = do
           (concurrencyPrimitive lcr)
           (logging lcr)
           trace
-          fromCp
-          takeUpTo'
+          fromChainPoint
+          (takeUpTo trace upTo stopSignal)
 
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
@@ -259,7 +256,7 @@ newtype NodeInfo a = NodeInfo (Either NodeFolder (SocketPath, a))
 -- | Configuration for local chainsync streaming setup.
 data LocalChainsyncConfig a = LocalChainsyncConfig
   { nodeInfo              :: NodeInfo a
-  , interval_             :: Interval
+  , intervalInfo          :: (Interval, Maybe DbPathAndTableName)
   , logging_              :: Bool
   , pipelineSize_         :: Word32
   , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
@@ -324,8 +321,8 @@ initializeLocalChainsync config networkId trace = do
   let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
 
-  let Interval (include, fromEither) upTo = interval_ config
-  fromCp <- intervalStartToChainSyncStart trace Nothing include fromEither
+  let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo config
+  fromCp <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
 
   return $ LocalChainsyncRuntime
     localNodeCon
@@ -498,17 +495,20 @@ initializeLedgerStateAndDatabase chainsyncConfig trace dbPathAndTableName sqlite
   let localNodeConnectInfo = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeConnectInfo
 
+  let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo chainsyncConfig -- todo
+  cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
+
   let (dbPath, tableName) = defaultTableName defaultTableName' dbPathAndTableName
   sqlCon <- sqliteOpen dbPath
   sqliteInit sqlCon tableName
 
-  (ledgerConfig, extLedgerState, startFrom) <- loadLedgerStateWithChainpoint nodeConfig trace
+  (ledgerConfig, extLedgerState, stateChainPoint) <- loadLedgerStateWithChainpoint nodeConfig trace
 
-  let Interval (_include, fromEither) upTo = interval_ chainsyncConfig -- todo
+  -- todo cliChainPoint stateChainPoint
 
   let chainsyncRuntime' = LocalChainsyncRuntime
         localNodeConnectInfo
-        (startFrom, upTo)
+        (stateChainPoint, upTo)
         securityParam'
         (logging_ chainsyncConfig)
         (pipelineSize_ chainsyncConfig)
@@ -630,10 +630,9 @@ previousChainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpo
 intervalStartToChainSyncStart
   :: Trace.Trace IO TS.Text
   -> Maybe DbPathAndTableName
-  -> Bool
-  -> Either C.SlotNo C.ChainPoint
+  -> (Bool, Either C.SlotNo C.ChainPoint)
   -> IO C.ChainPoint
-intervalStartToChainSyncStart trace maybeDbPathAndTableName include eitherSlotOrCp
+intervalStartToChainSyncStart trace maybeDbPathAndTableName (include, eitherSlotOrCp)
   | Just dbPathAndTableName <- maybeDbPathAndTableName, Left slotNo <- eitherSlotOrCp =
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
     in do

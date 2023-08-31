@@ -25,7 +25,7 @@ import Mafoc.CLI qualified as O
 import Mafoc.Core
   ( CurrentEra, DbPathAndTableName
   , Indexer(Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
-  , LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, sqliteOpen, traceInfo
+  , LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
   )
 import Mafoc.Upstream (toAddressAny)
 import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra)
@@ -137,10 +137,13 @@ instance Indexer Utxo where
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
     (state, cp) <- StateFile.loadLatest stateFilePrefix_ parseState (return mempty)
+    traceInfo trace $ "Found checkpoint: " <> pretty cp
+    let -- todo handle this better
+      chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
     case cp of
       C.ChainPoint{} -> traceInfo trace $ "Found checkpoint: " <> pretty cp
       C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
-    return (state, chainsyncRuntime, Runtime sqlCon tableName stateFilePrefix_)
+    return (state, chainsyncRuntime', Runtime sqlCon tableName stateFilePrefix_)
 
   persistMany Runtime{sqlConnection, tableName} events = SQL.executeMany sqlConnection query events
     where

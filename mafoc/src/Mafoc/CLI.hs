@@ -109,6 +109,14 @@ commonInterval = O.option (O.eitherReader parseIntervalEither)
   $ opt 'i' "interval" "Chain interval to index, defaults to from genesis to infinity"
   <> O.value (Interval (False, Right C.ChainPointAtGenesis) Infinity)
 
+commonIntervalInfo :: O.Parser (Interval, Maybe DbPathAndTableName)
+commonIntervalInfo = (,) <$> commonInterval <*> commonHeaderDb
+
+commonHeaderDb :: O.Parser (Maybe DbPathAndTableName)
+commonHeaderDb = O.option
+  (O.eitherReader $ fmap Just . parseDbPathAndTableName)
+  (O.value Nothing <> longOpt "header-db" "Optional path to sqlite database for block headers.")
+
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
@@ -125,7 +133,7 @@ mkCommonLocalChainsyncConfig
   -> O.Parser (LocalChainsyncConfig a)
 mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
   <$> commonNodeConnection_
-  <*> commonInterval
+  <*> commonIntervalInfo
   <*> commonLogging
   <*> commonPipelineSize
   <*> commonConcurrencyPrimitive

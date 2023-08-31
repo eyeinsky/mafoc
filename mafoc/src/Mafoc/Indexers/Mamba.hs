@@ -7,6 +7,8 @@ module Mafoc.Indexers.Mamba where
 
 import Data.Map qualified as M
 import Database.SQLite.Simple qualified as SQL
+import Data.Set qualified as Set
+import Data.Text qualified as TS
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -122,29 +124,32 @@ instance Indexer Mamba where
     let (dbPath, tablePrefix) = defaultTableName "mamba" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInitCheckpoints sqlCon
-    maybeCp <- getCheckpointSqlite sqlCon "mamba"
-    let cp = fromMaybe C.ChainPointAtGenesis maybeCp
+    maybeCheckpointCp <- getCheckpointSqlite sqlCon "mamba"
+    let checkpointCp = fromMaybe C.ChainPointAtGenesis maybeCheckpointCp
 
-    when (any (cp /=) [utxoCp, ledgerStateCp]) $
-      E.throwIO $
-        E.ChainPoints_don't_match [("checkpoints table", maybeCp), ("utxo state", Just utxoCp), ("ledger state", Just ledgerStateCp)]
+    case Set.toList $ Set.fromList [checkpointCp, utxoCp, ledgerStateCp] of
+      [] -> E.throwIO $ E.The_impossible_happened "The set can't be empty"
+      _ : _ : _ -> E.throwIO $
+        E.ChainPoints_don't_match [("checkpoints table", maybeCheckpointCp), ("utxo state", Just utxoCp), ("ledger state", Just ledgerStateCp)]
+      [stateCp] -> do
+        Utxo.sqliteInit sqlCon $ tblUtxo tablePrefix
+        Marconi.MintBurn.sqliteInit sqlCon $ tblMintBurn tablePrefix
+        EpochStakepoolSize.sqliteInit sqlCon $ tblEss tablePrefix
+        EpochNonce.sqliteInit sqlCon $ tblEpochNonce tablePrefix
 
-    when (cp == C.ChainPointAtGenesis) $ do
-      Utxo.sqliteInit sqlCon $ tblUtxo tablePrefix
-      Marconi.MintBurn.sqliteInit sqlCon $ tblMintBurn tablePrefix
-      EpochStakepoolSize.sqliteInit sqlCon $ tblEss tablePrefix
-      EpochNonce.sqliteInit sqlCon $ tblEpochNonce tablePrefix
+        localChainsyncRuntime <- do
+          networkId <- #getNetworkId nodeConfig
+          localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+          let cliCp = fst $ interval localChainsyncRuntime'
+          if cliCp <= stateCp
+            then return $ localChainsyncRuntime' {interval = (stateCp, snd $ interval localChainsyncRuntime') }
+            else E.throwIO $ E.TextException $
+              "Startingpoint specified on the command line is later than the starting point found in indexer state: "
+              <> TS.pack (show cliCp) <> " vs " <> TS.pack (show stateCp)
 
-    localChainsyncRuntime <- do
-      networkId <- #getNetworkId nodeConfig
-      localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
-      let (_cliCp, cliUpTo) = interval localChainsyncRuntime'
-          newInterval = (cp, cliUpTo)
-      return $ localChainsyncRuntime'{interval = newInterval}
-
-    let state = State extLedgerState (getEpochNo extLedgerState) utxoState
-        runtime = Runtime sqlCon tablePrefix ledgerCfg utxoStateFilePrefix_
-    return (state, localChainsyncRuntime, runtime)
+        let state = State extLedgerState (getEpochNo extLedgerState) utxoState
+            runtime = Runtime sqlCon tablePrefix ledgerCfg utxoStateFilePrefix_
+        return (state, localChainsyncRuntime, runtime)
 
   persistMany Runtime{sqlConnection, tablePrefix, ledgerCfg, utxoStateFilePrefix} events = do
     persistMany (MintBurn.Runtime sqlConnection $ tblMintBurn tablePrefix) (mintBurnEvents =<< events)
