@@ -57,6 +57,7 @@ library
     Mafoc.Core
     Mafoc.Exceptions
     Mafoc.LedgerState
+    Mafoc.Signal
     Mafoc.StateFile
     Mafoc.Indexers.AddressBalance
     Mafoc.Indexers.AddressDatum
@@ -119,6 +120,7 @@ library
     , text
     , time
     , transformers
+    , unix
     , vector
 
 executable mafoc
@@ -148,7 +150,6 @@ executable mafoc
     , base                  >=4.9 && <5
     , optparse-applicative
     , text
-    , unix
 
 test-suite mafoc-test
   import:         lang

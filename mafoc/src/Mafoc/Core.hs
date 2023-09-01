@@ -49,6 +49,7 @@ import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh,
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
                       , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath))
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
+import Mafoc.Signal qualified as Signal
 import Mafoc.StateFile qualified as StateFile
 
 -- * Indexer class
@@ -98,8 +99,8 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> StopSignal -> IO ()
-runIndexer cli batchSize stopSignal = do
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> IO ()
+runIndexer cli batchSize stopSignal checkpointSignal = do
   c <- defaultConfigStderr
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace
@@ -131,7 +132,7 @@ runIndexer cli batchSize stopSignal = do
       -- Persist events in batches and write a checkpoint. Do this
       -- either when `batchSize` amount of events is collected or when
       -- a time limit is reached.
-      & batchedPersist indexerRuntime trace batchSize
+      & batchedPersist indexerRuntime trace batchSize checkpointSignal
 
 -- * Buffered output
 
@@ -163,9 +164,10 @@ batchedPersist
   => Runtime a
   -> Trace.Trace IO TS.Text
   -> BatchSize
+  -> Signal.Checkpoint
   -> S.Stream (S.Of (SlotNoBhh, [Event a], State a)) IO ()
   -> IO ()
-batchedPersist indexerRuntime trace batchSize source = do
+batchedPersist indexerRuntime trace batchSize checkpointSignal source = do
   batchState <- S.foldM_ step (NoProgress <$> getCurrentTime) pure source
   case batchState of
     BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
@@ -191,6 +193,7 @@ batchedPersist indexerRuntime trace batchSize source = do
       let lastCheckpointTime' = lastCheckpointTime batchState
 
       now :: UTCTime <- getCurrentTime
+      checkpointRequested :: Bool <- IO.readMVar $ coerce $ checkpointSignal
       let persistAndCheckpoint' :: [[Event a]] -> Doc () -> IO (BatchState a)
           persistAndCheckpoint' bufferedEvents' msg = do
             persistAndCheckpoint bufferedEvents' msg indexerState slotNoBhh
@@ -199,46 +202,39 @@ batchedPersist indexerRuntime trace batchSize source = do
           isCheckpointTime :: Bool
           isCheckpointTime = diffUTCTime now lastCheckpointTime' > 10
 
-      if not (null newEvents)
-        -- There are new events
-        then let
-          batchFill = getBatchFill batchState
           bufferedEvents = getBufferedEvents batchState
-          bufferFill' = batchFill + toEnum (length newEvents)
-          bufferedEvents' = newEvents : bufferedEvents
-          in if | isCheckpointTime         ->
-                  persistAndCheckpoint' bufferedEvents' "it's checkpoint time"
-                | bufferFill' >= batchSize ->
-                  persistAndCheckpoint' bufferedEvents' "buffer is full"
-                | otherwise                -> let
-                    batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedEvents'
-                    in return batchState'
+          bufferedAndNewEvents = newEvents : bufferedEvents
 
-        -- There are no new events
-        else if
-          -- .. but it's checkpoint time so we persist events and checkpoint
-          | isCheckpointTime
-          , bufferedEvents@(_ : _) <- getBufferedEvents batchState
-            -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
-          -- Nothing to do, continue with original state
-          | isCheckpointTime
-            -> do
-              checkpoint indexerRuntime indexerState slotNoBhh
-              return $ BatchEmpty now slotNoBhh indexerState
-          -- Nothing to do, continue with original state
-          | otherwise
-            -> return batchState
+      if | checkpointRequested ->
+             persistAndCheckpoint' bufferedAndNewEvents "checkpoint was requested" <* IO.swapMVar (coerce checkpointSignal) False
+         -- There are new events
+         | not (null newEvents) -> let
+             batchFill = getBatchFill batchState
+             bufferFill' = batchFill + toEnum (length newEvents)
+             in if | isCheckpointTime         ->
+                     persistAndCheckpoint' bufferedAndNewEvents "it's checkpoint time"
+                   | bufferFill' >= batchSize ->
+                     persistAndCheckpoint' bufferedAndNewEvents "buffer is full"
+                   | otherwise                -> let
+                       batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedAndNewEvents
+                       in return batchState'
+         -- There are no new events
+         | otherwise -> if
+             -- .. but it's checkpoint time so we persist events and checkpoint
+             | isCheckpointTime
+             , (_ : _) <- bufferedEvents
+               -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
+             -- Nothing to do, continue with original state
+             | isCheckpointTime
+               -> do
+                 checkpoint indexerRuntime indexerState slotNoBhh
+                 return $ BatchEmpty now slotNoBhh indexerState
+             -- Nothing to do, continue with original state
+             | otherwise
+               -> return batchState
 
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
-
--- * Stop signal
-
-newtype StopSignal = StopSignal (IO.MVar Bool)
-
--- | Stop streaming when the signal MVar is filled with a True.
-takeWhileStopSignal :: StopSignal -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
-takeWhileStopSignal (StopSignal stopSignalMVar) = S.takeWhileM (\_ -> not <$> IO.readMVar stopSignalMVar)
 
 -- * Local chainsync: config and runtime
 
@@ -392,7 +388,7 @@ data Interval = Interval
 takeUpTo
   :: Trace.Trace IO TS.Text
   -> UpTo
-  -> StopSignal
+  -> Signal.Stop
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode mode))) IO ()
 takeUpTo trace upTo' stopSignal source = case upTo' of
@@ -422,7 +418,7 @@ takeUpTo trace upTo' stopSignal source = case upTo' of
 
     -- | Take while either a stop signal is received or when the predicate becomes false.
     takeWhile' :: (a -> Bool) -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
-    takeWhile' p = S.takeWhile p . takeWhileStopSignal stopSignal
+    takeWhile' p = S.takeWhile p . Signal.takeWhileStopSignal stopSignal
 
 -- * Trace
 

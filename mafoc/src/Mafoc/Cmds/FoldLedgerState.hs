@@ -16,10 +16,11 @@ import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (ConcurrencyPrimitive, NodeConfig (NodeConfig), NodeInfo,
-                   SocketPath (SocketPath), StopSignal, UpTo (SlotNo), blockChainPoint, blockSource,
+                   SocketPath (SocketPath), UpTo (SlotNo), blockChainPoint, blockSource,
                    takeUpTo)
 import Mafoc.Upstream (querySecurityParam)
 import Mafoc.LedgerState qualified as LedgerState
+import Mafoc.Signal qualified as Signal
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.Exceptions qualified as E
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -47,7 +48,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonPipelineSize
       <*> Opt.commonConcurrencyPrimitive
 
-run :: FoldLedgerState -> StopSignal -> IO ()
+run :: FoldLedgerState -> Signal.Stop -> IO ()
 run config stopSignal = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do

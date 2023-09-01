@@ -3,11 +3,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Concurrent qualified as IO
 import Control.Exception qualified as IO
 import Options.Applicative qualified as Opt
 import Data.Text qualified as TS
-import System.Posix.Signals qualified as Signals
 
 import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
@@ -15,7 +13,7 @@ import Cardano.Streaming.Callbacks qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), StopSignal (StopSignal), runIndexer)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -28,11 +26,13 @@ import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
 import Mafoc.Indexers.ScriptTx qualified as ScriptTx
 import Mafoc.Indexers.Utxo qualified as Utxo
+import Mafoc.Signal qualified as Signal
 import Mafoc.Speed qualified as Speed
 
 main :: IO ()
 main = do
-  stopSignal <- setupCtrlCHandler 3
+  stopSignal <- Signal.setupCtrlCHandler 3
+  checkpointSignal <- Signal.setupCheckpointSignal
   printRollbackException $ do
     Opt.customExecParser (Opt.prefs Opt.showHelpOnEmpty) cmdParserInfo >>= \case
       Speed what -> case what of
@@ -53,29 +53,10 @@ main = do
           Utxo configFromCli               -> runIndexer configFromCli
           AddressBalance configFromCli     -> runIndexer configFromCli
           Mamba configFromCli              -> runIndexer configFromCli
-        in runIndexer' batchSize stopSignal
+        in runIndexer' batchSize stopSignal checkpointSignal
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
-
-
--- | Returns an MVar which when filled, means that the program should close.
-setupCtrlCHandler :: Int -> IO StopSignal
-setupCtrlCHandler max' = do
-  countMVar <- IO.newMVar 0
-  signalMVar <- IO.newMVar False
-  let ctrlcHandler = Signals.Catch $ do
-        count <- IO.modifyMVar countMVar incr
-        void $ IO.swapMVar signalMVar (count >= 0)
-        if count == 1
-          then putStrLn "Shutting down gracefully.."
-          else putStrLn "Press Ctrl-C few more times to terminate without a final checkpoint."
-        when (count >= max') $ Signals.raiseSignal Signals.sigTERM
-  _ <- Signals.installHandler Signals.sigINT ctrlcHandler Nothing
-  return $ StopSignal signalMVar
-  where
-    incr :: Int -> IO (Int, Int)
-    incr count = let count' = count + 1 in return (count', count')
 
 printRollbackException :: IO () -> IO ()
 printRollbackException io = io `IO.catches`
