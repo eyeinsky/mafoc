@@ -9,6 +9,7 @@ import Data.Text qualified as TS
 
 import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
+import Cardano.BM.Data.Severity qualified as CM
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
@@ -40,7 +41,7 @@ main = do
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-      IndexerCommand indexerCommand' batchSize -> let
+      IndexerCommand indexerCommand' batchSize severity -> let
         runIndexer' = case indexerCommand' of
           BlockBasics configFromCli        -> runIndexer configFromCli
           MintBurn configFromCli           -> runIndexer configFromCli
@@ -53,7 +54,7 @@ main = do
           Utxo configFromCli               -> runIndexer configFromCli
           AddressBalance configFromCli     -> runIndexer configFromCli
           Mamba configFromCli              -> runIndexer configFromCli
-        in runIndexer' batchSize stopSignal checkpointSignal
+        in runIndexer' batchSize stopSignal checkpointSignal severity
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
@@ -72,7 +73,7 @@ printRollbackException io = io `IO.catches`
 
 data Command
   = Speed Speed.BlockSource
-  | IndexerCommand IndexerCommand BatchSize
+  | IndexerCommand IndexerCommand BatchSize CM.Severity
   | FoldLedgerState FoldLedgerState.FoldLedgerState
   | SlotNoChainPoint FilePath C.SlotNo
   deriving Show
@@ -126,6 +127,7 @@ indexerCommand name f = Opt.command name $ Opt.parserToParserInfo name (name <> 
   IndexerCommand
   <$> (f <$> parseCli @a)
   <*> Opt.commonBatchSize
+  <*> Opt.commonLogSeverity
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

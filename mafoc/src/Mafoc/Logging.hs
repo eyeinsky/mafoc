@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Mafoc.Logging (logging) where
+module Mafoc.Logging where
 
 import Cardano.Api (
   Block (Block),

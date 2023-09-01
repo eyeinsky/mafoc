@@ -142,6 +142,7 @@ executable mafoc
   --------------------------
   build-depends:
     , cardano-api
+    , iohk-monitoring
 
   ------------------------
   -- Non-IOG dependencies

@@ -38,6 +38,7 @@ import System.FilePath ((</>))
 import Cardano.Api qualified as C
 import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
+import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Streaming qualified as CS
 import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Types qualified as Marconi
@@ -45,7 +46,7 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Mafoc.Exceptions qualified as E
 import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
-import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderr
+import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderrSeverity
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
                       , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath))
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
@@ -99,13 +100,14 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> IO ()
-runIndexer cli batchSize stopSignal checkpointSignal = do
-  c <- defaultConfigStderr
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> CM.Severity -> IO ()
+runIndexer cli batchSize stopSignal checkpointSignal minSeverity = do
+  c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace
        $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
                      <> "\n  Batch size: " <> pretty (show batchSize)
+                     <> "\n  Logging severity: " <> pretty (show minSeverity)
 
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
 

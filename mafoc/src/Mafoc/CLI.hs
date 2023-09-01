@@ -10,6 +10,7 @@ import Options.Applicative qualified as O
 import Text.Read qualified as Read
 import Data.List.NonEmpty qualified as NE
 
+import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
@@ -145,6 +146,20 @@ commonAddress = O.option (O.eitherReader (deserializeToCardano' . TS.pack)) $ op
 
 commonUtxoState :: O.Parser FilePath
 commonUtxoState = O.option O.auto (O.long "utxo-state" <> O.value "utxoState")
+
+commonLogSeverity :: O.Parser CM.Severity
+commonLogSeverity = O.option (O.eitherReader findSeverity )
+  $ O.long "log-severity"
+  <> O.help ("Log messages up until specified severity: " <> listAsText)
+  <> O.value CM.Info
+  where
+    severities = [minBound .. maxBound] :: [CM.Severity]
+    severityMap = map (\s -> (map toLower $ show s, s)) severities
+    findSeverity arg = case L.lookup arg severityMap of
+      Just s -> Right s
+      Nothing -> Left $ "unknown severity '" <> arg <> "', must be one of " <> listAsText
+
+    listAsText = L.intercalate ", " (map fst severityMap) :: String
 
 -- * String parsers
 

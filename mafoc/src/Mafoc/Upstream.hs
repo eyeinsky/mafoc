@@ -279,6 +279,34 @@ defaultConfigStderr = do
     CM.setDefaultScribes c ["StderrSK::text"]
     return c
 
+defaultConfigStderrSeverity :: CM.Severity -> IO CM.Configuration
+defaultConfigStderrSeverity minSeverity = do
+    c <- CM.empty
+    CM.setMinSeverity c minSeverity
+    CM.setSetupBackends c [CM.KatipBK]
+    CM.setDefaultBackends c [CM.KatipBK]
+    CM.setSetupScribes c [ CM.ScribeDefinition {
+                              CM.scName = "text"
+                            , CM.scFormat = CM.ScText
+                            , CM.scKind = CM.StderrSK
+                            , CM.scPrivacy = CM.ScPublic
+                            , CM.scRotation = Nothing
+                            , CM.scMinSev = minBound
+                            , CM.scMaxSev = maxBound
+                            }
+                         ,  CM.ScribeDefinition {
+                              CM.scName = "json"
+                            , CM.scFormat = CM.ScJson
+                            , CM.scKind = CM.StderrSK
+                            , CM.scPrivacy = CM.ScPublic
+                            , CM.scRotation = Nothing
+                            , CM.scMinSev = minBound
+                            , CM.scMaxSev = maxBound
+                            }
+                         ]
+    CM.setDefaultScribes c ["StderrSK::text"]
+    return c
+
 -- * Newtypes for file paths
 --
 -- | Not sure if anyone actually wants these upstreamed
