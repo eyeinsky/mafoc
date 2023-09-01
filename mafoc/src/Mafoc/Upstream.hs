@@ -10,6 +10,7 @@ module Mafoc.Upstream where
 import System.FilePath ((</>))
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Control.Exception (throwIO, Exception, throw)
+import Data.List qualified as L
 import Streaming.Prelude qualified as S
 
 import Cardano.Api qualified as C
@@ -297,3 +298,37 @@ instance IsLabel "nodeConfig" (NodeFolder -> NodeConfig) where
 
 instance IsLabel "getNetworkId" (NodeConfig -> IO C.NetworkId) where
   fromLabel (NodeConfig nodeConfig') = getNetworkId nodeConfig'
+
+-- * Hard-coded chainpoints
+--
+-- | Shamelessly stolen from Kupo's docs https://cardanosolutions.github.io/kupo/#section/Era-boundaries
+
+lastByron, lastShelley, lastAllegra, lastMary, lastAlonzo :: SlotNoBhh
+lastByron = (4492799, "f8084c61b6a238acec985b59310b6ecec49c0ab8352249afd7268da5cff2a457")
+lastShelley = (16588737, "4e9bbbb67e3ae262133d94c3da5bffce7b1127fc436e7433b87668dba34c354a")
+lastAllegra = (23068793, "69c44ac1dda2ec74646e4223bc804d9126f719b1c245dadc2ad65e8de1b276d7")
+lastMary = (39916796, "e72579ff89dc9ed325b723a33624b596c08141c7bd573ecfff56a1f7229e4d09")
+lastAlonzo = (72316796, "c58a24ba8203e7629422a24d9dc68ce2ed495420bf40d9dab124373655161a20")
+
+data LedgerEra = Byron | Shelley | Allegra | Mary | Alonzo | Babbage
+  deriving (Eq, Ord, Enum, Bounded, Show)
+
+lastBlockOf :: LedgerEra -> Maybe SlotNoBhh
+lastBlockOf = \case
+  Byron -> Just lastByron
+  Shelley -> Just lastShelley
+  Allegra -> Just lastAllegra
+  Mary -> Just lastMary
+  Alonzo -> Just lastAlonzo
+  Babbage -> Nothing
+
+lastChainPointOfPreviousEra :: LedgerEra -> C.ChainPoint
+lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPoint . fromMaybe impossible . lastBlockOf) maybePreviousEra
+  where
+    allEras = [minBound .. maxBound] :: [LedgerEra]
+    pairs = zip allEras $ tail allEras
+    maybePreviousEra = fmap fst $ L.find (\(_, era1) -> era1 == era) pairs :: Maybe LedgerEra
+
+    -- Because we zip eras with it's tail, then the first era of the
+    -- pair always has a last block.
+    impossible = error "!!! Last block for previous ledger era always exists"

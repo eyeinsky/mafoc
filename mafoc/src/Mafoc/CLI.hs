@@ -15,7 +15,7 @@ import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAn
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo))
-import Mafoc.Upstream ()
+import Mafoc.Upstream (LedgerEra(Byron, Shelley, Allegra, Mary, Alonzo, Babbage), lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
 
 import Marconi.ChainIndex.Types qualified as Marconi
@@ -161,7 +161,16 @@ parseFrom str = case str of
   "" -> Right (False, Right C.ChainPointAtGenesis)
   "0" -> Right (False, Right C.ChainPointAtGenesis)
   '@' : str' -> (True, ) <$> parseSlotNoOrChainPoint str'
+  "byron" -> startForEra Byron
+  "shelley" -> startForEra Shelley
+  "allegra" -> startForEra Allegra
+  "mary" -> startForEra Mary
+  "alonzo" -> startForEra Alonzo
+  "babbage" -> startForEra Babbage; "vasil" -> startForEra Babbage
   str' -> (False, ) <$> parseSlotNoOrChainPoint str'
+
+  where
+    startForEra era = Right (False, Right $ lastChainPointOfPreviousEra era)
 
 -- parseChainPoint :: String -> Either String C.ChainPoint
 -- parseChainPoint str = do
@@ -188,6 +197,12 @@ parseUpTo fromSlotNo str = case str of
   '-' : absoluteUpTo -> case absoluteUpTo of
     "@" -> Right CurrentTip
     ""  -> Right Infinity
+    "byron" -> upUntilIncluding Byron
+    "shelley" -> upUntilIncluding Shelley
+    "allegra" -> upUntilIncluding Allegra
+    "mary" -> upUntilIncluding Mary
+    "alonzo" -> upUntilIncluding Alonzo
+    "babbage" -> upUntilIncluding Babbage
     _   -> SlotNo <$> parseSlotNo_ absoluteUpTo
   '+' : relativeUpTo
     | not (null digits) && null rest -> do
@@ -207,6 +222,12 @@ parseUpTo fromSlotNo str = case str of
 
   "" -> Right Infinity
   _ -> leftError "Can't read slot interval end" str
+
+  where
+    upUntilIncluding :: LedgerEra -> Either String UpTo
+    upUntilIncluding era = maybe (Left msg) (Right . SlotNo . fst) $ lastBlockOf era
+      where
+        msg = "Era " <> show era <> " hasn't ended yet. To index up until the current tip and then drop off, use @. To index everything and keep indexing then don't specify interval end."
 
 -- * Block channel
 
