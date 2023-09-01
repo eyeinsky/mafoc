@@ -105,41 +105,27 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
     other =
          Opt.command "speed" (speedParserInfo :: Opt.ParserInfo Command)
       <> Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
-      <> Opt.command "slot-chainpoint" (parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
+      <> Opt.command "slot-chainpoint" (Opt.parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
 
-    indexerCommand' name f = indexerCommand name (\(i, bs) -> IndexerCommand (f i) bs)
     indexers :: Opt.Mod Opt.CommandFields Command
     indexers =
-         indexerCommand' "addressbalance" AddressBalance
-      <> indexerCommand' "addressdatum" AddressDatum
-      <> indexerCommand' "blockbasics" BlockBasics
-      <> indexerCommand' "deposit" Deposit
-      <> indexerCommand' "epochnonce" EpochNonce
-      <> indexerCommand' "epochstakepoolsize" EpochStakepoolSize
-      <> indexerCommand' "mamba" Mamba
-      <> indexerCommand' "mintburn" MintBurn
-      <> indexerCommand' "noop" NoOp
-      <> indexerCommand' "scripttx" ScriptTx
-      <> indexerCommand' "utxo" Utxo
+         indexerCommand "addressbalance" AddressBalance
+      <> indexerCommand "addressdatum" AddressDatum
+      <> indexerCommand "blockbasics" BlockBasics
+      <> indexerCommand "deposit" Deposit
+      <> indexerCommand "epochnonce" EpochNonce
+      <> indexerCommand "epochstakepoolsize" EpochStakepoolSize
+      <> indexerCommand "mamba" Mamba
+      <> indexerCommand "mintburn" MintBurn
+      <> indexerCommand "noop" NoOp
+      <> indexerCommand "scripttx" ScriptTx
+      <> indexerCommand "utxo" Utxo
 
--- | Take program description, header and CLI parser, and turn it into a ParserInfo
-parserToParserInfo :: String -> String -> Opt.Parser a -> Opt.ParserInfo a
-parserToParserInfo progDescr header cli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
-  <> Opt.progDesc progDescr
-  <> Opt.header header
-
-indexerCommand :: forall a b . Indexer a => String -> ((a, BatchSize) -> b) -> Opt.Mod Opt.CommandFields b
-indexerCommand name f = Opt.command name (f <$> indexerParserInfo name)
-
-indexerParserInfo :: forall a . Indexer a => String -> Opt.ParserInfo (a, BatchSize)
-indexerParserInfo name = Opt.info (Opt.helper <*> parseCliWithBatchSize) $ Opt.fullDesc
-  <> Opt.progDesc name
-  <> Opt.header (name <> " - " <> TS.unpack (description @a))
-  where
-    parseCliWithBatchSize :: Opt.Parser (a, BatchSize)
-    parseCliWithBatchSize = (,)
-      <$> parseCli @a
-      <*> Opt.commonBatchSize
+indexerCommand :: forall a . Indexer a => String -> (a -> IndexerCommand) -> Opt.Mod Opt.CommandFields Command
+indexerCommand name f = Opt.command name $ Opt.parserToParserInfo name (name <> " - " <> TS.unpack (description @a)) $
+  IndexerCommand
+  <$> (f <$> parseCli @a)
+  <*> Opt.commonBatchSize
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

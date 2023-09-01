@@ -168,18 +168,8 @@ parseFrom str = case str of
   "alonzo" -> startForEra Alonzo
   "babbage" -> startForEra Babbage; "vasil" -> startForEra Babbage
   str' -> (False, ) <$> parseSlotNoOrChainPoint str'
-
   where
     startForEra era = Right (False, Right $ lastChainPointOfPreviousEra era)
-
--- parseChainPoint :: String -> Either String C.ChainPoint
--- parseChainPoint str = do
---   let (fromSlotNo, bhh) = L.span (/= ':') str
---   slotNo <- parseSlotNo_ fromSlotNo
---   blockHeaderHash <- case bhh of
---     ':' : str' -> eitherParseHashBlockHeader str'
---     _          -> leftError "No block header hash" ""
---   return $ C.ChainPoint slotNo blockHeaderHash
 
 parseSlotNoOrChainPoint :: String -> Either String (Either C.SlotNo C.ChainPoint)
 parseSlotNoOrChainPoint str = do
@@ -276,3 +266,9 @@ longOpt long help = O.long long <> O.help help
 
 parseSlotNo :: Char -> String -> String -> O.Parser C.SlotNo
 parseSlotNo short long help = O.option (C.SlotNo <$> O.auto) (opt short long help)
+
+-- | Take program description, header and CLI parser, and turn it into a ParserInfo
+parserToParserInfo :: String -> String -> O.Parser a -> O.ParserInfo a
+parserToParserInfo progDescr header cli = O.info (O.helper <*> cli) $ O.fullDesc
+  <> O.progDesc progDescr
+  <> O.header header
