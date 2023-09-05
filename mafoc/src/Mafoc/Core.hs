@@ -15,7 +15,11 @@ module Mafoc.Core
   , module Mafoc.Upstream
   , module Mafoc.Upstream.Formats
 
-  -- * Re-exports
+  -- * Mafoc.Logging
+  , renderPretty
+  , traceInfo
+
+  -- * Re-exports from other packages
   , Marconi.CurrentEra
   ) where
 
@@ -29,8 +33,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.SQLite.Simple qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Options.Applicative qualified as O
-import Prettyprinter (Doc, Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
-import Prettyprinter.Render.Text (renderStrict)
+import Prettyprinter (Doc, Pretty (pretty), (<+>))
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
 import System.FilePath ((</>))
@@ -44,6 +47,7 @@ import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Types qualified as Marconi
 
 import Mafoc.Exceptions qualified as E
+import Mafoc.Logging (traceInfo, traceDebug, renderPretty)
 import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderrSeverity
@@ -421,20 +425,6 @@ takeUpTo trace upTo' stopSignal source = case upTo' of
     -- | Take while either a stop signal is received or when the predicate becomes false.
     takeWhile' :: (a -> Bool) -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
     takeWhile' p = S.takeWhile p . Signal.takeWhileStopSignal stopSignal
-
--- * Trace
-
-traceInfo :: Trace.Trace IO TS.Text -> Doc () -> IO ()
-traceInfo trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions msg
-
-traceInfoStr :: Trace.Trace IO TS.Text -> String -> IO ()
-traceInfoStr trace msg = Trace.logInfo trace $ renderStrict $ layoutPretty defaultLayoutOptions $ pretty msg
-
-traceDebug :: Trace.Trace IO TS.Text -> Doc () -> IO ()
-traceDebug trace msg = Trace.logDebug trace $ renderStrict $ layoutPretty defaultLayoutOptions msg
-
-renderPretty :: Pretty a => a -> TS.Text
-renderPretty = renderStrict . layoutPretty defaultLayoutOptions . pretty
 
 -- * Ledger state checkpoint
 

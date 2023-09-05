@@ -14,12 +14,12 @@ import Cardano.Api (
   ChainTip (ChainTip),
   SlotNo (SlotNo),
  )
-import Cardano.BM.Trace (Trace, logInfo)
+import Cardano.BM.Trace qualified as CM
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.Text (Text)
-
+import Data.Text qualified as TS
 import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
-import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>))
+import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>), Doc)
+
 import Prettyprinter.Render.Text (renderStrict)
 import Streaming (Of, Stream, effect)
 import Streaming.Prelude qualified as S
@@ -27,6 +27,43 @@ import Text.Printf (printf)
 
 import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
 import Marconi.ChainIndex.Orphans ()
+
+-- * Trace severity levels
+
+traceEmerg :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceEmerg = mkDocLog CM.logEmergency
+
+traceCritical :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceCritical = mkDocLog CM.logCritical
+
+traceAlert :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceAlert = mkDocLog CM.logAlert
+
+traceError :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceError = mkDocLog CM.logError
+
+traceWarning :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceWarning = mkDocLog CM.logWarning
+
+traceNotice :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceNotice = mkDocLog CM.logNotice
+
+traceInfo :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceInfo = mkDocLog CM.logInfo
+
+traceDebug :: CM.Trace IO TS.Text -> Doc () -> IO ()
+traceDebug = mkDocLog CM.logDebug
+
+mkDocLog :: (CM.Trace IO TS.Text -> TS.Text -> IO ()) -> CM.Trace IO TS.Text -> Doc ann -> IO ()
+mkDocLog logger trace msg = logger trace $ renderDefault msg
+
+renderPretty :: Pretty a => a -> TS.Text
+renderPretty = renderDefault . pretty
+
+renderDefault :: Doc a -> TS.Text
+renderDefault = renderStrict . layoutPretty defaultLayoutOptions
+
+-- * Log sync stats
 
 data SyncStats = SyncStats
   { syncStatsNumBlocks :: !Int
@@ -38,7 +75,7 @@ data SyncStats = SyncStats
   }
 
 logging
-  :: Trace IO Text
+  :: CM.Trace IO TS.Text
   -> Stream (Of (ChainSyncEvent (BlockInMode CardanoMode))) IO r
   -> Stream (Of (ChainSyncEvent (BlockInMode CardanoMode))) IO r
 logging tracer s = effect $ do
@@ -116,7 +153,7 @@ logging tracer s = effect $ do
               | otherwise -> False
 
       when shouldPrint $ do
-        logInfo tracer $
+        CM.logInfo tracer $
           renderStrict $
             layoutPretty defaultLayoutOptions $
               syncMsg <+> (blocksMsg $ rollbackMsg $ "Last block processed" <+> pretty cp <> ".")
