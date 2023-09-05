@@ -1,32 +1,26 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Mafoc.Logging where
 
-import Cardano.Api (
-  Block (Block),
-  BlockHeader (BlockHeader),
-  BlockInMode (BlockInMode),
-  CardanoMode,
-  ChainPoint (ChainPoint),
-  ChainTip (ChainTip),
-  SlotNo (SlotNo),
- )
+import Cardano.Api qualified as C
 import Cardano.BM.Trace qualified as CM
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Text qualified as TS
 import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>), Doc)
 
 import Prettyprinter.Render.Text (renderStrict)
-import Streaming (Of, Stream, effect)
 import Streaming.Prelude qualified as S
 import Text.Printf (printf)
 
 import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
 import Marconi.ChainIndex.Orphans ()
+
+import Mafoc.Upstream (foldYield)
 
 -- * Trace severity levels
 
@@ -70,96 +64,65 @@ data SyncStats = SyncStats
   -- ^ Number of applied blocks since last message
   , syncStatsNumRollbacks :: !Int
   -- ^ Number of rollbacks
-  , syncStatsLastMessage :: !(Maybe UTCTime)
+  , syncStatsLastMessage :: !UTCTime
   -- ^ Timestamp of last printed message
+  }
+
+mkEmptyStats :: UTCTime -> SyncStats
+mkEmptyStats time = SyncStats
+  { syncStatsNumBlocks = 0
+  , syncStatsNumRollbacks = 0
+  , syncStatsLastMessage = time
   }
 
 logging
   :: CM.Trace IO TS.Text
-  -> Stream (Of (ChainSyncEvent (BlockInMode CardanoMode))) IO r
-  -> Stream (Of (ChainSyncEvent (BlockInMode CardanoMode))) IO r
-logging tracer s = effect $ do
-  stats <- newIORef (SyncStats 0 0 Nothing)
-  return $ S.chain (update stats) s
+  -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+  -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+logging tracer source = do
+  now <- lift getCurrentTime
+  foldYield step (mkEmptyStats now) source
   where
-    minSecondsBetweenMsg :: NominalDiffTime
-    minSecondsBetweenMsg = 10
-
-    update :: IORef SyncStats -> ChainSyncEvent (BlockInMode CardanoMode) -> IO ()
-    update statsRef (RollForward bim ct) = do
-      let cp = case bim of (BlockInMode (Block (BlockHeader slotNo hash _blockNo) _txs) _eim) -> ChainPoint slotNo hash
-      modifyIORef' statsRef $ \stats ->
-        stats{syncStatsNumBlocks = syncStatsNumBlocks stats + 1}
-      printMessage statsRef cp ct
-    update statsRef (RollBackward cp ct) = do
-      modifyIORef' statsRef $ \stats ->
-        stats{syncStatsNumRollbacks = syncStatsNumRollbacks stats + 1}
-      printMessage statsRef cp ct
-
-    printMessage statsRef cp ct = do
-      SyncStats{syncStatsNumBlocks, syncStatsNumRollbacks, syncStatsLastMessage} <- readIORef statsRef
-
+    step syncStats0 ev = do
       now <- getCurrentTime
+      let timeSinceLastMsg = diffUTCTime now $ syncStatsLastMessage syncStats0
+          (cp, ct, syncStats1) = case ev of
+            RollForward bim ct' -> (#chainPoint bim, ct', syncStats0 { syncStatsNumBlocks = syncStatsNumBlocks syncStats0 + 1 })
+            RollBackward cp' ct' -> (cp', ct', syncStats0 { syncStatsNumRollbacks = syncStatsNumRollbacks syncStats0 + 1 })
 
-      let timeSinceLastMsg = diffUTCTime now <$> syncStatsLastMessage
+          minSecondsBetweenMsg = 10 :: NominalDiffTime
 
-      let blocksMsg = case timeSinceLastMsg of
-            Nothing -> id
-            Just t -> \k ->
-              "Processed"
-                <+> pretty syncStatsNumBlocks
-                <+> "blocks in the last"
-                <+> pretty (formatTime defaultTimeLocale "%s" t)
-                <+> "seconds"
-                <+> let rate = fromIntegral syncStatsNumBlocks / realToFrac t :: Double
-                     in pretty (printf "(%.0f blocks/sec)." rate :: String)
-                          <+> k
+      if timeSinceLastMsg > minSecondsBetweenMsg
+        then let msg = syncStatus cp ct
+                   <+> reportBlocks (syncStatsNumBlocks syncStats1) timeSinceLastMsg
+                   <+> reportRollbacks (syncStatsNumRollbacks syncStats1) timeSinceLastMsg
+                   <+> "Last block processed" <+> pretty cp <> "."
+          in mkDocLog CM.logInfo tracer msg $> (mkEmptyStats now, ev)
+        else return (syncStats1, ev)
 
-      let rollbackMsg = case timeSinceLastMsg of
-            Nothing -> id
-            Just t -> \k ->
-              ( case syncStatsNumRollbacks of
-                  0 -> "No"
-                  _ -> pretty syncStatsNumRollbacks
-              )
-                <+> "rollbacks in the last"
-                <+> pretty (formatTime defaultTimeLocale "%s" t)
-                <+> "seconds."
-                <+> k
+reportBlocks :: Int -> NominalDiffTime -> Doc ann
+reportBlocks numBlocks t = "Processed" <+> pretty numBlocks <+> "blocks in the last" <+> seconds <+> "seconds at " <+> rate'
+  where
+    seconds = pretty (formatTime defaultTimeLocale "%s" t)
+    rate = fromIntegral numBlocks / realToFrac t :: Double
+    rate' = pretty (printf "%.0f blocks/sec." rate :: String)
 
-      let syncMsg = case (cp, ct) of
-            (ChainPoint (SlotNo chainPointSlot) _, ChainTip (SlotNo chainTipSlot) _header _blockNo)
-              -- TODO: MAGIC number here. Is there a better number?
-              -- 100 represents the number of slots before the
-              -- node where we consider the chain-index to be synced.
-              | chainTipSlot - chainPointSlot < 100 ->
-                  "Synchronised."
-            (ChainPoint (SlotNo chainPointSlotNo) _, ChainTip (SlotNo chainTipSlotNo) _header _blockNo) ->
-              let pct = (100 :: Double) * fromIntegral chainPointSlotNo / fromIntegral chainTipSlotNo
-               in pretty
-                    ( printf
-                        "Synchronising. Current slot %d out of %d (%0.2f%%)."
-                        chainPointSlotNo
-                        chainTipSlotNo
-                        pct
-                      :: String
-                    )
-            _ -> "Starting."
+reportRollbacks :: Int -> NominalDiffTime -> Doc ann
+reportRollbacks numRollbacks t = num <+> "rollbacks in the last" <+> seconds <+> "seconds."
+  where
+    num = if numRollbacks == 0 then "No" else pretty numRollbacks
+    seconds = pretty (formatTime defaultTimeLocale "%s" t)
 
-      let shouldPrint = case timeSinceLastMsg of
-            Nothing -> True
-            Just t
-              | t > minSecondsBetweenMsg -> True
-              | otherwise -> False
-
-      when shouldPrint $ do
-        CM.logInfo tracer $
-          renderStrict $
-            layoutPretty defaultLayoutOptions $
-              syncMsg <+> (blocksMsg $ rollbackMsg $ "Last block processed" <+> pretty cp <> ".")
-        modifyIORef' statsRef $ \stats ->
-          stats
-            { syncStatsNumBlocks = 0
-            , syncStatsNumRollbacks = 0
-            , syncStatsLastMessage = Just now
-            }
+syncStatus :: C.ChainPoint -> C.ChainTip -> Doc a
+syncStatus cp ct = let
+  cpn = coerce (#slotNo cp :: C.SlotNo) :: Word64
+  ctn = coerce (#slotNo ct :: C.SlotNo) :: Word64
+  in if
+  | C.ChainPoint{} <- cp, C.ChainTip{} <- ct -> if ctn - cpn < 100
+    then "Synchronised."
+    else let pct = (100 :: Double) * fromIntegral cpn / fromIntegral ctn
+      in pretty (printf "Synchronising. Current slot %d out of %d (%0.2f%%)." cpn ctn pct :: String)
+  | otherwise -> "Starting."
+  -- TODO: MAGIC number here. Is there a better number?
+  -- 100 represents the number of slots before the
+  -- node where we consider the chain-index to be synced.

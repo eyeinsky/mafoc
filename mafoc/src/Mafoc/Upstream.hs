@@ -195,6 +195,11 @@ instance IsLabel "slotNo" (C.ChainPoint -> C.SlotNo) where
     C.ChainPoint slotNo _bhh -> slotNo
     C.ChainPointAtGenesis -> 0
 
+instance IsLabel "slotNo" (C.ChainTip -> C.SlotNo) where
+  fromLabel = \case
+    C.ChainTip slotNo _bhh _blockNo -> slotNo
+    C.ChainTipAtGenesis -> 0
+
 -- *** Block header hash
 
 instance IsLabel "blockHeaderHash" (C.BlockInMode era -> C.Hash C.BlockHeader) where
