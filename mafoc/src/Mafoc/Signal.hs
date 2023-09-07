@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Mafoc.Signal where
 
 import Control.Concurrent qualified as IO
@@ -42,3 +43,8 @@ setupCheckpointSignal = do
         void $ IO.swapMVar mvar True
   _ <- Signals.installHandler Signals.sigUSR1 handler Nothing
   return $ Checkpoint mvar
+
+-- * Reset signal
+
+resetGet :: Coercible a (IO.MVar Bool) => a -> IO Bool
+resetGet signal = IO.swapMVar (coerce signal) False

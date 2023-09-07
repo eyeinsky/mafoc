@@ -199,7 +199,7 @@ batchedPersist indexerRuntime trace batchSize checkpointSignal source = do
       let lastCheckpointTime' = lastCheckpointTime batchState
 
       now :: UTCTime <- getCurrentTime
-      checkpointRequested :: Bool <- IO.readMVar $ coerce $ checkpointSignal
+      checkpointRequested :: Bool <- Signal.resetGet checkpointSignal
       let persistAndCheckpoint' :: [[Event a]] -> Doc () -> IO (BatchState a)
           persistAndCheckpoint' bufferedEvents' msg = do
             persistAndCheckpoint bufferedEvents' msg indexerState slotNoBhh
