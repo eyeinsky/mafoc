@@ -55,6 +55,7 @@ library
     Mafoc.Cmds.FoldLedgerState
     Mafoc.Cmds.SlotNoChainPoint
     Mafoc.Core
+    Mafoc.EpochResolution
     Mafoc.Exceptions
     Mafoc.LedgerState
     Mafoc.Signal

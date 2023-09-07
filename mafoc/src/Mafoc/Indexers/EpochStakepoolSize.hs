@@ -19,7 +19,7 @@ import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig,
                    loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
-import Mafoc.Exceptions qualified as E
+import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.LedgerState qualified as LedgerState
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -60,25 +60,10 @@ instance Indexer EpochStakepoolSize where
     maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
     stakeMap = Marconi.getStakeMap newExtLedgerState
     maybeEvent :: [Event EpochStakepoolSize]
-    maybeEvent = case maybeEpochNo state of
-      Just previousEpochNo -> case maybeCurrentEpochNo of
-        -- Epoch number increases: it is epoch boundary so emit an event
-        Just currentEpochNo -> let epochDiff = currentEpochNo - previousEpochNo
-          in case epochDiff of
-               -- Epoch increased, emit an event
-               1 -> [Event currentEpochNo stakeMap]
-               -- Epoch remained the same, don't emit an event
-               0 -> []
-               _ -> throw $ E.Epoch_difference_other_than_0_or_1 previousEpochNo currentEpochNo
-        _ -> throw $ E.Epoch_number_disappears previousEpochNo
-      _ -> case maybeCurrentEpochNo of
-        -- There was no previous epoch no (= it was Byron era) but
-        -- there is one now: emit an event as this started a new
-        -- epoch.
-        Just currentEpochNo -> [Event currentEpochNo stakeMap]
-        -- No previous epoch no and no current epoch no, the Byron
-        -- era continues.
-        _                   -> []
+    maybeEvent = case EpochResolution.resolve (maybeEpochNo state) maybeCurrentEpochNo of
+      EpochResolution.New epochNo -> [Event epochNo stakeMap]
+      EpochResolution.SameOrAbsent -> []
+      EpochResolution.AssumptionBroken exception -> throw exception
 
   initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig

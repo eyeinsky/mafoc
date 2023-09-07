@@ -9,6 +9,7 @@ import Data.Map qualified as M
 import Database.SQLite.Simple qualified as SQL
 import Data.Set qualified as Set
 import Data.Text qualified as TS
+import Control.Exception qualified as E
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -30,6 +31,7 @@ import Mafoc.Core
   , sqliteInitCheckpoints
   , loadLatestTrace
   )
+import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
@@ -97,20 +99,11 @@ instance Indexer Mamba where
       mintBurnRuntime = undefined :: Runtime MintBurn.MintBurn
       (_mintBurnState', mintBurnEvents) = toEvents @MintBurn.MintBurn mintBurnRuntime MintBurn.EmptyState blockInMode
 
-      essEvents = case maybeEpochNo of
-        Just previousEpochNo -> case maybeEpochNo' of
-          Just currentEpochNo ->
-            let
-              epochDiff = currentEpochNo - previousEpochNo
-            in
-              case epochDiff of
-                1 -> Just (currentEpochNo, epochNonce, stakeMap) -- first block of new epoch!
-                0 -> Nothing -- same epoch as before..
-                _ -> E.throw $ E.Epoch_difference_other_than_0_or_1 previousEpochNo currentEpochNo
-          Nothing -> E.throw $ E.Epoch_number_disappears previousEpochNo
-        Nothing -> case maybeEpochNo' of
-          Just currentEpochNo -> Just (currentEpochNo, epochNonce, stakeMap) -- first epoch ever!
-          Nothing -> Nothing -- no epochs, still in Byron era..
+      essEvents = case EpochResolution.resolve maybeEpochNo maybeEpochNo' of
+        EpochResolution.New epochNo -> Just (epochNo, epochNonce, stakeMap)
+        EpochResolution.SameOrAbsent -> Nothing
+        EpochResolution.AssumptionBroken exception -> E.throw exception
+
       event = Event mintBurnEvents utxoEvents essEvents
 
       state' = State extLedgerState' maybeEpochNo' utxoState'

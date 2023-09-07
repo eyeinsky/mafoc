@@ -15,7 +15,7 @@ import Mafoc.Core (DbPathAndTableName,
                    LocalChainsyncConfig, NodeConfig, sqliteOpen, defaultTableName, initializeLocalChainsync,
                    loadLatestTrace
                   )
-import Mafoc.Exceptions qualified as E
+import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
 import Mafoc.StateFile qualified as StateFile
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
@@ -54,14 +54,10 @@ instance Indexer EpochNonce where
     maybeEpochNo = Marconi.getEpochNo newExtLedgerState
     epochNonce = Marconi.getEpochNonce newExtLedgerState
     maybeEvent :: [Event EpochNonce]
-    maybeEvent = case maybeEpochNo of
-      Just epochNo -> case maybePreviousEpochNo state of
-        Just previousEpochNo -> case epochNo - previousEpochNo of
-          1 -> [Event epochNo epochNonce]
-          0 -> []
-          _ -> E.throw $ E.Epoch_difference_other_than_0_or_1 previousEpochNo epochNo
-        Nothing -> [Event epochNo epochNonce]
-      Nothing -> []
+    maybeEvent = case EpochResolution.resolve (maybePreviousEpochNo state) maybeEpochNo of
+      EpochResolution.New epochNo -> [Event epochNo epochNonce]
+      EpochResolution.SameOrAbsent -> []
+      EpochResolution.AssumptionBroken exception -> E.throw exception
 
   initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig
