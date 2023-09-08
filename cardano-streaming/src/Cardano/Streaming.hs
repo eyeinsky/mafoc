@@ -13,7 +13,7 @@ module Cardano.Streaming (
 
   -- * Stream blocks and ledger states
   , blocks, blocksPrim
-  , blocksPipelined
+  , blocksPipelined, blocksPipelinedPrim
   , ledgerStates
   , ledgerStatesPipelined
   , foldLedgerState
@@ -249,7 +249,7 @@ blocks
   :: C.LocalNodeConnectInfo C.CardanoMode
   -> C.ChainPoint
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-blocks = blocksPrim IO.newChan IO.writeChan IO.readChan
+blocks lnc cp = blocksPrim lnc cp IO.newChan IO.writeChan IO.readChan
 
 -- | Create stream of @ChainSyncEvent (BlockInMode CardanoMode)@ from
 -- connection @con@ starting at @point@.
@@ -257,14 +257,16 @@ blocks = blocksPrim IO.newChan IO.writeChan IO.readChan
 -- Parametrise over creating, writing to, and reading from a
 -- concurrent variable.
 blocksPrim
-  :: IO chan
+  :: forall chan r
+   . C.LocalNodeConnectInfo C.CardanoMode
+  -> C.ChainPoint
+  -> IO chan
   -> (chan -> CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
   -> (chan -> IO (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode)))
-  -> C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-blocksPrim init_ write read_ con chainPoint = do
+blocksPrim lnc chainPoint init_ write read_ = do
   chan <- liftIO init_
-  void $ liftIO $ CS.linkedAsync $ CS.blocksCallback con chainPoint $ write chan
+  void $ liftIO $ CS.linkedAsync $ CS.blocksCallback lnc chainPoint $ write chan
   S.repeatM $ read_ chan
 
 blocksPipelined
@@ -272,14 +274,20 @@ blocksPipelined
   -> C.LocalNodeConnectInfo C.CardanoMode
   -> C.ChainPoint
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-blocksPipelined pipelineSize con chainPoint = do
-  chan <- liftIO IO.newChan
-  void $
-    liftIO $
-      CS.linkedAsync $
-        CS.blocksCallbackPipelined pipelineSize con chainPoint $
-          IO.writeChan chan
-  S.repeatM $ IO.readChan chan
+blocksPipelined pipelineSize lnc cp = blocksPipelinedPrim pipelineSize lnc cp IO.newChan IO.writeChan IO.readChan
+
+blocksPipelinedPrim
+  :: Word32
+  -> C.LocalNodeConnectInfo C.CardanoMode
+  -> C.ChainPoint
+  -> IO chan
+  -> (chan -> CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
+  -> (chan -> IO (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode)))
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+blocksPipelinedPrim pipelineSize lnc chainPoint init_ write read_ = do
+  chan <- liftIO init_
+  void $ liftIO $ CS.linkedAsync $ CS.blocksCallbackPipelined pipelineSize lnc chainPoint $ write chan
+  S.repeatM $ read_ chan
 
 -- * Ledger states
 
