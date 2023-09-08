@@ -12,6 +12,45 @@ configuration. The meat of this project is within the [[mafoc/src/Mafoc/Maps/Blo
 
 ---
 
+** Indexers
+
+#+begin_src
+Indexers:
+  addressbalance           Index balance changes for a set of addresses
+  addressdatum             Index datums for addresses
+  blockbasics              Index slot number, block header hash and number of
+                           transactions per block
+  deposit                  Index deposits for a set of addresses
+  epochnonce               Index epoch numbers and epoch nonces
+  epochstakepoolsize       Index stakepool sizes (in ADA) per epoch
+  mamba                    All mamba indexers
+  mintburn                 Index minting and burning of custom assets
+  noop                     Don't index anything, but drain blocks over local
+                           chainsync to measure speed ceiling
+  scripttx                 Index transactions with scripts
+  utxo                     Index transaction outputs
+#+end_src
+(List brought to you by running =mafoc= with no arguments.)
+
+Run any of the above, e.g the =blockbasics= indexer:
+
+#+begin_src bash
+  nix develop # Need to enter nix shell currently
+
+  cabal run mafoc:exe:mafoc -- blockbasics \
+        --socket-path /home/markus/mainnet/socket/node.socket \
+        --mainnet \
+        --security-param 2160 \
+        --batch-size 50000
+#+end_src
+
+By default this will create an sqlite database =default.db= with
+an indexer-specific table, often with the indexer's own name, i.e
+=blockbasics= in the above case.
+
+You can tune parameters such as =--batch-size= (persist to disk) and
+=--pipeline-size= (read from chainsync) to try to make it go
+faster.
 ** Why does this exist?
 
 - indexer framework that is as simple as possible /but no simpler/
@@ -29,32 +68,6 @@ configuration. The meat of this project is within the [[mafoc/src/Mafoc/Maps/Blo
 - Keep orthogonal things orthogonal, "what business needs" doesn't
   have anything to do with the fold state, which is required for
   checkpointing and resuming.
-
-** Run
-
-You can already run quite a few indexers, e.g the following extracts
-"block basics":
-
-#+begin_src bash
-  nix develop # Need to enter nix shell currently
-
-  cabal run mafoc:exe:mafoc -- blockbasics \
-        --socket-path /home/markus/mainnet/socket/node.socket \
-        --mainnet \
-        --security-param 2160 \
-        --batch-size 50000
-#+end_src
-
-This by default will create an sqlite database =default.db= with
-=blockbasics= table with fields =slot_no=, =block_header_hash= and
-=tx_count=.
-
-You can tune parameters such as =--batch-size= (persist to disk) and
-=--pipeline-size= (read from chainsync) to try to make it go
-faster. (Though, framework design will get priority before performance
-tuning. Do send in the best numbers though if you find them.)
-
-Some of these implement Marconi indexers but within Mafoc framework.
 
 ** Framework
 
