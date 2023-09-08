@@ -37,7 +37,7 @@ data MintBurn = MintBurn
 
 instance Indexer MintBurn where
 
-  description = "Index mint and burn events"
+  description = "Index minting and burning of custom assets"
 
   parseCli =
     MintBurn

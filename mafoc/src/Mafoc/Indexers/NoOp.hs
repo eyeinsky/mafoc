@@ -17,7 +17,7 @@ data NoOp = NoOp
   } deriving Show
 
 instance Indexer NoOp where
-  description = "Don't index anything, simply drain blocks over local chainsync protocol"
+  description = "Don't index anything, but drain blocks over local chainsync to measure speed ceiling"
   parseCli = NoOp
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName

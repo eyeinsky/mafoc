@@ -124,11 +124,13 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
       <> indexerCommand "utxo" Utxo
 
 indexerCommand :: forall a . Indexer a => String -> (a -> IndexerCommand) -> Opt.Mod Opt.CommandFields Command
-indexerCommand name f = Opt.command name $ Opt.parserToParserInfo name (name <> " - " <> TS.unpack (description @a)) $
+indexerCommand name f = Opt.command name $ Opt.parserToParserInfo descr (name <> " - " <> descr) $
   IndexerCommand
   <$> (f <$> parseCli @a)
   <*> Opt.commonBatchSize
   <*> Opt.commonLogSeverity
+  where
+    descr = TS.unpack (description @a)
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help

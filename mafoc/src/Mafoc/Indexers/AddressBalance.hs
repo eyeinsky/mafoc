@@ -36,7 +36,7 @@ data AddressBalance = AddressBalance
   deriving (Show)
 
 instance Indexer AddressBalance where
-  description = "Index address balance changes"
+  description = "Index balance changes for a set of addresses"
 
   parseCli =
     AddressBalance

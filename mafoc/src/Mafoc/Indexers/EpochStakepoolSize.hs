@@ -33,7 +33,7 @@ data EpochStakepoolSizeEvent = EpochStakepoolSizeEvent
 
 instance Indexer EpochStakepoolSize where
 
-  description = "Index stakepool sizes per epoch in absolute ADA"
+  description = "Index stakepool sizes (in ADA) per epoch"
 
   parseCli = EpochStakepoolSize
     <$> Opt.mkCommonLocalChainsyncConfig Opt.commonNodeConnectionAndConfig
