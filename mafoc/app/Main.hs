@@ -34,6 +34,7 @@ main :: IO ()
 main = do
   stopSignal <- Signal.setupCtrlCHandler 3
   checkpointSignal <- Signal.setupCheckpointSignal
+  statsSignal <- Signal.setupChainsyncStatsSignal
   printRollbackException $ do
     Opt.customExecParser (Opt.prefs Opt.showHelpOnEmpty) cmdParserInfo >>= \case
       Speed what -> case what of
@@ -54,9 +55,9 @@ main = do
           Utxo configFromCli               -> runIndexer configFromCli
           AddressBalance configFromCli     -> runIndexer configFromCli
           Mamba configFromCli              -> runIndexer configFromCli
-        in runIndexer' batchSize stopSignal checkpointSignal severity
+        in runIndexer' batchSize stopSignal checkpointSignal statsSignal severity
 
-      FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal
+      FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal statsSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
 
 printRollbackException :: IO () -> IO ()

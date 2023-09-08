@@ -48,8 +48,8 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonPipelineSize
       <*> Opt.commonConcurrencyPrimitive
 
-run :: FoldLedgerState -> Signal.Stop -> IO ()
-run config stopSignal = do
+run :: FoldLedgerState -> Signal.Stop -> Signal.ChainsyncStats -> IO ()
+run config stopSignal statsSignal = do
   c <- defaultConfigStdout
   withTrace c "mafoc" $ \trace -> do
     -- Get initial ledger state. This is at genesis when
@@ -76,7 +76,7 @@ run config stopSignal = do
     securityParam <- querySecurityParam lnc
     let takeUpTo' = takeUpTo trace (SlotNo $ toSlotNo config) stopSignal
         blockSource' = blockSource securityParam lnc (pipelineSize config)
-          (concurrencyPrimitive config) (logging config) trace fromCp takeUpTo'
+          (concurrencyPrimitive config) (logging config) trace fromCp takeUpTo' statsSignal
 
     maybeLast <- S.last_
       $ blockSource'

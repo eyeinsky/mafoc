@@ -21,6 +21,7 @@ import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
 import Marconi.ChainIndex.Orphans ()
 
 import Mafoc.Upstream (foldYield)
+import Mafoc.Signal qualified as Signal
 
 -- * Trace severity levels
 
@@ -77,14 +78,16 @@ mkEmptyStats time = SyncStats
 
 logging
   :: CM.Trace IO TS.Text
+  -> Signal.ChainsyncStats
   -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
   -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-logging tracer source = do
+logging tracer statsSignal source = do
   now <- lift getCurrentTime
   foldYield step (mkEmptyStats now) source
   where
     step syncStats0 ev = do
       now <- getCurrentTime
+      statsRequested <- Signal.resetGet statsSignal
       let timeSinceLastMsg = diffUTCTime now $ syncStatsLastMessage syncStats0
           (cp, ct, syncStats1) = case ev of
             RollForward bim ct' -> (#chainPoint bim, ct', syncStats0 { syncStatsNumBlocks = syncStatsNumBlocks syncStats0 + 1 })
@@ -92,13 +95,17 @@ logging tracer source = do
 
           minSecondsBetweenMsg = 10 :: NominalDiffTime
 
-      if timeSinceLastMsg > minSecondsBetweenMsg
-        then let msg = syncStatus cp ct
-                   <+> reportBlocks (syncStatsNumBlocks syncStats1) timeSinceLastMsg
-                   <+> reportRollbacks (syncStatsNumRollbacks syncStats1) timeSinceLastMsg
-                   <+> "Last block processed" <+> pretty cp <> "."
-          in mkDocLog CM.logInfo tracer msg $> (mkEmptyStats now, ev)
-        else return (syncStats1, ev)
+          logMsg = mkMessage syncStats1 timeSinceLastMsg cp ct
+
+      if | statsRequested -> traceAlert tracer logMsg $> (mkEmptyStats now, ev)
+         | timeSinceLastMsg > minSecondsBetweenMsg -> traceInfo tracer logMsg $> (mkEmptyStats now, ev)
+         | otherwise -> return (syncStats1, ev)
+
+mkMessage :: SyncStats -> NominalDiffTime -> C.ChainPoint -> C.ChainTip -> Doc a
+mkMessage syncStats timeSinceLastMsg cp ct  = syncStatus cp ct
+  <+> reportBlocks (syncStatsNumBlocks syncStats) timeSinceLastMsg
+  <+> reportRollbacks (syncStatsNumRollbacks syncStats) timeSinceLastMsg
+  <+> "Last block processed" <+> pretty cp <> "."
 
 reportBlocks :: Int -> NominalDiffTime -> Doc ann
 reportBlocks numBlocks t = "Processed" <+> pretty numBlocks <+> "blocks in the last" <+> seconds <+> "seconds at " <+> rate'

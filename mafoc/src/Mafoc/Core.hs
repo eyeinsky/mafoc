@@ -104,8 +104,8 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> CM.Severity -> IO ()
-runIndexer cli batchSize stopSignal checkpointSignal minSeverity = do
+runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> Signal.ChainsyncStats -> CM.Severity -> IO ()
+runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = do
   c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
     traceInfo trace
@@ -127,6 +127,7 @@ runIndexer cli batchSize stopSignal checkpointSignal minSeverity = do
           trace
           fromChainPoint
           (takeUpTo trace upTo stopSignal)
+          statsSignal
 
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
@@ -212,7 +213,7 @@ batchedPersist indexerRuntime trace batchSize checkpointSignal source = do
           bufferedAndNewEvents = newEvents : bufferedEvents
 
       if | checkpointRequested ->
-             persistAndCheckpoint' bufferedAndNewEvents "checkpoint was requested" <* IO.swapMVar (coerce checkpointSignal) False
+             persistAndCheckpoint' bufferedAndNewEvents "checkpoint was requested"
          -- There are new events
          | not (null newEvents) -> let
              batchFill = getBatchFill batchState
@@ -341,9 +342,10 @@ blockSource
   -> Trace.Trace IO TS.Text
   -> C.ChainPoint
   -> (S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO () -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO ())
+  -> Signal.ChainsyncStats
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource securityParam' lnc pipelineSize' concurrencyPrimitive' logging' trace fromCp takeUpTo' = blocks'
-  & (if logging' then Logging.logging trace else id)
+blockSource securityParam' lnc pipelineSize' concurrencyPrimitive' logging' trace fromCp takeUpTo' statsSignal = blocks'
+  & (if logging' then Logging.logging trace statsSignal else id)
   & S.drop 1 -- The very first event from local chainsync is always a
              -- rewind. We skip this because we don't have anywhere to
              -- rollback to anyway.

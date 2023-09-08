@@ -39,10 +39,25 @@ setupCheckpointSignal :: IO Checkpoint
 setupCheckpointSignal = do
   mvar <- IO.newMVar False
   let handler = Signals.Catch $ do
-        putStrLn "Chekpoint requested." -- todo trace debug
         void $ IO.swapMVar mvar True
+        putStrLn "Chekpoint requested." -- todo trace debug
   _ <- Signals.installHandler Signals.sigUSR1 handler Nothing
   return $ Checkpoint mvar
+
+-- * Print chainsync statistics
+--
+-- | Signal for requesting chainsync statistics.
+
+newtype ChainsyncStats = ChainsyncStats (IO.MVar Bool)
+
+setupChainsyncStatsSignal :: IO ChainsyncStats
+setupChainsyncStatsSignal = do
+  mvar <- IO.newMVar False
+  let handler = Signals.Catch $ do
+        void $ IO.swapMVar mvar True
+        putStrLn "Chainsync stats requested." -- todo trace debug
+  _ <- Signals.installHandler Signals.sigUSR2 handler Nothing
+  return $ ChainsyncStats mvar
 
 -- * Reset signal
 
