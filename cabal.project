@@ -18,8 +18,6 @@ index-state:
 packages: mafoc
           marconi-chain-index
           marconi-core
-          marconi-sidechain
-          marconi-tutorial
           cardano-streaming
 
 -- We never, ever, want this.
