@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedLabels #-}
@@ -17,6 +18,7 @@ import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAn
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo))
 import Mafoc.Upstream (LedgerEra(Byron, Shelley, Allegra, Mary, Alonzo, Babbage), lastChainPointOfPreviousEra, lastBlockOf)
+import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
 
 import Marconi.ChainIndex.Types qualified as Marconi
@@ -120,6 +122,55 @@ commonHeaderDb = O.option
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
 
+commonProfilingConfig :: O.Parser (Maybe ProfilingConfig)
+commonProfilingConfig = commonProfileSingleField <|> ensureAtLeastOneField <$> multiFieldPrim
+  where
+    multiFieldPrim :: O.Parser (Maybe Natural, Maybe FilePath, Maybe String)
+    multiFieldPrim = (,,)
+      <$> O.option (O.maybeReader $ Just . Read.readMaybe) (longOpt "profile-sample-rate" sampleRateLong <> O.value Nothing)
+      <*> O.option (O.maybeReader $ Just . Just) (longOpt "profile-outfile" outfileLong <> O.value Nothing)
+      <*> O.option (O.maybeReader $ Just . Just) (longOpt "profile-comment" commentLong <> O.value Nothing)
+
+    ensureAtLeastOneField :: (Maybe Natural, Maybe FilePath, Maybe String) -> Maybe ProfilingConfig
+    ensureAtLeastOneField (a, b, c) = if
+      | Just sampleRate <- a -> Just $ ProfilingConfig sampleRate             (defaultOutfileF b) (defaultCommentF c)
+      | Just outfile    <- b -> Just $ ProfilingConfig (defaultSampleRateF a) outfile             (defaultCommentF c)
+      | Just comment    <- c -> Just $ ProfilingConfig (defaultSampleRateF a) (defaultOutfileF b) comment
+      | otherwise            -> Nothing
+
+    defaultSampleRate  = 10
+    defaultSampleRateF = fromMaybe defaultSampleRate
+    defaultOutfile     = "profile.log"
+    defaultOutfileF    = fromMaybe defaultOutfile
+    defaultComment     = ""
+    defaultCommentF    = fromMaybe defaultComment
+
+    defaultEmptyOutfile str = case str of
+      [] -> defaultOutfile
+      _ -> str
+
+    sampleRateLong = "Sample system resource use every n seconds."
+    outfileLong = "Destination file for profiling info."
+    commentLong = "Comment for profiling info."
+
+    commonProfileSingleField :: O.Parser (Maybe ProfilingConfig)
+    commonProfileSingleField = O.option (O.eitherReader parseProfile)
+      $ longOpt "profile" sampleRateLong
+      <> O.value Nothing
+      <> O.metavar "SECONDS:FILE:COMMENT"
+      where
+      parseProfile :: String -> Either String (Maybe ProfilingConfig)
+      parseProfile str = let
+        secondsStr = L.takeWhile (/= ':') str
+        parts = mapMaybe (\case ':' : rest -> Just $ takeWhile (/= ':') rest; _ -> Nothing) $  L.tails str
+        in do
+        seconds <- Read.readEither secondsStr
+        (outfile, comment) <- case parts of
+          outfile : comments@(_ : _) -> return (defaultEmptyOutfile outfile, L.intercalate ":" comments)
+          outfile : [] -> return (defaultEmptyOutfile outfile, defaultComment)
+          [] -> return (defaultOutfile, defaultComment)
+        return $ Just $ ProfilingConfig seconds outfile comment
+
 commonBatchSize :: O.Parser BatchSize
 commonBatchSize = O.option O.auto
   $ longOpt "batch-size" "Batche size for persisting events"
@@ -135,6 +186,7 @@ mkCommonLocalChainsyncConfig commonNodeConnection_ = LocalChainsyncConfig
   <$> commonNodeConnection_
   <*> commonIntervalInfo
   <*> commonLogging
+  <*> commonProfilingConfig
   <*> commonPipelineSize
   <*> commonConcurrencyPrimitive
 

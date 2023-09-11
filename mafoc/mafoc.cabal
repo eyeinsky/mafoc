@@ -115,6 +115,7 @@ library
     , optparse-applicative
     , prettyprinter
     , primitive
+    , process
     , sqlite-simple
     , stm
     , streaming
@@ -128,6 +129,8 @@ executable mafoc
   import:         lang
   hs-source-dirs: app
   main-is:        Main.hs
+  ghc-options:
+    "-with-rtsopts=-T"
 
   mixins:         base (Prelude as BasePrelude), base hiding (Prelude)
 

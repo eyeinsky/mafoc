@@ -35,6 +35,8 @@ data MafocIOException
   | Can't_find_previous_ChainPoint_to_slot C.SlotNo
   -- | ChainPoints from multiple state sources
   | ChainPoints_don't_match [(String, Maybe C.ChainPoint)]
+  -- | GHC.Stats.getRTSStats: GC stats not enabled. Use `+RTS -T -RTS' to enable them.
+  | RTS_GC_stats_not_enabled
   deriving stock Show
   deriving anyclass Exception
 

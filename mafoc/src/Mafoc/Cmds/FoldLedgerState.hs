@@ -16,13 +16,14 @@ import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (ConcurrencyPrimitive, NodeConfig (NodeConfig), NodeInfo,
-                   SocketPath (SocketPath), UpTo (SlotNo), blockChainPoint, blockSource,
-                   takeUpTo)
+                   SocketPath (SocketPath), UpTo (SlotNo), blockChainPoint,
+                   takeUpTo, blockProducer, rollbackRingBuffer)
 import Mafoc.Upstream (querySecurityParam)
 import Mafoc.LedgerState qualified as LedgerState
 import Mafoc.Signal qualified as Signal
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.Exceptions qualified as E
+import Mafoc.Logging qualified as Logging
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data FoldLedgerState = FoldLedgerState
@@ -30,6 +31,7 @@ data FoldLedgerState = FoldLedgerState
   , toSlotNo             :: C.SlotNo
   , nodeInfo             :: NodeInfo NodeConfig
   , logging              :: Bool
+  , profiling            :: Maybe Logging.ProfilingConfig
   , pipelineSize         :: Word32
   , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
   } deriving Show
@@ -45,6 +47,7 @@ parseCli = Opt.info (Opt.helper <*> cli) $ Opt.fullDesc
       <*> Opt.commonUntilSlot
       <*> Opt.commonNodeConnectionAndConfig
       <*> Opt.commonLogging
+      <*> Opt.commonProfilingConfig
       <*> Opt.commonPipelineSize
       <*> Opt.commonConcurrencyPrimitive
 
@@ -74,21 +77,31 @@ run config stopSignal statsSignal = do
     networkId <- #getNetworkId nodeInfo'
     let lnc = CS.mkLocalNodeConnectInfo networkId socketPath'
     securityParam <- querySecurityParam lnc
-    let takeUpTo' = takeUpTo trace (SlotNo $ toSlotNo config) stopSignal
-        blockSource' = blockSource securityParam lnc (pipelineSize config)
-          (concurrencyPrimitive config) (logging config) trace fromCp takeUpTo' statsSignal
 
-    maybeLast <- S.last_
-      $ blockSource'
-      & foldLedgerState ledgerCfg extLedgerState
+    maybeProfilingConfig <- traverse (Logging.profilerInit trace (show config)) (profiling config)
 
-    case maybeLast of
-      Just (cp', extLedgerState') -> case cp' of
+    maybeLast <- S.last_ $
+      blockProducer lnc (pipelineSize config) fromCp trace (concurrencyPrimitive config)
+        & (if logging config then Logging.logging trace statsSignal else id)
+        & maybe id Logging.profileStep maybeProfilingConfig
+        & S.drop 1 -- The very first event from local chainsync is always a
+                   -- rewind. We skip this because we don't have anywhere to
+                   -- rollback to anyway.
+        & takeUpTo trace (SlotNo $ toSlotNo config) stopSignal
+        & rollbackRingBuffer securityParam
+        & foldLedgerState ledgerCfg extLedgerState
+
+    maybeCp <- case maybeLast of
+      Just (cp', extLedgerState') -> Just cp' <$ case cp' of
         C.ChainPoint slotNo' bhh -> do
           let slotNoBhh = (slotNo', bhh)
           LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState'
         C.ChainPointAtGenesis -> putStrLn "No reason to store ledger state for genesis"
-      Nothing -> putStrLn "Empty stream"
+      Nothing -> putStrLn "Empty stream" $> Nothing
+
+    case maybeProfilingConfig of
+      Just profiling -> Logging.profilerEnd profiling maybeCp
+      Nothing -> return ()
 
 -- | Create a stream of ledger states from a stream of
 -- blocks.

@@ -115,19 +115,19 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
 
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
 
+    maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
+
     -- Start streaming blocks over local chainsync
     let (fromChainPoint, upTo) = interval lcr
     traceInfo trace $ "Starting local chainsync at: " <> pretty fromChainPoint
-    blockSource
-          (securityParam lcr)
-          (localNodeConnection lcr)
-          (pipelineSize lcr)
-          (concurrencyPrimitive lcr)
-          (logging lcr)
-          trace
-          fromChainPoint
-          (takeUpTo trace upTo stopSignal)
-          statsSignal
+    batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint trace (concurrencyPrimitive lcr)
+      & (if logging lcr then Logging.logging trace statsSignal else id)
+      & maybe id Logging.profileStep maybeProfiling
+      & S.drop 1 -- The very first event from local chainsync is always a
+                 -- rewind. We skip this because we don't have anywhere to
+                 -- rollback to anyway.
+      & takeUpTo trace upTo stopSignal
+      & rollbackRingBuffer (securityParam lcr)
 
       -- Fold over stream of blocks by converting them to events, then
       -- pass them on together with a chain point and indexer state
@@ -139,7 +139,30 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
       -- Persist events in batches and write a checkpoint. Do this
       -- either when `batchSize` amount of events is collected or when
       -- a time limit is reached.
-      & batchedPersist indexerRuntime trace batchSize checkpointSignal
+      & let step' = step trace indexerRuntime checkpointSignal batchSize
+        in S.foldM_ step' (NoProgress <$> getCurrentTime) pure
+
+    -- Streaming done, write final batch of events and checkpoint
+    maybeCp <- case batchState of
+      BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
+        let cp = #chainPoint slotNoBhh :: C.ChainPoint
+        persistMany indexerRuntime (concat bufferedEvents)
+        checkpoint indexerRuntime indexerState slotNoBhh
+        traceInfo trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
+        return $ Just cp
+      BatchEmpty{slotNoBhh, indexerState} -> do
+        let cp = #chainPoint slotNoBhh :: C.ChainPoint
+        checkpoint indexerRuntime indexerState slotNoBhh
+        traceInfo trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
+        return $ Just cp
+      NoProgress{} -> do
+        traceInfo trace "No progress made, exiting."
+        return Nothing
+
+    -- Write last profiler event
+    _ <- traverse (\profiling -> Logging.profilerEnd profiling maybeCp) maybeProfiling
+
+    traceInfo trace "Done."
 
 -- * Buffered output
 
@@ -166,79 +189,56 @@ getBufferedEvents = \case
   BatchState{bufferedEvents} -> bufferedEvents
   _                          -> []
 
-batchedPersist
+step
   :: forall a . Indexer a
-  => Runtime a
-  -> Trace.Trace IO TS.Text
-  -> BatchSize
-  -> Signal.Checkpoint
-  -> S.Stream (S.Of (SlotNoBhh, [Event a], State a)) IO ()
-  -> IO ()
-batchedPersist indexerRuntime trace batchSize checkpointSignal source = do
-  batchState <- S.foldM_ step (NoProgress <$> getCurrentTime) pure source
-  case batchState of
-    BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
-      persistAndCheckpoint bufferedEvents "exiting" indexerState slotNoBhh
-    BatchEmpty{slotNoBhh, indexerState} -> do
-      traceInfo trace $ "Checkpointing with empty batch at " <+> pretty slotNoBhh
-      checkpoint indexerRuntime indexerState slotNoBhh
-    NoProgress{} ->
-      traceInfo trace "No progress made, exiting."
-  traceInfo trace "Done."
-  where
-    persistAndCheckpoint :: [[Event a]] -> Doc () -> State a -> SlotNoBhh -> IO ()
-    persistAndCheckpoint bufferedEvents msg indexerState slotNoBhh = do
-      let (slotNo, bhh) = slotNoBhh
-      traceInfo trace $ "Persisting and checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
-      case concat $ reverse bufferedEvents of
-        events@(_ : _) -> persistMany indexerRuntime events
-        []             -> pure ()
-      checkpoint indexerRuntime indexerState slotNoBhh
+  => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize
+  -> BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
+step trace indexerRuntime checkpointSignal batchSize batchState (slotNoBhh, newEvents, indexerState) = do
+  let lastCheckpointTime' = lastCheckpointTime batchState
 
-    step :: BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
-    step batchState (slotNoBhh, newEvents, indexerState) = do
-      let lastCheckpointTime' = lastCheckpointTime batchState
+  now :: UTCTime <- getCurrentTime
+  checkpointRequested :: Bool <- Signal.resetGet checkpointSignal
+  let persistAndCheckpoint' :: [[Event a]] -> Doc () -> IO (BatchState a)
+      persistAndCheckpoint' bufferedEvents' msg = do
+        let (slotNo, bhh) = slotNoBhh
+        traceInfo trace $ "Persisting and checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
+        persistMany indexerRuntime (concat $ reverse bufferedEvents')
+        checkpoint indexerRuntime indexerState slotNoBhh
+        return $ BatchEmpty now slotNoBhh indexerState
 
-      now :: UTCTime <- getCurrentTime
-      checkpointRequested :: Bool <- Signal.resetGet checkpointSignal
-      let persistAndCheckpoint' :: [[Event a]] -> Doc () -> IO (BatchState a)
-          persistAndCheckpoint' bufferedEvents' msg = do
-            persistAndCheckpoint bufferedEvents' msg indexerState slotNoBhh
-            return $ BatchEmpty now slotNoBhh indexerState
+      isCheckpointTime :: Bool
+      isCheckpointTime = diffUTCTime now lastCheckpointTime' > 10
 
-          isCheckpointTime :: Bool
-          isCheckpointTime = diffUTCTime now lastCheckpointTime' > 10
+      bufferedEvents = getBufferedEvents batchState
+      bufferedAndNewEvents = newEvents : bufferedEvents
 
-          bufferedEvents = getBufferedEvents batchState
-          bufferedAndNewEvents = newEvents : bufferedEvents
-
-      if | checkpointRequested ->
-             persistAndCheckpoint' bufferedAndNewEvents "checkpoint was requested"
-         -- There are new events
-         | not (null newEvents) -> let
-             batchFill = getBatchFill batchState
-             bufferFill' = batchFill + toEnum (length newEvents)
-             in if | isCheckpointTime         ->
-                     persistAndCheckpoint' bufferedAndNewEvents "it's checkpoint time"
-                   | bufferFill' >= batchSize ->
-                     persistAndCheckpoint' bufferedAndNewEvents "buffer is full"
-                   | otherwise                -> let
-                       batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedAndNewEvents
-                       in return batchState'
-         -- There are no new events
-         | otherwise -> if
-             -- .. but it's checkpoint time so we persist events and checkpoint
-             | isCheckpointTime
-             , (_ : _) <- bufferedEvents
-               -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
-             -- Nothing to do, continue with original state
-             | isCheckpointTime
-               -> do
-                 checkpoint indexerRuntime indexerState slotNoBhh
-                 return $ BatchEmpty now slotNoBhh indexerState
-             -- Nothing to do, continue with original state
-             | otherwise
-               -> return batchState
+  if | checkpointRequested ->
+         persistAndCheckpoint' bufferedAndNewEvents "checkpoint was requested"
+     -- There are new events
+     | not (null newEvents) -> let
+         batchFill = getBatchFill batchState
+         bufferFill' = batchFill + toEnum (length newEvents)
+         in if | isCheckpointTime         ->
+                 persistAndCheckpoint' bufferedAndNewEvents "it's checkpoint time"
+               | bufferFill' >= batchSize ->
+                 persistAndCheckpoint' bufferedAndNewEvents "buffer is full"
+               | otherwise                -> let
+                   batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedAndNewEvents
+                   in return batchState'
+     -- There are no new events
+     | otherwise -> if
+         -- .. but it's checkpoint time so we persist events and checkpoint
+         | isCheckpointTime
+         , (_ : _) <- bufferedEvents
+           -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
+         -- Nothing to do, continue with original state
+         | isCheckpointTime
+           -> do
+             checkpoint indexerRuntime indexerState slotNoBhh
+             return $ BatchEmpty now slotNoBhh indexerState
+         -- Nothing to do, continue with original state
+         | otherwise
+           -> return batchState
 
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
@@ -253,6 +253,7 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
   { nodeInfo              :: NodeInfo a
   , intervalInfo          :: (Interval, Maybe DbPathAndTableName)
   , logging_              :: Bool
+  , profiling_            :: Maybe Logging.ProfilingConfig
   , pipelineSize_         :: Word32
   , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
   } deriving Show
@@ -297,6 +298,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , interval             :: (C.ChainPoint, UpTo)
   , securityParam        :: Marconi.SecurityParam
   , logging              :: Bool
+  , profiling            :: Maybe Logging.ProfilingConfig
   , pipelineSize         :: Word32
 
   -- * Internal
@@ -322,6 +324,7 @@ initializeLocalChainsync localChainsyncConfig networkId trace = do
     (cliChainPoint, upTo)
     securityParam'
     (logging_ localChainsyncConfig)
+    (profiling_ localChainsyncConfig)
     (pipelineSize_ localChainsyncConfig)
     (concurrencyPrimitive_ localChainsyncConfig)
 
@@ -333,43 +336,43 @@ initializeLocalChainsync_ config trace = do
   networkId <- #getNetworkId config
   initializeLocalChainsync config networkId trace
 
-blockSource
+rollbackRingBuffer
   :: Marconi.SecurityParam
-  -> C.LocalNodeConnectInfo C.CardanoMode
-  -> Word32
-  -> Maybe ConcurrencyPrimitive
-  -> Bool
-  -> Trace.Trace IO TS.Text
-  -> C.ChainPoint
-  -> (S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO () -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO ())
-  -> Signal.ChainsyncStats
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO ()
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-blockSource securityParam' lnc pipelineSize' concurrencyPrimitive' logging' trace fromCp takeUpTo' statsSignal = blocks'
-  & (if logging' then Logging.logging trace statsSignal else id)
-  & S.drop 1 -- The very first event from local chainsync is always a
-             -- rewind. We skip this because we don't have anywhere to
-             -- rollback to anyway.
-  & takeUpTo'
-  & RB.rollbackRingBuffer (fromIntegral securityParam')
-       tipDistance
-       blockSlotNoBhh
-  where
-    blocks' :: S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-    blocks' = if pipelineSize' > 1
-      then CS.blocksPipelined pipelineSize' lnc fromCp
-      else case concurrencyPrimitive' of
-      Just a -> do
-        let msg = "Using " <> pretty (show a) <> " as concurrency variable to pass blocks"
-        lift $ traceInfo trace msg
-        case a of
-          MVar -> CS.blocksPrim IO.newEmptyMVar IO.putMVar IO.takeMVar lnc fromCp
-          Chan -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
-          TChan -> CS.blocksPrim
-            TChan.newTChanIO
-            (\chan e -> STM.atomically $ STM.writeTChan chan e)
-            (STM.atomically . STM.readTChan)
-            lnc fromCp
-      Nothing -> CS.blocksPrim IO.newChan IO.writeChan IO.readChan lnc fromCp
+rollbackRingBuffer securityParam' = RB.rollbackRingBuffer (fromIntegral securityParam') tipDistance blockSlotNoBhh
+
+blockProducer
+  :: forall r
+   . C.LocalNodeConnectInfo C.CardanoMode
+  -> Word32
+  -> C.ChainPoint
+  -> Trace.Trace IO TS.Text
+  -> Maybe ConcurrencyPrimitive
+  -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+blockProducer lnc pipelineSize' fromCp trace concurrencyPrimitive' = let
+  blocks
+    :: forall a
+     . IO a
+    -> (a -> CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
+    -> (a -> IO (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode)))
+    -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
+  blocks = if pipelineSize' > 1
+    then CS.blocksPipelinedPrim pipelineSize' lnc fromCp
+    else CS.blocksPrim lnc fromCp
+
+  mvar f = f IO.newEmptyMVar IO.putMVar IO.takeMVar
+  chan f = f IO.newChan IO.writeChan IO.readChan
+  tchan f = f TChan.newTChanIO (\mv e -> STM.atomically $ STM.writeTChan mv e) (STM.atomically . STM.readTChan)
+
+  in case concurrencyPrimitive' of
+    Just a -> do
+      lift $ traceInfo trace $ "Using " <> pretty (show a) <> " as concurrency variable to pass blocks"
+      case a of
+        MVar -> mvar blocks
+        Chan -> chan blocks
+        TChan -> tchan blocks
+    Nothing -> chan blocks
 
 -- | This is a very internal data type to help swap the concurrency
 -- primitive used to pass blocks from the local chainsync's green thread
