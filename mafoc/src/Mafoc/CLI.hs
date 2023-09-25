@@ -254,7 +254,7 @@ commonLogSeverity = let
   in O.option (O.eitherReader parseSeverity)
      $  O.long "log-severity"
      <> O.help ("Log messages up until specified severity: " <> listAsText)
-     <> O.value CM.Info
+     <> O.value CM.Notice
 
 -- * String parsers
 
