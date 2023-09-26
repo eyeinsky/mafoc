@@ -6,8 +6,9 @@ import Ouroboros.Consensus.Config qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
-import Mafoc.Upstream (NodeConfig(NodeConfig))
+import Mafoc.Upstream (NodeConfig(NodeConfig), SlotNoBhh)
 import Mafoc.Exceptions qualified as E
+import Mafoc.StateFile qualified as StateFile
 
 init_ :: NodeConfig -> IO (Marconi.ExtLedgerCfg_, Marconi.ExtLedgerState_)
 init_ nodeConfig = Marconi.getInitialExtLedgerState $ coerce nodeConfig
@@ -21,6 +22,6 @@ load nodeConfig path = do
     Left cborDeserialiseFailure -> E.throwIO $ E.Can't_deserialise_LedgerState_from_CBOR path cborDeserialiseFailure
   return (cfg, extLedgerState)
 
-store :: FilePath -> Marconi.ExtLedgerCfg_ -> Marconi.ExtLedgerState_ -> IO ()
-store path (O.ExtLedgerCfg topLevelConfig) extLedgerState =
-  Marconi.writeExtLedgerState path (O.configCodec topLevelConfig) extLedgerState
+store :: FilePath -> SlotNoBhh -> Marconi.ExtLedgerCfg_ -> Marconi.ExtLedgerState_ -> IO FilePath
+store prefix slotNoBhh (O.ExtLedgerCfg topLevelConfig) extLedgerState =
+  StateFile.store prefix slotNoBhh $ \path -> Marconi.writeExtLedgerState path (O.configCodec topLevelConfig) extLedgerState

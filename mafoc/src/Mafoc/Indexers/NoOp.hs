@@ -21,13 +21,13 @@ instance Indexer NoOp where
   parseCli = NoOp
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName
-  newtype Event NoOp = Event ()
+  data Event NoOp = EmptyEvent
   data State NoOp = EmptyState
   data Runtime NoOp = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
-  toEvents _runtime _state _blockInMode = (EmptyState, [])
+  toEvents _runtime _state _blockInMode = (EmptyState, [EmptyEvent])
   initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName

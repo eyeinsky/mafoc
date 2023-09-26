@@ -95,7 +95,7 @@ run config stopSignal statsSignal = do
       Just (cp', extLedgerState') -> Just cp' <$ case cp' of
         C.ChainPoint slotNo' bhh -> do
           let slotNoBhh = (slotNo', bhh)
-          LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState'
+          void $ LedgerState.store "ledgerState" slotNoBhh ledgerCfg extLedgerState'
         C.ChainPointAtGenesis -> putStrLn "No reason to store ledger state for genesis"
       Nothing -> putStrLn "Empty stream" $> Nothing
 

@@ -26,6 +26,7 @@ import Mafoc.Core
   ( CurrentEra, DbPathAndTableName
   , Indexer(Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
   , LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
+  , SlotNoBhh
   )
 import Mafoc.Upstream (toAddressAny)
 import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra)
@@ -145,16 +146,23 @@ instance Indexer Utxo where
       C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
     return (state, chainsyncRuntime', Runtime sqlCon tableName stateFilePrefix_)
 
-  persistMany Runtime{sqlConnection, tableName} events = SQL.executeMany sqlConnection query events
-    where
-      query =
-        " INSERT INTO "
-          <> fromString tableName
-          <> " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 
-  checkpoint Runtime{stateFilePrefix} state slotNoBhh = do
-    storeState state $ StateFile.toName stateFilePrefix slotNoBhh
-    StateFile.keepLatestTwo stateFilePrefix
+  checkpoint Runtime{stateFilePrefix} state slotNoBhh = void $ storeStateFile stateFilePrefix slotNoBhh state
+
+-- * Library
+
+storeStateFile :: FilePath -> SlotNoBhh -> State Utxo -> IO FilePath
+storeStateFile prefix slotNoBhh state =
+  StateFile.store prefix slotNoBhh $ \path -> BS.writeFile path $ C.serialiseToCBOR state
+
+persistManySqlite :: SQL.Connection -> String -> [Event Utxo] -> IO ()
+persistManySqlite sqlConnection tableName events = SQL.executeMany sqlConnection query events
+  where
+    query =
+      " INSERT INTO "
+        <> fromString tableName
+        <> " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 -- * UTXO state
 
@@ -164,15 +172,6 @@ parseState path = do
   case C.deserialiseFromCBOR AsUtxoState bs of
     Left decoderError -> E.throwIO decoderError
     Right eventMap -> return eventMap
-
-storeState :: State Utxo -> FilePath -> IO ()
-storeState state path = store
-  where
-    serialised = C.serialiseToCBOR state
-    store = BS.writeFile path serialised
-    _store = case C.deserialiseFromCBOR AsUtxoState serialised of
-       Right state' -> E.assert (state == state') $ BS.writeFile path serialised
-       Left err -> E.throwIO $ userError $ "Roundtrip error: " <> show err
 
 -- * ToCBOR/FromCBOR instances
 

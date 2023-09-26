@@ -248,6 +248,12 @@ commonAddress = O.option (O.eitherReader (deserializeToCardano' . TS.pack)) $ op
 commonUtxoState :: O.Parser FilePath
 commonUtxoState = O.option O.auto (O.long "utxo-state" <> O.value "utxoState")
 
+stateFilePrefix :: FilePath -> O.Parser FilePath
+stateFilePrefix default_ = O.option O.auto
+  $ O.long "state-file-prefix"
+  <> O.value default_
+  <> O.help "Prefix used for indexer's sate files."
+
 commonLogSeverity :: O.Parser CM.Severity
 commonLogSeverity = let
   (parseSeverity, listAsText) = boundedEnum "severity"

@@ -20,7 +20,6 @@ import Mafoc.Core (DbPathAndTableName,
                    LocalChainsyncConfig, NodeConfig,
                    loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
 import Mafoc.EpochResolution qualified as EpochResolution
-import Mafoc.StateFile qualified as StateFile
 import Mafoc.LedgerState qualified as LedgerState
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
@@ -79,7 +78,7 @@ instance Indexer EpochStakepoolSize where
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
-  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState
+  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = void $ LedgerState.store "ledgerState" slotNoBhh ledgerCfg extLedgerState
 
 -- * Sqlite
 

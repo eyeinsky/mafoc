@@ -17,7 +17,6 @@ import Mafoc.Core (DbPathAndTableName,
                   )
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
-import Mafoc.StateFile qualified as StateFile
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochNonce = EpochNonce
@@ -76,7 +75,7 @@ instance Indexer EpochNonce where
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
-  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = LedgerState.store (StateFile.toName "ledgerState" slotNoBhh) ledgerCfg extLedgerState
+  checkpoint Runtime{ledgerCfg} State{extLedgerState} slotNoBhh = void $ LedgerState.store "ledgerState" slotNoBhh ledgerCfg extLedgerState
 
 -- * Sqlite
 

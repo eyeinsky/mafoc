@@ -64,7 +64,9 @@ instance Indexer MintBurn where
     let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\cliChainPoint -> max checkpointedChainPoint cliChainPoint)
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
 
-  persistMany Runtime{sqlConnection, tableName} events = do
-    Marconi.MintBurn.sqliteInsert sqlConnection tableName $ coerce events
+  persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName $ coerce events
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
+
+persistManySqlite :: SQL.Connection -> String -> [Event MintBurn] -> IO ()
+persistManySqlite sqlConnection tableName events = Marconi.MintBurn.sqliteInsert sqlConnection tableName $ coerce events

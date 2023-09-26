@@ -15,15 +15,9 @@ import Mafoc.Upstream (SlotNoBhh)
 
 -- * Store
 
-store :: String -> SlotNoBhh -> (FilePath -> IO ()) -> IO ()
-store prefix slotNoBhh storeTo = do
-  putStrLn $ "Write state: " <> prefix
-  storeTo (mkStateFileName slotNoBhh)
-  putStrLn $ "Wrote state"
-  keepLatestTwo prefix
-  putStrLn $ "Removed other files"
-  where
-    mkStateFileName = toName prefix
+store :: String -> SlotNoBhh -> (FilePath -> IO ()) -> IO FilePath
+store prefix slotNoBhh storeTo = storeTo path *> keepLatestTwo prefix $> path
+  where path = toName prefix slotNoBhh :: FilePath
 
 toName :: String -> SlotNoBhh -> FilePath
 toName prefix (slotNo, blockHeaderHash) =
@@ -69,13 +63,17 @@ bhhFromFileName :: String -> Either String SlotNoBhh
 bhhFromFileName = fmap snd . prefixBhhFromFileName
 
 prefixBhhFromFileName :: String -> Either String (String, SlotNoBhh)
-prefixBhhFromFileName str = case splitOn '_' str of
-  prefix : slotNoStr : blockHeaderHashHex : _ ->
-    fmap ((,) prefix) $
-      (,)
-        <$> parseSlotNo_ slotNoStr
-        <*> eitherParseHashBlockHeader blockHeaderHashHex
-  _ -> Left "Can't parse state file name, must be: <prefix> _ <slot no> _ <block header hash> ..."
+prefixBhhFromFileName str = case reverse parts of
+    blockHeaderHashHex : slotNoStr : rest -> let
+      prefix = L.intercalate "_" $ reverse rest
+      in fmap ((,) prefix) $
+        (,)
+          <$> parseSlotNo_ slotNoStr
+          <*> eitherParseHashBlockHeader blockHeaderHashHex
+    _ -> Left "Can't parse state file name, must be: <prefix> _ <slot no> _ <block header hash> ..."
+  where
+    parts = splitOn '_' str
+
 
 eitherParseHashBlockHeader :: String -> Either String (C.Hash C.BlockHeader)
 eitherParseHashBlockHeader str = case C.deserialiseFromRawBytesHex (C.proxyToAsType Proxy) $ C8.pack str of
