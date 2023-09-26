@@ -47,7 +47,7 @@ import Marconi.ChainIndex.Indexers.MintBurn ()
 import Marconi.ChainIndex.Types qualified as Marconi
 
 import Mafoc.Exceptions qualified as E
-import Mafoc.Logging (traceInfo, traceDebug, renderPretty)
+import Mafoc.Logging (traceInfo, traceDebug, renderPretty, traceNotice)
 import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderrSeverity
@@ -108,7 +108,7 @@ runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop ->
 runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = do
   c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
-    traceInfo trace
+    traceNotice trace
        $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
                      <> "\n  Batch size: " <> pretty (show batchSize)
                      <> "\n  Logging severity: " <> pretty (show minSeverity)
@@ -119,8 +119,8 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
 
     -- Start streaming blocks over local chainsync
     let (fromChainPoint, upTo) = interval lcr
-    traceInfo trace $ "Starting local chainsync at: " <> pretty fromChainPoint
-    batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint trace (concurrencyPrimitive lcr)
+    traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
+    batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint (concurrencyPrimitive lcr)
       & (if logging lcr then Logging.logging trace statsSignal else id)
       & maybe id Logging.profileStep maybeProfiling
       & S.drop 1 -- The very first event from local chainsync is always a
@@ -148,15 +148,15 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
         let cp = #chainPoint slotNoBhh :: C.ChainPoint
         persistMany indexerRuntime (concat bufferedEvents)
         checkpoint indexerRuntime indexerState slotNoBhh
-        traceInfo trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
+        traceNotice trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
         return $ Just cp
       BatchEmpty{slotNoBhh, indexerState} -> do
         let cp = #chainPoint slotNoBhh :: C.ChainPoint
         checkpoint indexerRuntime indexerState slotNoBhh
-        traceInfo trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
+        traceNotice trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
         return $ Just cp
       NoProgress{} -> do
-        traceInfo trace "No progress made, exiting."
+        traceNotice trace "No progress made, exiting."
         return Nothing
 
     -- Write last profiler event
@@ -255,7 +255,7 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
   , logging_              :: Bool
   , profiling_            :: Maybe Logging.ProfilingConfig
   , pipelineSize_         :: Word32
-  , concurrencyPrimitive_ :: Maybe ConcurrencyPrimitive
+  , concurrencyPrimitive_ :: ConcurrencyPrimitive
   } deriving Show
 
 type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
@@ -302,7 +302,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , pipelineSize         :: Word32
 
   -- * Internal
-  , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
+  , concurrencyPrimitive :: ConcurrencyPrimitive
   }
 
 modifyStartingPoint :: LocalChainsyncRuntime -> (C.ChainPoint -> C.ChainPoint) -> LocalChainsyncRuntime
@@ -347,10 +347,9 @@ blockProducer
    . C.LocalNodeConnectInfo C.CardanoMode
   -> Word32
   -> C.ChainPoint
-  -> Trace.Trace IO TS.Text
-  -> Maybe ConcurrencyPrimitive
+  -> ConcurrencyPrimitive
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-blockProducer lnc pipelineSize' fromCp trace concurrencyPrimitive' = let
+blockProducer lnc pipelineSize' fromCp concurrencyPrimitive' = let
   blocks
     :: forall a
      . IO a
@@ -366,13 +365,9 @@ blockProducer lnc pipelineSize' fromCp trace concurrencyPrimitive' = let
   tchan f = f TChan.newTChanIO (\mv e -> STM.atomically $ STM.writeTChan mv e) (STM.atomically . STM.readTChan)
 
   in case concurrencyPrimitive' of
-    Just a -> do
-      lift $ traceInfo trace $ "Using " <> pretty (show a) <> " as concurrency variable to pass blocks"
-      case a of
-        MVar -> mvar blocks
-        Chan -> chan blocks
-        TChan -> tchan blocks
-    Nothing -> chan blocks
+       MVar -> mvar blocks
+       Chan -> chan blocks
+       TChan -> tchan blocks
 
 -- | This is a very internal data type to help swap the concurrency
 -- primitive used to pass blocks from the local chainsync's green thread

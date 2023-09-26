@@ -13,7 +13,7 @@ import Data.List.NonEmpty qualified as NE
 
 import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Api qualified as C
-import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
+import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo))
@@ -68,7 +68,7 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
 
 commonPipelineSize :: O.Parser Word32
 commonPipelineSize = O.option O.auto
-  $ opt 'p' "pipeline-size" "Size of piplined requests."
+  $ opt 'p' "pipeline-size" "Number of parallel requests for chainsync mini-protocol."
   <> O.value 500
 
 commonNetworkId :: O.Parser C.NetworkId
@@ -113,10 +113,10 @@ commonInterval = O.option (O.eitherReader parseIntervalEither)
   where
     parseIntervalEither :: String -> Either String Interval
     parseIntervalEither str = let
-      (from, upTo) = L.span (\c -> not $ c `elem` ("-+" :: String)) str
+      (fromPart, upTo) = L.span (\c -> not $ c `elem` ("-+" :: String)) str
       in do
-      from'@(_, eitherSlotNoOrCp) <- fromEra from <|> parseFrom from
-      Interval from' <$> parseUpTo (#slotNo eitherSlotNoOrCp) upTo
+      from@(_, eitherSlotNoOrCp) <- fromEra fromPart <|> parseFrom fromPart
+      Interval from <$> parseUpTo (#slotNo eitherSlotNoOrCp) upTo
 
     (parseEra, _listAsText) = boundedEnum @LedgerEra "era"
 
@@ -280,30 +280,20 @@ parseSlotNoOrChainPoint str = do
 
 -- * Block channel
 
-commonConcurrencyPrimitive :: O.Parser (Maybe ConcurrencyPrimitive)
-commonConcurrencyPrimitive = O.option reader $
+commonConcurrencyPrimitive :: O.Parser ConcurrencyPrimitive
+commonConcurrencyPrimitive = O.option (O.eitherReader $ parse) $
   O.long "concurrency-primitive"
     <> O.help helpText
     <> O.hidden
-    <> O.value Nothing
+    <> O.value MVar
   where
-    values :: String
-    values = L.intercalate ", " (map show [minBound .. maxBound :: ConcurrencyPrimitive])
-
     helpText :: String
     helpText =
         "Choose between concurrency primitives for passing blocks from local\
         \ chainsync thread to the indexer. The choice currently is: "
-      <> values
+      <> listAsText
 
-    readStr :: String -> Maybe (Maybe ConcurrencyPrimitive)
-    readStr str = case Read.readMaybe str :: Maybe ConcurrencyPrimitive of
-      Just (cp :: ConcurrencyPrimitive) -> Just (Just cp)
-      _                                 -> Nothing
-
-    reader :: O.ReadM (Maybe ConcurrencyPrimitive)
-    reader = O.maybeReader readStr
-      <|> O.readerError ("Can't parse concurrency primitive, must be one of: " <> values)
+    (parse, listAsText) = boundedEnum @ConcurrencyPrimitive "concurrency primitive"
 
 -- * Helpers
 
@@ -333,7 +323,7 @@ parserToParserInfo progDescr header cli = O.info (O.helper <*> cli) $ O.fullDesc
   <> O.header header
 
 boundedEnum :: forall a . (Bounded a, Enum a, Show a) => String -> (String -> Either String a, String)
-boundedEnum what = (doLookup, listAsText)
+boundedEnum textDescr = (doLookup, listAsText)
   where
     values :: [a]
     values = [minBound .. maxBound]
@@ -344,7 +334,7 @@ boundedEnum what = (doLookup, listAsText)
     doLookup :: String -> Either String a
     doLookup str = case L.lookup str mapping of
       Just s -> Right s
-      Nothing -> Left $ "unknown " <> what <> " '" <> str <> "', must be one of " <> listAsText
+      Nothing -> Left $ "unknown " <> textDescr <> " '" <> str <> "', must be one of " <> listAsText
 
     listAsText :: String
     listAsText = L.intercalate ", " (map fst mapping)

@@ -33,7 +33,7 @@ data FoldLedgerState = FoldLedgerState
   , logging              :: Bool
   , profiling            :: Maybe Logging.ProfilingConfig
   , pipelineSize         :: Word32
-  , concurrencyPrimitive :: Maybe ConcurrencyPrimitive
+  , concurrencyPrimitive :: ConcurrencyPrimitive
   } deriving Show
 
 parseCli :: Opt.ParserInfo FoldLedgerState
@@ -81,7 +81,7 @@ run config stopSignal statsSignal = do
     maybeProfilingConfig <- traverse (Logging.profilerInit trace (show config)) (profiling config)
 
     maybeLast <- S.last_ $
-      blockProducer lnc (pipelineSize config) fromCp trace (concurrencyPrimitive config)
+      blockProducer lnc (pipelineSize config) fromCp (concurrencyPrimitive config)
         & (if logging config then Logging.logging trace statsSignal else id)
         & maybe id Logging.profileStep maybeProfilingConfig
         & S.drop 1 -- The very first event from local chainsync is always a
