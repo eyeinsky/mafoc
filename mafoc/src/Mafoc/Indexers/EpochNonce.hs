@@ -17,7 +17,6 @@ import Mafoc.Core (DbPathAndTableName,
                   )
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochNonce = EpochNonce
   { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
@@ -40,18 +39,18 @@ instance Indexer EpochNonce where
   data Runtime EpochNonce = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
-    , ledgerCfg     :: Marconi.ExtLedgerCfg_
+    , ledgerCfg     :: LedgerState.ExtLedgerCfg_
     }
   data State EpochNonce = State
-    { extLedgerState       :: Marconi.ExtLedgerState_
+    { extLedgerState       :: LedgerState.ExtLedgerState_
     , maybePreviousEpochNo :: Maybe C.EpochNo
     }
 
   toEvents (Runtime{ledgerCfg}) state blockInMode = (State newExtLedgerState maybeEpochNo, coerce maybeEvent)
     where
-    newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
-    maybeEpochNo = Marconi.getEpochNo newExtLedgerState
-    epochNonce = Marconi.getEpochNonce newExtLedgerState
+    newExtLedgerState = LedgerState.applyBlock ledgerCfg (extLedgerState state) blockInMode
+    maybeEpochNo = LedgerState.getEpochNo newExtLedgerState
+    epochNonce = LedgerState.getEpochNonce newExtLedgerState
     maybeEvent :: [Event EpochNonce]
     maybeEvent = case EpochResolution.resolve (maybePreviousEpochNo state) maybeEpochNo of
       EpochResolution.New epochNo -> [Event epochNo epochNonce]
@@ -69,7 +68,7 @@ instance Indexer EpochNonce where
 
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
 
-    return ( State extLedgerState (Marconi.getEpochNo extLedgerState)
+    return ( State extLedgerState (LedgerState.getEpochNo extLedgerState)
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 

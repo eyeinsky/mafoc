@@ -41,14 +41,6 @@ import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.LedgerState qualified as LedgerState
 
-import Marconi.ChainIndex.Indexers.EpochState
-  ( ExtLedgerCfg_
-  , ExtLedgerState_
-  , applyBlock
-  , getEpochNo
-  , getEpochNonce
-  , getStakeMap
-  )
 import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
 data Mamba = Mamba
@@ -77,23 +69,23 @@ instance Indexer Mamba where
   data Runtime Mamba = Runtime
     { sqlConnection :: SQL.Connection
     , tablePrefix :: String
-    , ledgerCfg :: ExtLedgerCfg_
+    , ledgerCfg :: LedgerState.ExtLedgerCfg_
     , ledgerStateFile :: FilePath
     , utxoStateFile :: FilePath
     }
 
   data State Mamba = State
-    { extLedgerState :: ExtLedgerState_
+    { extLedgerState :: LedgerState.ExtLedgerState_
     , maybeEpochNo :: Maybe C.EpochNo
     , utxoState :: State Utxo.Utxo
     }
 
   toEvents Runtime{ledgerCfg} State{extLedgerState, maybeEpochNo, utxoState} blockInMode = (state', [event])
     where
-      extLedgerState' = applyBlock ledgerCfg extLedgerState blockInMode :: ExtLedgerState_
-      maybeEpochNo' = getEpochNo extLedgerState'
-      stakeMap = getStakeMap extLedgerState'
-      epochNonce = getEpochNonce extLedgerState'
+      extLedgerState' = LedgerState.applyBlock ledgerCfg extLedgerState blockInMode :: LedgerState.ExtLedgerState_
+      maybeEpochNo' = LedgerState.getEpochNo extLedgerState'
+      stakeMap = LedgerState.getStakeMap extLedgerState'
+      epochNonce = LedgerState.getEpochNonce extLedgerState'
 
       utxoRuntime = undefined :: Utxo.Runtime Utxo.Utxo
       (utxoState', utxoEvents) = toEvents @Utxo.Utxo utxoRuntime utxoState blockInMode
@@ -144,7 +136,7 @@ instance Indexer Mamba where
               "Startingpoint specified on the command line is later than the starting point found in indexer state: "
               <> TS.pack (show cliCp) <> " vs " <> TS.pack (show stateCp)
 
-        let state = State extLedgerState (getEpochNo extLedgerState) utxoState
+        let state = State extLedgerState (LedgerState.getEpochNo extLedgerState) utxoState
             runtime = Runtime sqlCon tablePrefix ledgerCfg ledgerStateFile utxoStateFile
         return (state, localChainsyncRuntime, runtime)
 

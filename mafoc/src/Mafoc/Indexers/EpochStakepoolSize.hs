@@ -21,7 +21,6 @@ import Mafoc.Core (DbPathAndTableName,
                    loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data EpochStakepoolSize = EpochStakepoolSize
   { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
@@ -46,18 +45,18 @@ instance Indexer EpochStakepoolSize where
   data Runtime EpochStakepoolSize = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
-    , ledgerCfg     :: Marconi.ExtLedgerCfg_
+    , ledgerCfg     :: LedgerState.ExtLedgerCfg_
     }
   data State EpochStakepoolSize = State
-    { extLedgerState :: Marconi.ExtLedgerState_
+    { extLedgerState :: LedgerState.ExtLedgerState_
     , maybeEpochNo   :: Maybe C.EpochNo
     }
 
   toEvents Runtime{ledgerCfg} state blockInMode = (State newExtLedgerState maybeCurrentEpochNo, coerce maybeEvent)
     where
-    newExtLedgerState = Marconi.applyBlock ledgerCfg (extLedgerState state) blockInMode
-    maybeCurrentEpochNo = Marconi.getEpochNo newExtLedgerState
-    stakeMap = Marconi.getStakeMap newExtLedgerState
+    newExtLedgerState = LedgerState.applyBlock ledgerCfg (extLedgerState state) blockInMode
+    maybeCurrentEpochNo = LedgerState.getEpochNo newExtLedgerState
+    stakeMap = LedgerState.getStakeMap newExtLedgerState
     maybeEvent :: [Event EpochStakepoolSize]
     maybeEvent = case EpochResolution.resolve (maybeEpochNo state) maybeCurrentEpochNo of
       EpochResolution.New epochNo -> [Event epochNo stakeMap]
@@ -72,7 +71,7 @@ instance Indexer EpochStakepoolSize where
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
-    return ( State extLedgerState (Marconi.getEpochNo extLedgerState)
+    return ( State extLedgerState (LedgerState.getEpochNo extLedgerState)
            , chainsyncRuntime'
            , Runtime sqlCon tableName ledgerConfig)
 
