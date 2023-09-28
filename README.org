@@ -7,7 +7,7 @@
 NOTE: although you can already run various indexers then this is very
 much work in progress.
 
-NOTE: This is fork of [[https://github.com/input-output-hk/marconi][marconi]], piggibacking on its nix
+NOTE: This is fork of [[https://github.com/input-output-hk/marconi][marconi]], piggybacking on its nix
 configuration. The meat of this project is within the [[mafoc/src/Mafoc/Maps/BlockBasics.hs][mafoc folder]].
 
 ---
@@ -72,11 +72,16 @@ faster.
 ** Framework
 
 Any indexer should implement the [[./mafoc/src/Mafoc/Core.hs#L125-L159][Indexer type class]] which specifies:
-1. =toEvent=: how to get the data you need:
-2. =persistMany=: how to store it
-3. =initialize=: how to start, i.g turn input configuration into runtime
-   configuration (approximately, how to turn the cli into a reader)
-4. =checkpoint=: how to store the fold state
+
+1. =toEvents=: extract evevnts ("what business needs") from the block;
+
+2. =persistMany=: persist events;
+
+3. =initialize=: turn input configuration into runtime configuration
+   (i.e how to turn cli arguments to a reader environment);
+
+4. =checkpoint=: store indexer state (the "fold state"). The state and
+   its chainpoint are the only things required to resume an indexer.
 
 The parameter for the Indexer type class instance is the name ("tag")
 of the indexer. It also doubles as input configuration (usually read
