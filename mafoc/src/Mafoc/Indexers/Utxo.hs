@@ -10,31 +10,50 @@ module Mafoc.Indexers.Utxo where
 
 import Control.Exception qualified as E
 import Data.ByteString qualified as BS
-import Data.Either (rights)
 import Data.Map qualified as Map
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
 
 import Cardano.Api qualified as C
+import Cardano.Api.Address qualified as C
 import Cardano.Api.Shelley qualified as C
+import Cardano.Api.TxIn qualified as C
+import Cardano.Api.Value qualified as C
 import Cardano.Binary (fromCBOR, toCBOR)
 import Cardano.Binary qualified as CBOR
+import Cardano.Chain.Block qualified as Byron
+import Cardano.Chain.Common qualified as Byron
+import Cardano.Chain.Genesis qualified as Byron
+import Cardano.Chain.Slotting qualified as Byron
+import Cardano.Chain.UTxO qualified as Byron
+import Cardano.Crypto qualified as Crypto
+import Cardano.Ledger.Core qualified as Ledger
+import Cardano.Ledger.Era qualified as Ledger
+import Cardano.Ledger.Shelley.API qualified as Ledger
+import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
+import Ouroboros.Consensus.Byron.Ledger qualified as Byron
+import Ouroboros.Consensus.Cardano.Block qualified as O
+import Ouroboros.Consensus.Ledger.Extended qualified as O
+import Ouroboros.Consensus.Shelley.Ledger qualified as O
 import Prettyprinter (Pretty (pretty))
 
 import Mafoc.CLI qualified as O
 import Mafoc.Core
   ( CurrentEra, DbPathAndTableName
   , Indexer(Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
-  , LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
+  , LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
   , SlotNoBhh
   )
-import Mafoc.Upstream (toAddressAny)
-import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra)
+import Mafoc.Upstream (toAddressAny, NodeConfig(NodeConfig))
+import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra, unsafeCastToCurrentEra)
 import Mafoc.StateFile qualified as StateFile
 import Marconi.ChainIndex.Extract.Datum qualified as Datum
+import Mafoc.Exceptions qualified as E
+import Mafoc.LedgerState qualified as LedgerState
+
 
 data Utxo = Utxo
-  { chainsync :: LocalChainsyncConfig_
+  { chainsync :: LocalChainsyncConfig NodeConfig
   , dbPathAndTableName :: DbPathAndTableName
   , stateFilePrefix_ :: FilePath
   }
@@ -46,7 +65,7 @@ instance Indexer Utxo where
 
   parseCli =
     Utxo
-      <$> O.commonLocalChainsyncConfig
+      <$> O.mkCommonLocalChainsyncConfig O.commonNodeConnectionAndConfig
       <*> O.commonDbPathAndTableName
       <*> O.commonUtxoState
 
@@ -73,27 +92,8 @@ instance Indexer Utxo where
 
   toEvents _runtime (State utxos0) blockInMode = (State utxos1, events1)
     where
-      mkEvent :: BlockIndex -> (C.TxIn, C.TxOut C.CtxTx CurrentEra) -> Event Utxo
-      mkEvent bx (txIn, C.TxOut a v txOutDatum _refScript) =
-        Event
-          { slotNo = #slotNo blockInMode
-          , blockHeaderHash = #blockHeaderHash blockInMode
-          , txIndexInBlock = bx
-          , txIn
-          , value = C.txOutValueToValue v
-          , address = toAddressAny a
-          , datum
-          , datumHash
-          }
-        where
-          (datum, datumHash) = case Datum.getTxOutDatumOrHash txOutDatum of
-            Nothing -> (Nothing, Nothing)
-            Just e -> case e of
-              Left hash -> (Nothing, Just hash)
-              Right (datumHash'', datum'') -> (Just datum'', Just datumHash'')
-
       (utxos1, _, events1) = case blockInMode of
-        (C.BlockInMode (C.Block _BlockHeader txs) _eim) -> foldl step (utxos0, 0, []) txs
+        (C.BlockInMode (C.Block bh txs) _eim) -> foldl step (utxos0, 0, []) txs
           where
             step
               :: forall era
@@ -104,7 +104,7 @@ instance Indexer Utxo where
             step (utxos, bx, events) tx =
               ( utxosRemaining <> txosNew'
               , bx + 1
-              , events'
+              , map snd stxos <> events
               )
               where
                 txId = #calculateTxId tx :: C.TxId
@@ -117,33 +117,37 @@ instance Indexer Utxo where
                   txosNew
                     & unsafeCastEra
                     & addTxId txId
-                    & map (\(txIn, txOut) -> (txIn, mkEvent bx (txIn, txOut)))
+                    & map (\(txIn, txOut) -> (txIn, mkEvent (#slotNo blockInMode) (#blockHeaderHash blockInMode) bx txIn txOut))
                     & Map.fromList
 
-                stxos :: [Either C.TxIn (C.TxIn, Event Utxo)]
+                stxos :: [(C.TxIn, Event Utxo)]
                 utxosRemaining :: Map.Map C.TxIn (Event Utxo)
                 (stxos, utxosRemaining) = spendTxos ([], utxos) spentTxIns $ \txIn maybeTxo -> case maybeTxo of
-                  Just txo -> Right (txIn, txo)
-                  Nothing -> Left txIn
-                -- This is the full UTxO indexer so @utxos@ has all
-                -- unspent transaction outputs, thus the txIn spent
-                -- must be found within it.
-
-                events' = map snd (rights stxos) <> events
+                  Just txo -> (txIn, txo)
+                  Nothing -> E.throw $ E.UTxO_not_found txIn (#blockNo bh) (#slotNo bh) (#blockHeaderHash bh)
+                  -- ^ All spent utxo's must be found in the Utxo set, thus we throw.
 
   initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
+
     networkId <- #getNetworkId chainsync
     chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
     let (dbPath, tableName) = defaultTableName "utxo" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
-    (state, cp) <- StateFile.loadLatest stateFilePrefix_ parseState (return mempty)
-    traceInfo trace $ "Found checkpoint: " <> pretty cp
-    let -- todo handle this better
-      chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
+
+    -- (state, cp) <- do
+    --   (_, extLedgerState) <- Marconi.getInitialExtLedgerState (coerce (#nodeConfig chainsync :: NodeConfig))
+    --   StateFile.loadLatest stateFilePrefix_ parseState (return $ genesisUtxoFromLedgerState extLedgerState)
+
+    (state, cp) <- do
+      genesisConfig <- LedgerState.getGenesisConfig (#nodeConfig chainsync)
+      StateFile.loadLatest stateFilePrefix_ parseState (return $ byronGenesisUtxoFromConfig genesisConfig)
+
     case cp of
       C.ChainPoint{} -> traceInfo trace $ "Found checkpoint: " <> pretty cp
       C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
+
+    let chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
     return (state, chainsyncRuntime', Runtime sqlCon tableName stateFilePrefix_)
 
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
@@ -151,6 +155,135 @@ instance Indexer Utxo where
   checkpoint Runtime{stateFilePrefix} state slotNoBhh = void $ storeStateFile stateFilePrefix slotNoBhh state
 
 -- * Library
+
+byronGenesisUtxoFromConfig :: C.GenesisConfig -> State Utxo
+byronGenesisUtxoFromConfig (C.GenesisCardano _ byronConfig _ _ _) = State $ Map.fromList $ map (\(txIn, txOut) -> (txIn, mkEvent' txIn txOut)) byronTxOuts
+  where
+    genesisHash = Byron.configGenesisHash byronConfig :: Byron.GenesisHash
+    hash = C.HeaderHash $ Crypto.abstractHashToShort (Byron.unGenesisHash genesisHash)
+
+    mkEvent' txIn txOutCurrent = mkEvent 0 hash 0 txIn txOutCurrent
+    -- TODO: Byron genesis event: unlike dbsync[1] we set slot and blockNo to zero, is that ok?
+    -- [1] cardano-db-sync/cardano-db-sync/src/Cardano/DbSync/Era/Byron/Genesis.hs::194
+
+    byronTxOuts :: [(C.TxIn, C.TxOut ctx0 CurrentEra)]
+    byronTxOuts = byronGenesisAddressBalances byronConfig
+      & map byronGenesisBalanceToTxOut
+      & map (\(txIn, txOut) -> (txIn, unsafeCastToCurrentEra txOut))
+
+    byronGenesisAddressBalances :: Byron.Config -> [(Byron.Address, Byron.Lovelace)]
+    byronGenesisAddressBalances config =
+        avvmBalances <> nonAvvmBalances
+      where
+        networkMagic :: Byron.NetworkMagic
+        networkMagic = Byron.makeNetworkMagic (Byron.configProtocolMagic config)
+        f = Byron.makeRedeemAddress networkMagic . Crypto.fromCompactRedeemVerificationKey
+
+        avvmBalances :: [(Byron.Address, Byron.Lovelace)]
+        avvmBalances = map (\(a, b) -> (f a, b)) $ Map.toList (Byron.unGenesisAvvmBalances $ Byron.configAvvmDistr config)
+
+        nonAvvmBalances :: [(Byron.Address, Byron.Lovelace)]
+        nonAvvmBalances =
+          Map.toList $ Byron.unGenesisNonAvvmBalances (Byron.configNonAvvmBalances config)
+
+    byronGenesisBalanceToTxOut :: (Byron.Address, Byron.Lovelace) -> (C.TxIn, C.TxOut ctx C.ByronEra)
+    byronGenesisBalanceToTxOut (address, value) = (txIn, txOut)
+      where
+        txIn = C.fromByronTxIn $ Byron.TxInUtxo (addressHash address) 0
+        txOut = fromByronTxOut $ Byron.TxOut address value
+
+        addressHash :: Byron.Address -> Crypto.Hash Byron.Tx
+        addressHash =
+          fromMaybe (E.throw $ E.The_impossible_happened "Hashing addresses from Byron genesis file shouldn't fail")
+            . Crypto.abstractHashFromBytes . Crypto.abstractHashToBytes . Crypto.serializeCborHash
+
+genesisUtxoFromLedgerState :: Marconi.ExtLedgerState_ -> State Utxo
+genesisUtxoFromLedgerState extLedgerState = State $ case O.ledgerState extLedgerState of
+  O.LedgerStateByron (st :: O.LedgerState Byron.ByronBlock) -> ledgerStateEventMapByron st
+  O.LedgerStateShelley st -> ledgerStateEventMapShelley C.ShelleyBasedEraShelley st
+  O.LedgerStateAllegra st -> ledgerStateEventMapShelley C.ShelleyBasedEraAllegra st
+  O.LedgerStateMary st -> ledgerStateEventMapShelley C.ShelleyBasedEraMary st
+  O.LedgerStateAlonzo st -> ledgerStateEventMapShelley C.ShelleyBasedEraAlonzo st
+  O.LedgerStateBabbage st -> ledgerStateEventMapShelley C.ShelleyBasedEraBabbage st
+  O.LedgerStateConway st -> ledgerStateEventMapShelley C.ShelleyBasedEraConway st
+  where
+    ledgerStateEventMapByron :: O.LedgerState Byron.ByronBlock -> EventMap
+    ledgerStateEventMapByron st = Map.fromList $ map byronTxOutToEvent $ Map.toList $ Byron.unUTxO $ Byron.cvsUtxo $ cvs
+      where
+        cvs = Byron.byronLedgerState st :: Byron.ChainValidationState
+        slotNo = coerce @Byron.SlotNumber @C.SlotNo $ Byron.cvsLastSlot cvs
+
+        byronTxOutToEvent :: (Byron.CompactTxIn, Byron.CompactTxOut) -> (C.TxIn, Event Utxo)
+        byronTxOutToEvent (k, v) = (txIn, event)
+          where
+            txIn = C.fromByronTxIn $ Byron.fromCompactTxIn k :: C.TxIn
+            txOut = fromByronTxOut $ Byron.fromCompactTxOut v
+            event = mkEvent slotNo dummyBlockHeaderHash 0 txIn $ unsafeCastToCurrentEra txOut
+
+    ledgerStateEventMapShelley
+      :: forall proto lEra era
+       . ( O.StandardCrypto ~ Ledger.EraCrypto lEra
+         , C.ShelleyLedgerEra era ~ lEra
+         , C.IsCardanoEra era
+         )
+      => C.ShelleyBasedEra era
+      -> O.LedgerState (O.ShelleyBlock proto lEra)
+      -> EventMap
+    ledgerStateEventMapShelley era st = st
+      & O.shelleyLedgerState
+      & Ledger.nesEs
+      & Ledger.esLState
+      & Ledger.lsUTxOState
+      & Ledger.utxosUtxo
+      & coerce
+      & Map.toList
+      & map ledgerToCardanoApi
+      & Map.fromList
+      where
+        ledgerToCardanoApi :: (Ledger.TxIn O.StandardCrypto, Ledger.TxOut lEra) -> (C.TxIn, Event Utxo)
+        ledgerToCardanoApi (k, v) = (txIn, event)
+          where
+            txIn = C.fromShelleyTxIn k
+            txOut = C.fromShelleyTxOut era v
+            event = mkEvent' txIn $ unsafeCastToCurrentEra txOut
+
+    mkEvent' = mkEvent 0 dummyBlockHeaderHash 0
+
+    dummyBlockHeaderHash :: C.Hash C.BlockHeader
+    dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+-- copy-paste from cardano-api/cardano-api/internal/Cardano/Api/TxBody.hs::731
+fromByronTxOut :: Byron.TxOut -> C.TxOut ctx C.ByronEra
+fromByronTxOut (Byron.TxOut addr value) =
+  C.TxOut
+    (C.AddressInEra C.ByronAddressInAnyEra (C.ByronAddress addr))
+    (C.TxOutAdaOnly C.AdaOnlyInByronEra (C.fromByronLovelace value))
+     C.TxOutDatumNone C.ReferenceScriptNone
+
+mkEvent
+  :: C.SlotNo
+  -> C.Hash C.BlockHeader
+  -> BlockIndex
+  -> C.TxIn
+  -> C.TxOut C.CtxTx CurrentEra
+  -> Event Utxo
+mkEvent slotNo blockHeaderHash bx txIn (C.TxOut a v txOutDatum _refScript) =
+  Event
+    { slotNo
+    , blockHeaderHash
+    , txIndexInBlock = bx
+    , txIn
+    , value = C.txOutValueToValue v
+    , address = toAddressAny a
+    , datum
+    , datumHash
+    }
+  where
+    (datum, datumHash) = case Datum.getTxOutDatumOrHash txOutDatum of
+      Nothing -> (Nothing, Nothing)
+      Just e -> case e of
+        Left hash -> (Nothing, Just hash)
+        Right (datumHash'', datum'') -> (Just datum'', Just datumHash'')
 
 storeStateFile :: FilePath -> SlotNoBhh -> State Utxo -> IO FilePath
 storeStateFile prefix slotNoBhh state =

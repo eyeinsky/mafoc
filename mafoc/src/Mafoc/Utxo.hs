@@ -39,13 +39,21 @@ unsafeCastEra
   -> [(a, C.TxOut C.CtxTx Marconi.CurrentEra)]
 unsafeCastEra list = case traverse (traverse castToCurrentEra) list of
   Right a -> a
-  Left _ -> E.throw $ E.The_impossible_happened "It should always be possible to cast `TxOut ctx era` to CurrentEra"
+  Left _ -> E.throw castToCurrentEraFailedException
 
 castToCurrentEra
   :: (C.IsCardanoEra fromEra, C.EraCast f)
   => f fromEra
   -> Either C.EraCastError (f Marconi.CurrentEra)
 castToCurrentEra = C.eraCast Marconi.CurrentEra
+
+unsafeCastToCurrentEra
+  :: (C.IsCardanoEra fromEra, C.EraCast f)
+  => f fromEra -> f Marconi.CurrentEra
+unsafeCastToCurrentEra e = either (E.throw castToCurrentEraFailedException) id $ castToCurrentEra e
+
+castToCurrentEraFailedException :: E.MafocIOException
+castToCurrentEraFailedException = E.The_impossible_happened "It should always be possible to cast `TxOut ctx era` to CurrentEra"
 
 addressListFilter :: NE.NonEmpty (C.Address C.ShelleyAddr) -> C.AddressAny -> Maybe C.AddressAny
 addressListFilter list addr = if addr `elem` fmap C.AddressShelley list

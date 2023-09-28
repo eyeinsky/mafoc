@@ -43,7 +43,7 @@ genesisExtLedgerCfg :: C.GenesisConfig -> ExtLedgerCfg_
 genesisExtLedgerCfg genesisConfig = O.ExtLedgerCfg $ O.pInfoConfig $ fst $ C.mkProtocolInfoCardano genesisConfig
 
 init_ :: NodeConfig -> IO (ExtLedgerCfg_, ExtLedgerState_)
-init_ (NodeConfig nodeConfig) = do
+init_ nodeConfig = do
   genesisConfig <- getGenesisConfig nodeConfig
   return (genesisExtLedgerCfg genesisConfig, genesisExtLedgerState genesisConfig)
 
@@ -90,7 +90,7 @@ applyBlock hfLedgerConfig extLedgerState blockInMode =
 
 -- * GenesisConfig
 
-getGenesisConfig :: FilePath -> IO C.GenesisConfig
-getGenesisConfig nodeConfigPath = (either (fail . TS.unpack) pure =<<) $ runExceptT $ do
+getGenesisConfig :: NodeConfig -> IO C.GenesisConfig
+getGenesisConfig (NodeConfig nodeConfigPath) = (either (fail . TS.unpack) pure =<<) $ runExceptT $ do
   nodeConfig <- C.readNodeConfig (C.File nodeConfigPath)
   withExceptT (TS.pack . show) $ C.readCardanoGenesisConfig nodeConfig

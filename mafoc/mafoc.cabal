@@ -94,11 +94,18 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api
+    , cardano-api:{internal, cardano-api}
     , cardano-binary
     , cardano-ledger-shelley
     , iohk-monitoring
     , ouroboros-consensus
+
+    , ouroboros-consensus-protocol
+    , ouroboros-consensus-cardano
+    , ouroboros-consensus-diffusion
+    , cardano-ledger-core
+    , cardano-ledger-byron
+    , cardano-crypto-wrapper
 
   ------------------------
   -- Non-IOG dependencies

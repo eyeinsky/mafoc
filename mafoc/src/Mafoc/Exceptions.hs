@@ -16,7 +16,11 @@ data CardanoAssumptionBroken
     , followingEpochNo :: C.EpochNo
     }
   | Epoch_number_disappears { previouslyExistingEpochNo :: C.EpochNo }
-  | UTxO_not_found { attemptedToSpend :: C.TxIn }
+  | UTxO_not_found { attemptedToSpend :: C.TxIn
+                   , blockNo :: C.BlockNo
+                   , slotNoBhh :: C.SlotNo
+                   , bhh :: C.Hash C.BlockHeader
+                   }
   | Block_number_ahead_of_tip
     { blockNumberInBlock :: C.BlockNo
     , blockNumberInChainTip :: C.ChainTip

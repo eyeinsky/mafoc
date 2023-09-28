@@ -108,7 +108,9 @@ instance Indexer Mamba where
         utxoStateFile = stateFilePrefix <> "_utxo"
 
     ((ledgerCfg, extLedgerState), ledgerStateCp) <- loadLatestTrace ledgerStateFile (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
-    (utxoState, utxoCp) <- StateFile.loadLatest utxoStateFile Utxo.parseState (return mempty)
+    (utxoState, utxoCp) <- StateFile.loadLatest utxoStateFile
+      Utxo.parseState
+      (Utxo.byronGenesisUtxoFromConfig <$> LedgerState.getGenesisConfig (#nodeConfig chainsyncConfig))
 
     let (dbPath, tablePrefix) = defaultTableName "mamba" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
