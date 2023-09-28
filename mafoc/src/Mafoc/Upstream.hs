@@ -12,6 +12,7 @@ import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Control.Exception (throwIO, Exception, throw)
 import Data.List qualified as L
 import Streaming.Prelude qualified as S
+import Database.SQLite.Simple.ToField qualified as SQL
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -368,3 +369,6 @@ lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPo
     -- Because we zip eras with it's tail, then the first era of the
     -- pair always has a last block.
     impossible = error "!!! Last block for previous ledger era always exists"
+
+newtype TxIndexInBlock = TxIndexInBlock Word64
+  deriving newtype (Show, Eq, Ord, Num, Enum, SQL.ToField)

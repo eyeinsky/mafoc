@@ -107,6 +107,12 @@ library
     , cardano-ledger-byron
     , cardano-crypto-wrapper
 
+    , cardano-ledger-alonzo
+    , cardano-ledger-mary
+    , cardano-ledger-api
+    , cardano-ledger-babbage
+    , cardano-ledger-conway
+
   ------------------------
   -- Non-IOG dependencies
   ------------------------

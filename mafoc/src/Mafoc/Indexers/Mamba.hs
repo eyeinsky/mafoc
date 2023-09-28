@@ -41,7 +41,6 @@ import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.LedgerState qualified as LedgerState
 
-import Marconi.ChainIndex.Indexers.MintBurn qualified as Marconi.MintBurn
 
 data Mamba = Mamba
   { chainsyncConfig :: LocalChainsyncConfig NodeConfig
@@ -124,7 +123,7 @@ instance Indexer Mamba where
         E.ChainPoints_don't_match [("checkpoints table", maybeCheckpointCp), ("utxo state", Just utxoCp), ("ledger state", Just ledgerStateCp)]
       [stateCp] -> do
         Utxo.sqliteInit sqlCon $ tblUtxo tablePrefix
-        Marconi.MintBurn.sqliteInit sqlCon $ tblMintBurn tablePrefix
+        MintBurn.sqliteInit sqlCon $ tblMintBurn tablePrefix
         EpochStakepoolSize.sqliteInit sqlCon $ tblEss tablePrefix
         EpochNonce.sqliteInit sqlCon $ tblEpochNonce tablePrefix
 

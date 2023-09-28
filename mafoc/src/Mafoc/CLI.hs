@@ -6,6 +6,7 @@ module Mafoc.CLI where
 
 import Data.List qualified as L
 import Data.Text qualified as TS
+import Data.Text.Encoding qualified as TS
 import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
@@ -261,6 +262,20 @@ commonLogSeverity = let
      $  O.long "log-severity"
      <> O.help ("Log messages up until specified severity: " <> listAsText)
      <> O.value CM.Notice
+
+commonMaybeAssetId :: O.Parser (Maybe (C.PolicyId, Maybe C.AssetName))
+commonMaybeAssetId = O.option (O.eitherReader parse) (longOpt "asset-id" "Either ${policyId}.${assetName} or just ${policyId}")
+  where
+    parse str = case span (/= '.') str of
+      (policyIdStr, []) -> (\policyId -> Just (policyId, Nothing)) <$> parsePolicyId policyIdStr
+      (policyIdStr, assetNameStr@(_ : _)) -> do
+        policyId <- parsePolicyId policyIdStr
+        assetName <- parseAssetName assetNameStr
+        return $ Just (policyId, Just assetName)
+    parsePolicyId :: String -> Either String C.PolicyId
+    parsePolicyId = first show . C.deserialiseFromRawBytesHex C.AsPolicyId . TS.encodeUtf8 . TS.pack
+    parseAssetName :: String -> Either String C.AssetName
+    parseAssetName = first show . C.deserialiseFromRawBytesHex C.AsAssetName . TS.encodeUtf8 . TS.pack
 
 -- * String parsers
 
