@@ -19,6 +19,7 @@ import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
+import Mafoc.Indexers.Datum qualified as Datum
 import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
@@ -54,6 +55,7 @@ main = do
           AddressDatum configFromCli       -> runIndexer configFromCli
           Utxo configFromCli               -> runIndexer configFromCli
           AddressBalance configFromCli     -> runIndexer configFromCli
+          Datum configFromCli              -> runIndexer configFromCli
           Mamba configFromCli              -> runIndexer configFromCli
         in runIndexer' batchSize stopSignal checkpointSignal statsSignal severity
 
@@ -91,6 +93,7 @@ data IndexerCommand
   | AddressBalance AddressBalance.AddressBalance
   | AddressDatum AddressDatum.AddressDatum
   | Mamba Mamba.Mamba
+  | Datum Datum.Datum
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -115,6 +118,7 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
       <> indexerCommand "addressdatum" AddressDatum
       <> indexerCommand "blockbasics" BlockBasics
       <> indexerCommand "deposit" Deposit
+      <> indexerCommand "datum" Datum
       <> indexerCommand "epochnonce" EpochNonce
       <> indexerCommand "epochstakepoolsize" EpochStakepoolSize
       <> indexerCommand "mamba" Mamba

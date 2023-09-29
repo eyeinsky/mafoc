@@ -52,7 +52,9 @@ import Mafoc.Logging qualified as Logging
 import Mafoc.RollbackRingBuffer qualified as RB
 import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh, chainPointSlotNo, defaultConfigStderrSeverity
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
-                      , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath), TxIndexInBlock)
+                      , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath), TxIndexInBlock
+                      , txAddressDatums, txDatums, plutusDatums, allDatums, maybeDatum, txPlutusDatums
+                      )
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.Signal qualified as Signal
 import Mafoc.StateFile qualified as StateFile

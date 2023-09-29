@@ -4,6 +4,8 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE TupleSections         #-}
+{-# LANGUAGE NamedFieldPuns         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
 
@@ -13,6 +15,9 @@ import Control.Exception (throwIO, Exception, throw)
 import Data.List qualified as L
 import Streaming.Prelude qualified as S
 import Database.SQLite.Simple.ToField qualified as SQL
+import Database.SQLite.Simple.FromField qualified as SQL
+import Data.Map.Strict qualified as M
+import Data.Either (rights)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -22,6 +27,9 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 import Mafoc.Exceptions qualified as E
+import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
+import Cardano.Ledger.Alonzo.Scripts.Data (Data, DataHash)
+import Cardano.Ledger.Era (EraCrypto)
 
 import Cardano.BM.Configuration.Model qualified as CM
 import Cardano.BM.Data.BackendKind qualified as CM
@@ -372,3 +380,65 @@ lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPo
 
 newtype TxIndexInBlock = TxIndexInBlock Word64
   deriving newtype (Show, Eq, Ord, Num, Enum, SQL.ToField)
+
+-- * Datum
+
+allDatums :: C.Tx era -> [(C.Hash C.ScriptData, C.ScriptData)]
+allDatums tx = fromTxOuts <> fromPlutus
+  where
+  fromTxOuts = rights $ txDatums tx
+  fromPlutus = txPlutusDatums tx
+
+
+-- ** Datums from script data
+
+-- | Get a map of datum hash to datum from a list of transactions.
+plutusDatums :: [C.Tx era] -> [(C.Hash C.ScriptData, C.ScriptData)]
+plutusDatums txs = txPlutusDatums =<< txs
+
+txPlutusDatums :: C.Tx era -> [(C.Hash C.ScriptData, C.ScriptData)]
+txPlutusDatums tx = map (datumFromAlonzo . snd) $ txAlonzoDatums tx
+
+txAlonzoDatums :: C.Tx era -> [(DataHash (EraCrypto (C.ShelleyLedgerEra era)), Data (C.ShelleyLedgerEra era))]
+txAlonzoDatums (C.Tx txBody _) = M.toList $ alonzoTxBodyDatums txBody
+
+alonzoTxBodyDatums :: C.TxBody era -> M.Map (DataHash (EraCrypto (C.ShelleyLedgerEra era))) (Data (C.ShelleyLedgerEra era))
+alonzoTxBodyDatums txBody = case txBody of
+  C.ShelleyTxBody _ _ _ (C.TxBodyScriptData _ (Ledger.TxDats' data_) _) _ _ -> data_
+  _ -> mempty
+
+datumFromAlonzo :: Data ledgerera -> (C.Hash C.ScriptData, C.ScriptData)
+datumFromAlonzo alonzoDat = let d = C.fromAlonzoData alonzoDat
+  in ( C.hashScriptDataBytes d -- TODO: don't rehash data, get it directly
+     , C.getScriptData d)
+
+-- ** From TxOut
+
+getFilteredTxOutDatumsFromTxs
+  :: Maybe (C.Address C.ShelleyAddr -> Bool) -> [C.Tx era] -> M.Map (C.Hash C.ScriptData) C.ScriptData
+getFilteredTxOutDatumsFromTxs addressFilter txs = M.fromList $ rights $ map snd $ getFilteredAddressDatumsFromTxs addressFilter txs
+
+getFilteredAddressDatumsFromTxs
+  :: Maybe (C.Address C.ShelleyAddr -> Bool)
+  -> [C.Tx era]
+  -> [(C.AddressAny, Either (C.Hash C.ScriptData) (C.Hash C.ScriptData, C.ScriptData))]
+getFilteredAddressDatumsFromTxs shelleyAddressFilter txs = case shelleyAddressFilter of
+  Nothing -> concatMap txAddressDatums txs
+  Just p -> concat $ map (filter (p' . fst) . txAddressDatums) txs
+    where
+      p' = \case
+        C.AddressByron _ -> True -- TODO: support byron addresses
+        C.AddressShelley addr -> p addr
+
+txAddressDatums :: C.Tx era -> [(C.AddressAny, Either (C.Hash C.ScriptData) (C.Hash C.ScriptData, C.ScriptData))]
+txAddressDatums (C.Tx (C.TxBody C.TxBodyContent{C.txOuts}) _) = mapMaybe (\txOut -> (txoAddressAny txOut,) <$> maybeDatum txOut) txOuts
+
+txDatums :: C.Tx era -> [Either (C.Hash C.ScriptData) (C.Hash C.ScriptData, C.ScriptData)]
+txDatums (C.Tx (C.TxBody C.TxBodyContent{C.txOuts}) _) = mapMaybe maybeDatum txOuts
+
+maybeDatum :: C.TxOut C.CtxTx era -> Maybe (Either (C.Hash C.ScriptData) (C.Hash C.ScriptData, C.ScriptData))
+maybeDatum (C.TxOut (C.AddressInEra _ _) _ dat _) = case dat of
+  C.TxOutDatumHash _ dh -> Just $ Left dh
+  C.TxOutDatumInTx _ d -> Just $ Right (C.hashScriptDataBytes d, C.getScriptData d)
+  C.TxOutDatumInline _ d -> Just $ Right (C.hashScriptDataBytes d, C.getScriptData d)
+  C.TxOutDatumNone -> Nothing
