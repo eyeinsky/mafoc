@@ -106,21 +106,28 @@ class Indexer a where
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
 -- | Run an indexer
-runIndexer :: forall a . (Indexer a, Show a) => a -> BatchSize -> Signal.Stop -> Signal.Checkpoint -> Signal.ChainsyncStats -> CM.Severity -> IO ()
+runIndexer
+  :: forall a . (Indexer a, Show a)
+  => a
+  -> BatchSize
+  -> Signal.Stop
+  -> Signal.Checkpoint
+  -> Signal.ChainsyncStats
+  -> CM.Severity
+  -> IO ()
 runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = do
   c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
-    traceNotice trace
-       $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
-                     <> "\n  Batch size: " <> pretty (show batchSize)
-                     <> "\n  Logging severity: " <> pretty (show minSeverity)
+    initialNotice cli batchSize minSeverity trace
 
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
+    let (fromChainPoint, upTo) = interval lcr
+    initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
+    let persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize
 
     maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
 
     -- Start streaming blocks over local chainsync
-    let (fromChainPoint, upTo) = interval lcr
     traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
     batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint (concurrencyPrimitive lcr)
       & (if logging lcr then Logging.logging trace statsSignal else id)
@@ -141,25 +148,10 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
       -- Persist events in batches and write a checkpoint. Do this
       -- either when `batchSize` amount of events is collected or when
       -- a time limit is reached.
-      & let step' = step trace indexerRuntime checkpointSignal batchSize
-        in S.foldM_ step' (NoProgress <$> getCurrentTime) pure
+      & S.foldM_ persistStep' (pure initialBatchState) pure
 
     -- Streaming done, write final batch of events and checkpoint
-    maybeCp <- case batchState of
-      BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
-        let cp = #chainPoint slotNoBhh :: C.ChainPoint
-        persistMany indexerRuntime (concat bufferedEvents)
-        checkpoint indexerRuntime indexerState slotNoBhh
-        traceNotice trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
-        return $ Just cp
-      BatchEmpty{slotNoBhh, indexerState} -> do
-        let cp = #chainPoint slotNoBhh :: C.ChainPoint
-        checkpoint indexerRuntime indexerState slotNoBhh
-        traceNotice trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
-        return $ Just cp
-      NoProgress{} -> do
-        traceNotice trace "No progress made, exiting."
-        return Nothing
+    maybeCp <- persistStepFinal indexerRuntime batchState trace
 
     -- Write last profiler event
     _ <- traverse (\profiling -> Logging.profilerEnd profiling maybeCp) maybeProfiling
@@ -179,7 +171,9 @@ data BatchState a
                , slotNoBhh          :: SlotNoBhh
                , indexerState       :: State a
                }
-  | NoProgress { lastCheckpointTime :: UTCTime }
+  | NoProgress { chainPointAtStart  :: C.ChainPoint
+               , lastCheckpointTime :: UTCTime
+               }
 
 getBatchFill :: BatchState a -> BatchSize
 getBatchFill = \case
@@ -191,11 +185,11 @@ getBufferedEvents = \case
   BatchState{bufferedEvents} -> bufferedEvents
   _                          -> []
 
-step
+persistStep
   :: forall a . Indexer a
   => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize
   -> BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
-step trace indexerRuntime checkpointSignal batchSize batchState (slotNoBhh, newEvents, indexerState) = do
+persistStep trace indexerRuntime checkpointSignal batchSize batchState (slotNoBhh, newEvents, indexerState) = do
   let lastCheckpointTime' = lastCheckpointTime batchState
 
   now :: UTCTime <- getCurrentTime
@@ -242,8 +236,33 @@ step trace indexerRuntime checkpointSignal batchSize batchState (slotNoBhh, newE
          | otherwise
            -> return batchState
 
+persistStepFinal :: Indexer a => Runtime a -> BatchState a -> Trace.Trace IO TS.Text -> IO (Maybe C.ChainPoint)
+persistStepFinal indexerRuntime batchState trace = case batchState of
+  BatchState{bufferedEvents, indexerState, slotNoBhh} -> do
+    let cp = #chainPoint slotNoBhh :: C.ChainPoint
+    persistMany indexerRuntime (concat bufferedEvents)
+    checkpoint indexerRuntime indexerState slotNoBhh
+    traceNotice trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
+    return $ Just cp
+  BatchEmpty{slotNoBhh, indexerState} -> do
+    let cp = #chainPoint slotNoBhh :: C.ChainPoint
+    checkpoint indexerRuntime indexerState slotNoBhh
+    traceNotice trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
+    return $ Just cp
+  NoProgress{} -> do
+    traceNotice trace "No progress made, exiting."
+    return Nothing
+
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
+
+-- * Trace
+
+initialNotice :: Show a => a -> BatchSize -> CM.Severity -> Trace.Trace IO TS.Text -> IO ()
+initialNotice cli batchSize minSeverity trace = traceNotice trace
+  $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
+                <> "\n  Batch size: " <> pretty (show batchSize)
+                <> "\n  Logging severity: " <> pretty (show minSeverity)
 
 -- * Local chainsync: config and runtime
 

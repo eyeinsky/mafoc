@@ -379,7 +379,7 @@ lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPo
     impossible = error "!!! Last block for previous ledger era always exists"
 
 newtype TxIndexInBlock = TxIndexInBlock Word64
-  deriving newtype (Show, Eq, Ord, Num, Enum, SQL.ToField)
+  deriving newtype (Show, Eq, Ord, Num, Enum, SQL.ToField, SQL.FromField, C.ToJSON, C.FromJSON, C.ToCBOR, C.FromCBOR)
 
 -- * Datum
 

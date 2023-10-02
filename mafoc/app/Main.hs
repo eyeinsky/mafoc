@@ -45,18 +45,18 @@ main = do
 
       IndexerCommand indexerCommand' batchSize severity -> let
         runIndexer' = case indexerCommand' of
-          BlockBasics configFromCli        -> runIndexer configFromCli
-          MintBurn configFromCli           -> runIndexer configFromCli
-          NoOp configFromCli               -> runIndexer configFromCli
+          BlockBasics        configFromCli -> runIndexer configFromCli
+          MintBurn           configFromCli -> runIndexer configFromCli
+          NoOp               configFromCli -> runIndexer configFromCli
           EpochStakepoolSize configFromCli -> runIndexer configFromCli
-          EpochNonce configFromCli         -> runIndexer configFromCli
-          ScriptTx configFromCli           -> runIndexer configFromCli
-          Deposit configFromCli            -> runIndexer configFromCli
-          AddressDatum configFromCli       -> runIndexer configFromCli
-          Utxo configFromCli               -> runIndexer configFromCli
-          AddressBalance configFromCli     -> runIndexer configFromCli
-          Datum configFromCli              -> runIndexer configFromCli
-          Mamba configFromCli              -> runIndexer configFromCli
+          EpochNonce         configFromCli -> runIndexer configFromCli
+          ScriptTx           configFromCli -> runIndexer configFromCli
+          Deposit            configFromCli -> runIndexer configFromCli
+          AddressDatum       configFromCli -> runIndexer configFromCli
+          Utxo               configFromCli -> runIndexer configFromCli
+          AddressBalance     configFromCli -> runIndexer configFromCli
+          Datum              configFromCli -> runIndexer configFromCli
+          Mamba              configFromCli -> runIndexer configFromCli
         in runIndexer' batchSize stopSignal checkpointSignal statsSignal severity
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal statsSignal

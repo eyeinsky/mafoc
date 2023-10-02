@@ -41,12 +41,12 @@ data MafocIOException
   | ChainPoints_don't_match [(String, Maybe C.ChainPoint)]
   -- | GHC.Stats.getRTSStats: GC stats not enabled. Use `+RTS -T -RTS' to enable them.
   | RTS_GC_stats_not_enabled
+  -- | An escape-hatch exception: an exception where we don't bother
+  -- with structure, but just explain in text. Perhaps we'll find a
+  -- category later.
+  | TextException TS.Text
   deriving stock Show
   deriving anyclass Exception
 
--- | An escape-hatch exception: an exception where we don't bother
--- with structure, but just explain in text. Perhaps we'll find a
--- category later.
-data TextException = TextException TS.Text
-  deriving stock Show
-  deriving anyclass Exception
+throwShow :: Show a => a -> IO b
+throwShow = throwIO . TextException . TS.pack . show
