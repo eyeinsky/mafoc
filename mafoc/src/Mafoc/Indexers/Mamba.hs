@@ -60,8 +60,8 @@ instance Indexer Mamba where
 
   data Event Mamba = Event
     { mintBurnEvents :: [Event MintBurn.MintBurn]
-    , utxoEvents :: [Utxo.Event Utxo.Utxo]
-    , newEpoch :: Maybe (C.EpochNo, Ledger.Nonce, M.Map C.PoolId C.Lovelace)
+    , utxoEvents :: [Event Utxo.Utxo]
+    , newEpoch :: Maybe (M.Map C.PoolId C.Lovelace, Event EpochNonce.EpochNonce)
     }
     deriving (Show)
 
@@ -93,7 +93,7 @@ instance Indexer Mamba where
       (_mintBurnState', mintBurnEvents) = toEvents @MintBurn.MintBurn mintBurnRuntime MintBurn.EmptyState blockInMode
 
       essEvents = case EpochResolution.resolve maybeEpochNo maybeEpochNo' of
-        EpochResolution.New epochNo -> Just (epochNo, epochNonce, stakeMap)
+        EpochResolution.New epochNo -> Just (stakeMap, EpochNonce.Event epochNo epochNonce (#blockNo blockInMode) (#blockHeaderHash blockInMode) (#slotNo blockInMode))
         EpochResolution.SameOrAbsent -> Nothing
         EpochResolution.AssumptionBroken exception -> E.throw exception
 
@@ -146,9 +146,8 @@ instance Indexer Mamba where
     Utxo.persistManySqlite sqlConnection (tblUtxo tablePrefix) (utxoEvents =<< events)
 
     let epochEvents = mapMaybe newEpoch events
-        essEvents = map (\(epochNo, _, essMap) -> EpochStakepoolSize.Event epochNo essMap) epochEvents
-        enEvents = map (\(epochNo, nonce, _) -> EpochNonce.Event epochNo nonce) epochEvents
-    persistMany (EpochNonce.Runtime sqlConnection (tblEpochNonce tablePrefix) ledgerCfg) enEvents
+        essEvents = map (\(essMap, EpochNonce.Event{EpochNonce.epochNo}) -> EpochStakepoolSize.Event epochNo essMap) epochEvents
+    persistMany (EpochNonce.Runtime sqlConnection (tblEpochNonce tablePrefix) ledgerCfg) $ map snd epochEvents
     persistMany (EpochStakepoolSize.Runtime sqlConnection (tblEss tablePrefix) ledgerCfg) essEvents
 
   checkpoint Runtime{sqlConnection, ledgerCfg, utxoStateFile, ledgerStateFile} State{extLedgerState, utxoState} slotNoBhh = do
