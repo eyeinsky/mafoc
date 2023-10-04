@@ -67,7 +67,10 @@ instance Indexer Mamba where
 
   data Runtime Mamba = Runtime
     { sqlConnection :: SQL.Connection
-    , tablePrefix :: String
+    , tableMintBurn :: String
+    , tableUtxo :: String
+    , tableEpochStakepoolSize :: String
+    , tableEpochNonce :: String
     , ledgerCfg :: LedgerState.ExtLedgerCfg_
     , ledgerStateFile :: FilePath
     , utxoStateFile :: FilePath
@@ -112,9 +115,13 @@ instance Indexer Mamba where
       (Utxo.byronGenesisUtxoFromConfig <$> LedgerState.getGenesisConfig (#nodeConfig chainsyncConfig))
 
     let (dbPath, tablePrefix) = defaultTableName "mamba" dbPathAndTableName
-    sqlCon <- sqliteOpen dbPath
-    sqliteInitCheckpoints sqlCon
-    maybeCheckpointCp <- getCheckpointSqlite sqlCon "mamba"
+        tableMintBurn = tablePrefix <> "_mintburn"
+        tableUtxo = tablePrefix <> "_utxo"
+        tableEpochStakepoolSize = tablePrefix <> "_epoch_sdd"
+        tableEpochNonce = tablePrefix <> "_epoch_nonce"
+    sqlConnection <- sqliteOpen dbPath
+    sqliteInitCheckpoints sqlConnection
+    maybeCheckpointCp <- getCheckpointSqlite sqlConnection "mamba"
     let checkpointCp = fromMaybe C.ChainPointAtGenesis maybeCheckpointCp
 
     case Set.toList $ Set.fromList [checkpointCp, utxoCp, ledgerStateCp] of
@@ -122,10 +129,10 @@ instance Indexer Mamba where
       _ : _ : _ -> E.throwIO $
         E.ChainPoints_don't_match [("checkpoints table", maybeCheckpointCp), ("utxo state", Just utxoCp), ("ledger state", Just ledgerStateCp)]
       [stateCp] -> do
-        Utxo.sqliteInit sqlCon $ tblUtxo tablePrefix
-        MintBurn.sqliteInit sqlCon $ tblMintBurn tablePrefix
-        EpochStakepoolSize.sqliteInit sqlCon $ tblEss tablePrefix
-        EpochNonce.sqliteInit sqlCon $ tblEpochNonce tablePrefix
+        Utxo.sqliteInit sqlConnection tableUtxo
+        MintBurn.sqliteInit sqlConnection tableMintBurn
+        EpochStakepoolSize.sqliteInit sqlConnection tableEpochStakepoolSize
+        EpochNonce.sqliteInit sqlConnection tableEpochNonce
 
         localChainsyncRuntime <- do
           networkId <- #getNetworkId nodeConfig
@@ -137,26 +144,20 @@ instance Indexer Mamba where
               "Startingpoint specified on the command line is later than the starting point found in indexer state: "
               <> TS.pack (show cliCp) <> " vs " <> TS.pack (show stateCp)
 
-        let state = State extLedgerState (LedgerState.getEpochNo extLedgerState) utxoState
-            runtime = Runtime sqlCon tablePrefix ledgerCfg ledgerStateFile utxoStateFile
+        let state = State extLedgerState (LedgerState.getEpochNo extLedgerState) utxoState 0
+            runtime = Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, ledgerCfg, ledgerStateFile, utxoStateFile}
         return (state, localChainsyncRuntime, runtime)
 
-  persistMany Runtime{sqlConnection, tablePrefix, ledgerCfg} events = do
-    MintBurn.persistManySqlite sqlConnection (tblMintBurn tablePrefix) (mintBurnEvents =<< events)
-    Utxo.persistManySqlite sqlConnection (tblUtxo tablePrefix) (utxoEvents =<< events)
+  persistMany Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, ledgerCfg} events = do
+    MintBurn.persistManySqlite sqlConnection tableMintBurn (mintBurnEvents =<< events)
+    Utxo.persistManySqlite sqlConnection tableUtxo (utxoEvents =<< events)
 
     let epochEvents = mapMaybe newEpoch events
         essEvents = map (\(essMap, EpochNonce.Event{EpochNonce.epochNo}) -> EpochStakepoolSize.Event epochNo essMap) epochEvents
-    persistMany (EpochNonce.Runtime sqlConnection (tblEpochNonce tablePrefix) ledgerCfg) $ map snd epochEvents
-    persistMany (EpochStakepoolSize.Runtime sqlConnection (tblEss tablePrefix) ledgerCfg) essEvents
+    persistMany (EpochNonce.Runtime sqlConnection tableEpochNonce ledgerCfg) $ map snd epochEvents
+    persistMany (EpochStakepoolSize.Runtime sqlConnection tableEpochStakepoolSize ledgerCfg) essEvents
 
   checkpoint Runtime{sqlConnection, ledgerCfg, utxoStateFile, ledgerStateFile} State{extLedgerState, utxoState} slotNoBhh = do
     void $ LedgerState.store ledgerStateFile slotNoBhh ledgerCfg extLedgerState -- epochstakepoolsize, epochnonce
     void $ Utxo.storeStateFile utxoStateFile slotNoBhh utxoState
     setCheckpointSqlite sqlConnection "mamba" slotNoBhh
-
-tblMintBurn, tblUtxo, tblEss, tblEpochNonce :: String -> String
-tblMintBurn tablePrefix = tablePrefix <> "_mintburn"
-tblUtxo tablePrefix = tablePrefix <> "_utxo"
-tblEss tablePrefix = tablePrefix <> "_epoch_sdd"
-tblEpochNonce tablePrefix = tablePrefix <> "_epoch_nonce"
