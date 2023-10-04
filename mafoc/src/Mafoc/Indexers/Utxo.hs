@@ -1,4 +1,6 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedLabels #-}
@@ -28,7 +30,6 @@ import Cardano.Chain.Slotting qualified as Byron
 import Cardano.Chain.UTxO qualified as Byron
 import Cardano.Crypto qualified as Crypto
 import Cardano.Ledger.Core qualified as Ledger
-import Cardano.Ledger.Era qualified as Ledger
 import Cardano.Ledger.Shelley.API qualified as Ledger
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 import Ouroboros.Consensus.Byron.Ledger qualified as Byron
@@ -42,12 +43,11 @@ import Mafoc.Core
   ( CurrentEra, DbPathAndTableName
   , Indexer(Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
   , LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
-  , SlotNoBhh
+  , SlotNoBhh, TxIndexInBlock, maybeDatum
   )
-import Mafoc.Upstream (toAddressAny, NodeConfig(NodeConfig))
+import Mafoc.Upstream (toAddressAny, NodeConfig)
 import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra, unsafeCastToCurrentEra)
 import Mafoc.StateFile qualified as StateFile
-import Marconi.ChainIndex.Extract.Datum qualified as Datum
 import Mafoc.Exceptions qualified as E
 import Mafoc.LedgerState qualified as LedgerState
 
@@ -75,57 +75,52 @@ instance Indexer Utxo where
     , stateFilePrefix :: FilePath
     }
 
-  data Event Utxo = Event
-    { slotNo :: C.SlotNo
-    , blockHeaderHash :: C.Hash C.BlockHeader
-    , txIndexInBlock :: Word64
-    , txIn :: C.TxIn
-    , value :: C.Value
-    , address :: C.AddressAny
-    , datum :: Maybe C.ScriptData
-    , datumHash :: Maybe (C.Hash C.ScriptData)
-    }
+  newtype Event Utxo = Event (Txo Spent)
     deriving (Eq, Show)
 
-  newtype State Utxo = State EventMap
-    deriving newtype (Eq, Semigroup, Monoid, C.ToCBOR, C.FromCBOR)
+  newtype State Utxo = State (EventMap Unspent)
+    deriving newtype (Eq, Semigroup, Monoid, CBOR.ToCBOR, CBOR.FromCBOR)
 
-  toEvents _runtime (State utxos0) blockInMode = (State utxos1, events1)
+  toEvents _runtime (State utxos0) blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = (State utxos1, events1)
     where
-      (utxos1, _, events1) = case blockInMode of
-        (C.BlockInMode (C.Block bh txs) _eim) -> foldl step (utxos0, 0, []) txs
-          where
-            step
-              :: forall era
-               . (C.IsCardanoEra era)
-              => (EventMap, Word64, [Event Utxo])
-              -> C.Tx era
-              -> (EventMap, Word64, [Event Utxo])
-            step (utxos, bx, events) tx =
-              ( utxosRemaining <> txosNew'
-              , bx + 1
-              , map snd stxos <> events
-              )
-              where
-                txId = #calculateTxId tx :: C.TxId
-                spentTxIns :: [C.TxIn]
-                txosNew :: [(C.TxIx, C.TxOut C.CtxTx era)]
-                (spentTxIns, txosNew) = txoEvent tx :: TxoEvent era
+      slotNo' = #slotNo blockInMode
+      (utxos1, _, events1) = foldl step (utxos0, 0, []) txs
+      step
+        :: forall era . (C.IsCardanoEra era)
+        => (EventMap Unspent, TxIndexInBlock, [Event Utxo])
+        -> C.Tx era
+        -> (EventMap Unspent, TxIndexInBlock, [Event Utxo])
+      step (utxos, bx, events) tx =
+        ( utxosRemaining <> txosNew'
+        , bx + 1
+        , map (Event . snd) stxos <> events
+        )
+        where
+          txId = #calculateTxId tx :: C.TxId
+          spentTxIns :: [C.TxIn]
+          txosNew :: [(C.TxIx, C.TxOut C.CtxTx era)]
+          (spentTxIns, txosNew) = txoEvent tx :: TxoEvent era
 
-                txosNew' :: Map.Map C.TxIn (Event Utxo)
-                txosNew' =
-                  txosNew
-                    & unsafeCastEra
-                    & addTxId txId
-                    & map (\(txIn, txOut) -> (txIn, mkEvent (#slotNo blockInMode) (#blockHeaderHash blockInMode) bx txIn txOut))
-                    & Map.fromList
+          txosNew' :: EventMap Unspent
+          txosNew' =
+            txosNew
+              & unsafeCastEra
+              & addTxId txId
+              & map (\(txIn, txOut) -> let
+                  event = unspentTxo
+                    slotNo'
+                    (#blockHeaderHash blockInMode)
+                    (#blockNo blockInMode)
+                    bx txIn txOut
+                  in (txIn, event))
+              & Map.fromList
 
-                stxos :: [(C.TxIn, Event Utxo)]
-                utxosRemaining :: Map.Map C.TxIn (Event Utxo)
-                (stxos, utxosRemaining) = spendTxos ([], utxos) spentTxIns $ \txIn maybeTxo -> case maybeTxo of
-                  Just txo -> (txIn, txo)
-                  Nothing -> E.throw $ E.UTxO_not_found txIn (#blockNo bh) (#slotNo bh) (#blockHeaderHash bh)
-                  -- ^ All spent utxo's must be found in the Utxo set, thus we throw.
+          stxos :: [(C.TxIn, Txo Spent)]
+          utxosRemaining :: EventMap Unspent
+          (stxos, utxosRemaining) = spendTxos ([], utxos) spentTxIns $ \spentTxIn maybeTxo -> case maybeTxo of
+            Just txo -> (spentTxIn, spend txId slotNo' txo)
+            Nothing -> E.throw $ E.UTxO_not_found spentTxIn (#blockNo bh) (#slotNo bh) (#blockHeaderHash bh)
+            -- ^ All spent utxo's must be found in the Utxo set, thus we throw.
 
   initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
 
@@ -156,13 +151,57 @@ instance Indexer Utxo where
 
 -- * Library
 
+data Stxo = Stxo
+  { txo :: TxoPrim
+  , spentBy :: C.TxId
+  , spentAt :: C.SlotNo
+  }
+  deriving (Eq, Show)
+
+data TxoPrim = Txo
+  { slotNo :: C.SlotNo
+  , blockHeaderHash :: C.Hash C.BlockHeader
+  , blockNo :: C.BlockNo
+  , txIndexInBlock :: TxIndexInBlock
+  , txIn :: C.TxIn
+  , value :: C.Value
+  , address :: C.AddressAny
+  , datumHash :: Maybe (C.Hash C.ScriptData)
+  }
+  deriving (Eq, Show)
+
+data Status = Spent | Unspent
+type family Txo (status :: Status) where
+  Txo Spent = Stxo
+  Txo Unspent = TxoPrim
+
+spend :: C.TxId -> C.SlotNo -> Txo Unspent -> Txo Spent
+spend spentBy spentAt txo = Stxo { txo, spentBy, spentAt }
+
+unspentTxo :: C.SlotNo -> C.Hash C.BlockHeader -> C.BlockNo -> TxIndexInBlock -> C.TxIn -> C.TxOut C.CtxTx CurrentEra -> Txo Unspent
+unspentTxo slotNo blockHeaderHash blockNo txIndexInBlock txIn txOut@(C.TxOut a v _ _) =
+  Txo
+    { slotNo
+    , blockHeaderHash
+    , blockNo
+    , txIndexInBlock
+    , txIn
+    , value = C.txOutValueToValue v
+    , address = toAddressAny a
+    , datumHash = either id fst <$> maybeDatum txOut
+    }
+
+type EventMap status = Map.Map C.TxIn (Txo status)
+
+-- * Initial Utxo
+
 byronGenesisUtxoFromConfig :: C.GenesisConfig -> State Utxo
 byronGenesisUtxoFromConfig (C.GenesisCardano _ byronConfig _ _ _) = State $ Map.fromList $ map (\(txIn, txOut) -> (txIn, mkEvent' txIn txOut)) byronTxOuts
   where
     genesisHash = Byron.configGenesisHash byronConfig :: Byron.GenesisHash
     hash = C.HeaderHash $ Crypto.abstractHashToShort (Byron.unGenesisHash genesisHash)
 
-    mkEvent' txIn txOutCurrent = mkEvent 0 hash 0 txIn txOutCurrent
+    mkEvent' txIn txOutCurrent = unspentTxo 0 hash 0 0 txIn txOutCurrent
     -- TODO: Byron genesis event: unlike dbsync[1] we set slot and blockNo to zero, is that ok?
     -- [1] cardano-db-sync/cardano-db-sync/src/Cardano/DbSync/Era/Byron/Genesis.hs::194
 
@@ -207,18 +246,18 @@ genesisUtxoFromLedgerState extLedgerState = State $ case O.ledgerState extLedger
   O.LedgerStateBabbage st -> ledgerStateEventMapShelley C.ShelleyBasedEraBabbage st
   O.LedgerStateConway st -> ledgerStateEventMapShelley C.ShelleyBasedEraConway st
   where
-    ledgerStateEventMapByron :: O.LedgerState Byron.ByronBlock -> EventMap
+    ledgerStateEventMapByron :: O.LedgerState Byron.ByronBlock -> EventMap Unspent
     ledgerStateEventMapByron st = Map.fromList $ map byronTxOutToEvent $ Map.toList $ Byron.unUTxO $ Byron.cvsUtxo $ cvs
       where
         cvs = Byron.byronLedgerState st :: Byron.ChainValidationState
         slotNo = coerce @Byron.SlotNumber @C.SlotNo $ Byron.cvsLastSlot cvs
 
-        byronTxOutToEvent :: (Byron.CompactTxIn, Byron.CompactTxOut) -> (C.TxIn, Event Utxo)
+        byronTxOutToEvent :: (Byron.CompactTxIn, Byron.CompactTxOut) -> (C.TxIn, Txo Unspent)
         byronTxOutToEvent (k, v) = (txIn, event)
           where
             txIn = C.fromByronTxIn $ Byron.fromCompactTxIn k :: C.TxIn
             txOut = fromByronTxOut $ Byron.fromCompactTxOut v
-            event = mkEvent slotNo dummyBlockHeaderHash 0 txIn $ unsafeCastToCurrentEra txOut
+            event = unspentTxo slotNo dummyBlockHeaderHash 0 0 txIn $ unsafeCastToCurrentEra txOut
 
     ledgerStateEventMapShelley
       :: forall proto lEra era
@@ -228,7 +267,7 @@ genesisUtxoFromLedgerState extLedgerState = State $ case O.ledgerState extLedger
          )
       => C.ShelleyBasedEra era
       -> O.LedgerState (O.ShelleyBlock proto lEra)
-      -> EventMap
+      -> EventMap Unspent
     ledgerStateEventMapShelley era st = st
       & O.shelleyLedgerState
       & Ledger.nesEs
@@ -240,14 +279,14 @@ genesisUtxoFromLedgerState extLedgerState = State $ case O.ledgerState extLedger
       & map ledgerToCardanoApi
       & Map.fromList
       where
-        ledgerToCardanoApi :: (Ledger.TxIn O.StandardCrypto, Ledger.TxOut lEra) -> (C.TxIn, Event Utxo)
+        ledgerToCardanoApi :: (Ledger.TxIn O.StandardCrypto, Ledger.TxOut lEra) -> (C.TxIn, Txo Unspent)
         ledgerToCardanoApi (k, v) = (txIn, event)
           where
             txIn = C.fromShelleyTxIn k
             txOut = C.fromShelleyTxOut era v
             event = mkEvent' txIn $ unsafeCastToCurrentEra txOut
 
-    mkEvent' = mkEvent 0 dummyBlockHeaderHash 0
+    mkEvent' = unspentTxo 0 dummyBlockHeaderHash 0 0
 
     dummyBlockHeaderHash :: C.Hash C.BlockHeader
     dummyBlockHeaderHash = fromString "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
@@ -260,42 +299,9 @@ fromByronTxOut (Byron.TxOut addr value) =
     (C.TxOutAdaOnly C.AdaOnlyInByronEra (C.fromByronLovelace value))
      C.TxOutDatumNone C.ReferenceScriptNone
 
-mkEvent
-  :: C.SlotNo
-  -> C.Hash C.BlockHeader
-  -> BlockIndex
-  -> C.TxIn
-  -> C.TxOut C.CtxTx CurrentEra
-  -> Event Utxo
-mkEvent slotNo blockHeaderHash bx txIn (C.TxOut a v txOutDatum _refScript) =
-  Event
-    { slotNo
-    , blockHeaderHash
-    , txIndexInBlock = bx
-    , txIn
-    , value = C.txOutValueToValue v
-    , address = toAddressAny a
-    , datum
-    , datumHash
-    }
-  where
-    (datum, datumHash) = case Datum.getTxOutDatumOrHash txOutDatum of
-      Nothing -> (Nothing, Nothing)
-      Just e -> case e of
-        Left hash -> (Nothing, Just hash)
-        Right (datumHash'', datum'') -> (Just datum'', Just datumHash'')
-
 storeStateFile :: FilePath -> SlotNoBhh -> State Utxo -> IO FilePath
 storeStateFile prefix slotNoBhh state =
   StateFile.store prefix slotNoBhh $ \path -> BS.writeFile path $ C.serialiseToCBOR state
-
-persistManySqlite :: SQL.Connection -> String -> [Event Utxo] -> IO ()
-persistManySqlite sqlConnection tableName events = SQL.executeMany sqlConnection query events
-  where
-    query =
-      " INSERT INTO "
-        <> fromString tableName
-        <> " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 -- * UTXO state
 
@@ -367,28 +373,27 @@ deriving via C.UsingRawBytes (C.Hash C.ScriptData) instance C.ToCBOR (C.Hash C.S
 deriving via C.UsingRawBytes (C.Hash C.ScriptData) instance C.FromCBOR (C.Hash C.ScriptData)
 
 -- | Event
-instance C.ToCBOR (Event Utxo) where
-  toCBOR e =
-    toCBOR
-      ( slotNo e
-      , blockHeaderHash e
-      , txIndexInBlock e
-      , txIn e
-      , value e
-      , address e
-      , datum e
-      , datumHash e
-      )
+instance C.ToCBOR TxoPrim where
+  toCBOR (Txo{..}) =
+       toCBOR slotNo
+    <> toCBOR blockHeaderHash
+    <> toCBOR blockNo
+    <> toCBOR txIndexInBlock
+    <> toCBOR txIn
+    <> toCBOR value
+    <> toCBOR address
+    <> toCBOR datumHash
 
-instance C.FromCBOR (Event Utxo) where
-  fromCBOR = do
-    (a, b, c, d, e, f, g, h) <- CBOR.fromCBOR
-    return $ Event a b c d e f g h
-
--- * Event
-
-type BlockIndex = Word64
-type EventMap = Map.Map C.TxIn (Event Utxo)
+instance C.FromCBOR TxoPrim where
+  fromCBOR = Txo
+    <$> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
+    <*> fromCBOR
 
 -- * Sqlite
 
@@ -398,26 +403,34 @@ sqliteInit c tableName = do
     " CREATE TABLE IF NOT EXISTS      \
     \  "
       <> fromString tableName
-      <> " \
-         \     ( slot_no INT NOT NULL      \
-         \     , block_hash BLOB NOT NULL  \
-         \     , tx_index INT NOT NULL     \
-         \     , tx_id TEXT NOT NULL       \
-         \     , tx_ix INT NOT NULL        \
-         \     , value BLOB                \
-         \     , address TEXT NOT NULL     \
-         \     , datum BLOB                \
-         \     , datum_hash BLOB          )"
+      <> "     ( slot_no           INT  NOT NULL \
+         \     , block_header_hash BLOB NOT NULL \
+         \     , block_no          INT  NOT NULL \
+         \     , tx_index          INT  NOT NULL \
+         \     , tx_id             TEXT NOT NULL \
+         \     , tx_ix             INT  NOT NULL \
+         \     , value             BLOB NOT NULL \
+         \     , address           TEXT NOT NULL \
+         \     , datum_hash        BLOB          \
+         \     , spent_by          TEXT NOT NULL \
+         \     , spent_at          INT  NOT NULL )"
 
-instance {-# OVERLAPPING #-} SQL.ToRow (Event Utxo) where
-  toRow (Event slotNo bhh bx (C.TxIn txId txIx) address value datum datumHash) =
+persistManySqlite :: SQL.Connection -> String -> [Event Utxo] -> IO ()
+persistManySqlite sqlConnection tableName events = SQL.executeMany sqlConnection query events
+  where
+    query = " INSERT INTO " <> fromString tableName <> " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+instance SQL.ToRow (Event Utxo) where
+  toRow (Event (Stxo (Txo slotNo bhh blockNo bx (C.TxIn txId_ txIx) address value datumHash) spentBy spentAt)) =
     [ SQL.toField slotNo
     , SQL.toField bhh
+    , SQL.toField blockNo
     , SQL.toField bx
-    , SQL.toField txId
+    , SQL.toField txId_
     , SQL.toField txIx
     , SQL.toField value
     , SQL.toField address
-    , SQL.toField datum
     , SQL.toField datumHash
+    , SQL.toField spentBy
+    , SQL.toField spentAt
     ]
