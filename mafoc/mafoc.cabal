@@ -57,6 +57,7 @@ library
     Mafoc.Core
     Mafoc.EpochResolution
     Mafoc.Exceptions
+    Mafoc.FieldNameAfterUnderscore
     Mafoc.LedgerState
     Mafoc.Signal
     Mafoc.StateFile
@@ -107,6 +108,7 @@ library
     , cardano-ledger-core
     , cardano-ledger-byron
     , cardano-crypto-wrapper
+    , cardano-slotting
 
     , cardano-ledger-alonzo
     , cardano-ledger-mary
@@ -131,6 +133,7 @@ library
     , prettyprinter
     , primitive
     , process
+    , servant-server
     , sqlite-simple
     , stm
     , streaming
@@ -169,7 +172,9 @@ executable mafoc
   build-depends:
     , base                  >=4.9 && <5
     , optparse-applicative
+    , servant-server
     , text
+    , warp
 
 test-suite mafoc-test
   import:         lang

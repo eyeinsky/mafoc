@@ -44,6 +44,7 @@ data MafocIOException
   -- | An escape-hatch exception: an exception where we don't bother
   -- with structure, but just explain in text. Perhaps we'll find a
   -- category later.
+  | Indexer_has_no_HTTP_API
   | TextException TS.Text
   deriving stock Show
   deriving anyclass Exception

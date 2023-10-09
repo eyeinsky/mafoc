@@ -6,6 +6,9 @@ module Main where
 import Control.Exception qualified as IO
 import Options.Applicative qualified as Opt
 import Data.Text qualified as TS
+import Network.Wai.Handler.Warp qualified as Warp
+import Servant.Server qualified as Servant
+
 
 import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
@@ -14,7 +17,7 @@ import Cardano.BM.Data.Severity qualified as CM
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, RunIndexer)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -43,20 +46,28 @@ main = do
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-      IndexerCommand indexerCommand' batchSize severity -> let
+      IndexerCommand indexerCommand' batchSize severity maybePort -> let
+        runIndexerNoApi :: (Indexer a, Show a) => a -> RunIndexer
+        runIndexerNoApi configFromCli = case maybePort of
+          Just _port -> \_ _ _ _ _ -> E.throwIO E.Indexer_has_no_HTTP_API
+          Nothing -> runIndexer configFromCli Nothing
         runIndexer' = case indexerCommand' of
-          BlockBasics        configFromCli -> runIndexer configFromCli
-          MintBurn           configFromCli -> runIndexer configFromCli
-          NoOp               configFromCli -> runIndexer configFromCli
-          EpochStakepoolSize configFromCli -> runIndexer configFromCli
-          EpochNonce         configFromCli -> runIndexer configFromCli
-          ScriptTx           configFromCli -> runIndexer configFromCli
-          Deposit            configFromCli -> runIndexer configFromCli
-          AddressDatum       configFromCli -> runIndexer configFromCli
-          Utxo               configFromCli -> runIndexer configFromCli
-          AddressBalance     configFromCli -> runIndexer configFromCli
-          Datum              configFromCli -> runIndexer configFromCli
-          Mamba              configFromCli -> runIndexer configFromCli
+          BlockBasics        configFromCli -> runIndexerNoApi configFromCli
+          MintBurn           configFromCli -> runIndexerNoApi configFromCli
+          NoOp               configFromCli -> runIndexerNoApi configFromCli
+          EpochStakepoolSize configFromCli -> runIndexerNoApi configFromCli
+          EpochNonce         configFromCli -> runIndexerNoApi configFromCli
+          ScriptTx           configFromCli -> runIndexerNoApi configFromCli
+          Deposit            configFromCli -> runIndexerNoApi configFromCli
+          AddressDatum       configFromCli -> runIndexerNoApi configFromCli
+          Utxo               configFromCli -> runIndexerNoApi configFromCli
+          AddressBalance     configFromCli -> runIndexerNoApi configFromCli
+          Datum              configFromCli -> runIndexerNoApi configFromCli
+          Mamba              configFromCli -> runIndexer      configFromCli $ case maybePort of
+            Just port -> Just $ \runtime mvar -> do
+              let app = Servant.serve (Proxy @(API Mamba.Mamba)) $ server runtime mvar
+              Warp.run port app
+            Nothing -> Nothing
         in runIndexer' batchSize stopSignal checkpointSignal statsSignal severity
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal statsSignal
@@ -76,7 +87,7 @@ printRollbackException io = io `IO.catches`
 
 data Command
   = Speed Speed.BlockSource
-  | IndexerCommand IndexerCommand BatchSize CM.Severity
+  | IndexerCommand IndexerCommand BatchSize CM.Severity (Maybe Int)
   | FoldLedgerState FoldLedgerState.FoldLedgerState
   | SlotNoChainPoint FilePath C.SlotNo
   deriving Show
@@ -133,6 +144,7 @@ indexerCommand name f = Opt.command name $ Opt.parserToParserInfo descr (name <>
   <$> (f <$> parseCli @a)
   <*> Opt.commonBatchSize
   <*> Opt.commonLogSeverity
+  <*> Opt.commonRunHttpApi
   where
     descr = TS.unpack (description @a)
 

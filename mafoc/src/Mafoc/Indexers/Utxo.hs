@@ -81,7 +81,39 @@ instance Indexer Utxo where
   newtype State Utxo = State (EventMap Unspent)
     deriving newtype (Eq, Semigroup, Monoid, CBOR.ToCBOR, CBOR.FromCBOR)
 
-  toEvents _runtime (State utxos0) blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = (State utxos1, events1)
+  toEvents _runtime state blockInMode = toEventsPrim state blockInMode
+
+  initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
+
+    networkId <- #getNetworkId chainsync
+    chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
+    let (dbPath, tableName) = defaultTableName "utxo" dbPathAndTableName
+    sqlCon <- sqliteOpen dbPath
+    sqliteInit sqlCon tableName
+
+    -- (state, cp) <- do
+    --   (_, extLedgerState) <- Marconi.getInitialExtLedgerState (coerce (#nodeConfig chainsync :: NodeConfig))
+    --   StateFile.loadLatest stateFilePrefix_ parseState (return $ genesisUtxoFromLedgerState extLedgerState)
+
+    (state, cp) <- do
+      genesisConfig <- LedgerState.getGenesisConfig (#nodeConfig chainsync)
+      StateFile.loadLatest stateFilePrefix_ parseState (return $ byronGenesisUtxoFromConfig genesisConfig)
+
+    case cp of
+      C.ChainPoint{} -> traceInfo trace $ "Found checkpoint: " <> pretty cp
+      C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
+
+    let chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
+    return (state, chainsyncRuntime', Runtime sqlCon tableName stateFilePrefix_)
+
+  persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
+
+  checkpoint Runtime{stateFilePrefix} state slotNoBhh = void $ storeStateFile stateFilePrefix slotNoBhh state
+
+-- * Library
+
+toEventsPrim :: State Utxo -> C.BlockInMode era -> (State Utxo, [Event Utxo])
+toEventsPrim (State utxos0) blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = (State utxos1, events1)
     where
       slotNo' = #slotNo blockInMode
       (utxos1, _, events1) = foldl step (utxos0, 0, []) txs
@@ -121,35 +153,6 @@ instance Indexer Utxo where
             Just txo -> (spentTxIn, spend txId slotNo' txo)
             Nothing -> E.throw $ E.UTxO_not_found spentTxIn (#blockNo bh) (#slotNo bh) (#blockHeaderHash bh)
             -- ^ All spent utxo's must be found in the Utxo set, thus we throw.
-
-  initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
-
-    networkId <- #getNetworkId chainsync
-    chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
-    let (dbPath, tableName) = defaultTableName "utxo" dbPathAndTableName
-    sqlCon <- sqliteOpen dbPath
-    sqliteInit sqlCon tableName
-
-    -- (state, cp) <- do
-    --   (_, extLedgerState) <- Marconi.getInitialExtLedgerState (coerce (#nodeConfig chainsync :: NodeConfig))
-    --   StateFile.loadLatest stateFilePrefix_ parseState (return $ genesisUtxoFromLedgerState extLedgerState)
-
-    (state, cp) <- do
-      genesisConfig <- LedgerState.getGenesisConfig (#nodeConfig chainsync)
-      StateFile.loadLatest stateFilePrefix_ parseState (return $ byronGenesisUtxoFromConfig genesisConfig)
-
-    case cp of
-      C.ChainPoint{} -> traceInfo trace $ "Found checkpoint: " <> pretty cp
-      C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
-
-    let chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
-    return (state, chainsyncRuntime', Runtime sqlCon tableName stateFilePrefix_)
-
-  persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
-
-  checkpoint Runtime{stateFilePrefix} state slotNoBhh = void $ storeStateFile stateFilePrefix slotNoBhh state
-
--- * Library
 
 data Stxo = Stxo
   { txo :: TxoPrim

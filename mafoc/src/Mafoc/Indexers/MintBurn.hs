@@ -92,25 +92,7 @@ instance Indexer MintBurn where
 
   data State MintBurn = EmptyState
 
-  toEvents Runtime{assetFilter} _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, events)
-    where
-      events :: [Event MintBurn]
-      events = do
-        (bx, C.Tx txb _) <- zip [0 ..] txs
-        (policyId, assetName, quantity, maybeRedeemer) <- case txb of
-          C.ShelleyTxBody era shelleyTx _ _ _ _ -> case era of
-            C.ShelleyBasedEraShelley -> []
-            C.ShelleyBasedEraAllegra -> []
-            C.ShelleyBasedEraMary -> []
-            C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
-            C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
-            C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
-          _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
-        guard $ assetFilter policyId assetName -- TODO optimize away
-        pure $ Event
-          (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
-          (#calculateTxId txb) bx
-          policyId assetName quantity maybeRedeemer
+  toEvents Runtime{assetFilter} _state blockInMode = (EmptyState, toEventsPrim assetFilter blockInMode)
 
   initialize MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
@@ -127,6 +109,28 @@ instance Indexer MintBurn where
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
+
+-- | Separate from class for reuse: this way we don't need to add
+-- dummy runtime and state when we want to call create MintBurn events
+-- outside of this indexer.
+toEventsPrim :: (C.PolicyId -> C.AssetName -> Bool) -> C.BlockInMode C.CardanoMode -> [Event MintBurn]
+toEventsPrim assetFilter blockInMode@(C.BlockInMode (C.Block _ txs) _) = do
+  (bx, C.Tx txb _) <- zip [0 ..] txs
+  (policyId, assetName, quantity, maybeRedeemer) <- case txb of
+    C.ShelleyTxBody era shelleyTx _ _ _ _ -> case era of
+      C.ShelleyBasedEraShelley -> []
+      C.ShelleyBasedEraAllegra -> []
+      C.ShelleyBasedEraMary -> []
+      C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
+      C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
+      C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
+    _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
+  guard $ assetFilter policyId assetName -- TODO optimize away
+  pure $ Event
+    (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
+    (#calculateTxId txb) bx
+    policyId assetName quantity maybeRedeemer
+
 
 -- * SQLite
 

@@ -31,12 +31,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.SQLite.Simple qualified as SQL
+import Database.SQLite.Simple.ToField qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
 import Options.Applicative qualified as O
 import Prettyprinter (Doc, Pretty (pretty), (<+>))
 import Streaming qualified as S
 import Streaming.Prelude qualified as S
 import System.FilePath ((</>))
+import Servant.Server qualified as Servant
 
 import Cardano.Api qualified as C
 import Cardano.BM.Setup (withTrace)
@@ -106,17 +108,21 @@ class Indexer a where
   -- runtime. Checkpoints are used for resuming
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
--- | Run an indexer
-runIndexer
-  :: forall a . (Indexer a, Show a)
-  => a
-  -> BatchSize
+type RunIndexer =
+     BatchSize
   -> Signal.Stop
   -> Signal.Checkpoint
   -> Signal.ChainsyncStats
   -> CM.Severity
   -> IO ()
-runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = do
+
+-- | Run an indexer
+runIndexer
+  :: forall a . (Indexer a, Show a)
+  => a
+  -> Maybe (Runtime a -> IO.MVar (State a, BatchState a) -> IO ())
+  -> RunIndexer
+runIndexer cli maybeApiServer batchSize stopSignal checkpointSignal statsSignal minSeverity = do
   c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
     initialNotice cli batchSize minSeverity trace
@@ -124,7 +130,14 @@ runIndexer cli batchSize stopSignal checkpointSignal statsSignal minSeverity = d
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
     let (fromChainPoint, upTo) = interval lcr
     initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
-    let persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize
+    persistStep' <- case maybeApiServer of
+      Nothing -> return $ persistStep trace indexerRuntime checkpointSignal batchSize
+      Just runServer -> do
+        mvar <- IO.newMVar (indexerInitialState, initialBatchState)
+        _ <- IO.forkIO $ runServer indexerRuntime mvar -- start HTTP API server
+        return $ \batchState tup@(_, _, indexerState) -> do
+          _ <- IO.swapMVar mvar (indexerState, batchState) -- update mvar with indexer state and batch state
+          persistStep trace indexerRuntime checkpointSignal batchSize batchState tup
 
     maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
 
@@ -256,6 +269,16 @@ persistStepFinal indexerRuntime batchState trace = case batchState of
 
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
+
+-- * HTTP
+
+-- ** REST API
+
+class Indexer a => IndexerHttpApi a where
+
+  type API a
+
+  server :: Runtime a -> IO.MVar (State a, BatchState a) -> Servant.Server (API a)
 
 -- * Trace
 
@@ -460,6 +483,21 @@ loadLatestTrace prefix init_ load trace = do
 
 -- * Sqlite
 
+-- | Helper to query with a single param
+query1 :: (SQL.ToField q, SQL.FromRow r) => SQL.Connection -> SQL.Query -> q -> IO [r]
+query1 con query param = SQL.query con query $ SQL.Only param
+
+-- ** Optional conditions
+
+mkParam :: SQL.ToField v => SQL.Query -> TS.Text -> v -> (SQL.NamedParam, SQL.Query)
+mkParam condition label value = (label SQL.:= value, condition)
+
+-- | Convert @[":field1 = field1", ":field2 = field2"]@ into @":field1 = field1 AND :field2 = field2"@
+andFilters :: [SQL.Query] -> SQL.Query
+andFilters = \case
+  [] -> " TRUE "
+  filters -> coerce $ TS.intercalate " AND " $ coerce filters
+
 -- ** Database path and table name defaulting
 
 data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
@@ -572,3 +610,8 @@ mkMaybeAddressFilter :: [C.Address C.ShelleyAddr] -> Maybe (C.Address C.ShelleyA
 mkMaybeAddressFilter addresses = case addresses of
   [] -> Nothing
   _ -> Just $ \address -> address `elem` Set.fromList addresses
+
+-- * Generic
+
+todo :: a
+todo = undefined

@@ -277,6 +277,12 @@ commonMaybeAssetId = O.option (O.eitherReader parse) (longOpt "asset-id" "Either
     parseAssetName :: String -> Either String C.AssetName
     parseAssetName = first show . C.deserialiseFromRawBytesHex C.AsAssetName . TS.encodeUtf8 . TS.pack
 
+commonRunHttpApi :: O.Parser (Maybe Int)
+commonRunHttpApi = O.option (Just <$> O.eitherReader (readEither @Int)) $
+  longOpt "http-api" "Run HTTP API if the indexer has one."
+  <> O.metavar "PORT"
+  <> O.value Nothing
+
 -- * String parsers
 
 -- ** Interval
