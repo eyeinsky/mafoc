@@ -49,6 +49,9 @@ instance IsLabel "slotNoBhh" (C.Block era -> SlotNoBhh) where
 instance IsLabel "slotNoBhh" (C.BlockInMode era -> SlotNoBhh) where
   fromLabel (C.BlockInMode block _eim) = fromLabel @"slotNoBhh" block
 
+instance IsLabel "slotNo" (SlotNoBhh -> C.SlotNo) where
+  fromLabel (slotNo, _) = slotNo
+
 getSecurityParamAndNetworkId :: FilePath -> IO (Marconi.SecurityParam, C.NetworkId)
 getSecurityParamAndNetworkId nodeConfig = do
   (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
@@ -356,7 +359,7 @@ lastMary = (39916796, "e72579ff89dc9ed325b723a33624b596c08141c7bd573ecfff56a1f72
 lastAlonzo = (72316796, "c58a24ba8203e7629422a24d9dc68ce2ed495420bf40d9dab124373655161a20")
 
 data LedgerEra = Byron | Shelley | Allegra | Mary | Alonzo | Babbage
-  deriving (Eq, Ord, Enum, Bounded, Show)
+  deriving (Eq, Ord, Enum, Bounded, Show, Generic, C.ToJSON)
 
 lastBlockOf :: LedgerEra -> Maybe SlotNoBhh
 lastBlockOf = \case
@@ -377,6 +380,12 @@ lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPo
     -- Because we zip eras with it's tail, then the first era of the
     -- pair always has a last block.
     impossible = error "!!! Last block for previous ledger era always exists"
+
+slotEra :: C.SlotNo -> LedgerEra
+slotEra slotNo = fromMaybe maxBound $ fmap snd $ listToMaybe $ dropWhile ((slotNo >) . fst) list
+  where
+    allEras = [minBound .. maxBound] :: [LedgerEra]
+    list = mapMaybe (\era -> (, era) . #slotNo <$> lastBlockOf era) allEras :: [(C.SlotNo, LedgerEra)]
 
 newtype TxIndexInBlock = TxIndexInBlock Word64
   deriving newtype (Show, Eq, Ord, Num, Enum, SQL.ToField, SQL.FromField, C.ToJSON, C.FromJSON, C.ToCBOR, C.FromCBOR)

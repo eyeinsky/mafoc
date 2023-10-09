@@ -54,6 +54,7 @@ import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh,
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
                       , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath), TxIndexInBlock
                       , txAddressDatums, txDatums, plutusDatums, allDatums, maybeDatum, txPlutusDatums
+                      , LedgerEra, slotEra
                       )
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.Signal qualified as Signal

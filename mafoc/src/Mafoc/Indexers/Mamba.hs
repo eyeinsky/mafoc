@@ -31,6 +31,7 @@ import Mafoc.Core
   , sqliteOpen
   , sqliteInitCheckpoints
   , loadLatestTrace
+  , LedgerEra, slotEra
   )
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.Exceptions qualified as E
@@ -74,6 +75,8 @@ instance Indexer Mamba where
     , ledgerCfg :: LedgerState.ExtLedgerCfg_
     , ledgerStateFile :: FilePath
     , utxoStateFile :: FilePath
+    , eraHistory :: C.EraHistory C.CardanoMode
+    , systemStart :: C.SystemStart
     }
 
   data State Mamba = State
@@ -144,8 +147,11 @@ instance Indexer Mamba where
               "Startingpoint specified on the command line is later than the starting point found in indexer state: "
               <> TS.pack (show cliCp) <> " vs " <> TS.pack (show stateCp)
 
+        let lnc = localNodeConnection localChainsyncRuntime
+        eraHistory <- either E.throwShow pure =<< C.queryNodeLocalState lnc Nothing (C.QueryEraHistory C.CardanoModeIsMultiEra)
+        systemStart <- either E.throwShow pure =<< C.queryNodeLocalState lnc Nothing C.QuerySystemStart
         let state = State extLedgerState (LedgerState.getEpochNo extLedgerState) utxoState 0
-            runtime = Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, ledgerCfg, ledgerStateFile, utxoStateFile}
+            runtime = Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, ledgerCfg, ledgerStateFile, utxoStateFile, eraHistory, systemStart}
         return (state, localChainsyncRuntime, runtime)
 
   persistMany Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, ledgerCfg} events = do
