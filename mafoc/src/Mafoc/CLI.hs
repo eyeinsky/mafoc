@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 module Mafoc.CLI where
 
+import Data.Time (NominalDiffTime)
 import Data.List qualified as L
 import Data.Text qualified as TS
 import Data.Text.Encoding qualified as TS
@@ -17,7 +18,7 @@ import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
-                   UpTo (CurrentTip, Infinity, SlotNo))
+                   UpTo (CurrentTip, Infinity, SlotNo), CheckpointInterval(Every, Never))
 import Mafoc.Upstream (LedgerEra, lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
@@ -175,13 +176,13 @@ commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.val
 commonProfilingConfig :: O.Parser (Maybe ProfilingConfig)
 commonProfilingConfig = commonProfileSingleField <|> ensureAtLeastOneField <$> multiFieldPrim
   where
-    multiFieldPrim :: O.Parser (Maybe Natural, Maybe FilePath, Maybe String)
+    multiFieldPrim :: O.Parser (Maybe NominalDiffTime, Maybe FilePath, Maybe String)
     multiFieldPrim = (,,)
-      <$> O.option (O.maybeReader $ Just . Read.readMaybe) (longOpt "profile-sample-rate" sampleRateLong <> O.value Nothing)
+      <$> O.option (O.eitherReader $ fmap Just . parseNominalDiffTime) (longOpt "profile-sample-rate" sampleRateLong <> O.value Nothing)
       <*> O.option (O.maybeReader $ Just . Just) (longOpt "profile-outfile" outfileLong <> O.value Nothing)
       <*> O.option (O.maybeReader $ Just . Just) (longOpt "profile-comment" commentLong <> O.value Nothing)
 
-    ensureAtLeastOneField :: (Maybe Natural, Maybe FilePath, Maybe String) -> Maybe ProfilingConfig
+    ensureAtLeastOneField :: (Maybe NominalDiffTime, Maybe FilePath, Maybe String) -> Maybe ProfilingConfig
     ensureAtLeastOneField (a, b, c) = if
       | Just sampleRate <- a -> Just $ ProfilingConfig sampleRate             (defaultOutfileF b) (defaultCommentF c)
       | Just outfile    <- b -> Just $ ProfilingConfig (defaultSampleRateF a) outfile             (defaultCommentF c)
@@ -283,7 +284,40 @@ commonRunHttpApi = O.option (Just <$> O.eitherReader (readEither @Int)) $
   <> O.metavar "PORT"
   <> O.value Nothing
 
+commonCheckpointInterval :: O.Parser CheckpointInterval
+commonCheckpointInterval = O.option (O.eitherReader parse) $
+  longOpt "checkpoint-interval" "Checkpoint interval in seconds (default), [m]inutes, [h]ours or [d]ays."
+  <> O.metavar "DECIMAL"
+  <> O.value (Every $ 5 * 60) -- every five minutes
+  where
+    parse :: String -> Either String CheckpointInterval
+    parse str = case str of
+      "never" -> Right Never
+      _ ->  (\n -> if n == 0 then Never else Every n ) <$> parseNominalDiffTime str
+
 -- * String parsers
+
+-- ** NominalDiffTime
+
+parseNominalDiffTime :: String -> Either String NominalDiffTime
+parseNominalDiffTime str = case NE.nonEmpty str of
+  Nothing -> Left "empty string"
+  Just str' -> let (digits, suffix) = NE.span (\c -> isDigit c || c == '.') str'
+    in case NE.nonEmpty digits of
+      Nothing -> Left $ "must be number with a time unit: " <> unitsHelp
+      Just digits' -> let
+        unitMultiplier :: Either String NominalDiffTime
+        unitMultiplier = case suffix of
+          ""  -> Right 1
+          "s" -> Right 1
+          "m" -> Right 60
+          "h" -> Right $ 60 * 60
+          "d" -> Right $ 24 * 60 * 60
+          _ -> Left $ "unknown time unit, supported units are: " <> unitsHelp
+        scalar = realToFrac <$> readEither @Double (NE.toList digits')
+        in (*) <$> scalar <*> unitMultiplier
+  where
+    unitsHelp = "s(econd), m(inute), h(our), d(ay)"
 
 -- ** Interval
 

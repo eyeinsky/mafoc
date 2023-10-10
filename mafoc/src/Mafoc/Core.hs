@@ -29,7 +29,7 @@ import Control.Concurrent.STM.TChan qualified as TChan
 import Control.Exception qualified as E
 import Data.Set qualified as Set
 import Data.Text qualified as TS
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
 import GHC.OverloadedLabels (IsLabel (fromLabel))
@@ -114,6 +114,7 @@ type RunIndexer =
   -> Signal.Checkpoint
   -> Signal.ChainsyncStats
   -> CM.Severity
+  -> CheckpointInterval
   -> IO ()
 
 -- | Run an indexer
@@ -122,22 +123,24 @@ runIndexer
   => a
   -> Maybe (Runtime a -> IO.MVar (State a, BatchState a) -> IO ())
   -> RunIndexer
-runIndexer cli maybeApiServer batchSize stopSignal checkpointSignal statsSignal minSeverity = do
+runIndexer cli maybeApiServer batchSize stopSignal checkpointSignal statsSignal minSeverity checkpointInterval = do
   c <- defaultConfigStderrSeverity minSeverity
   withTrace c "mafoc" $ \trace -> do
-    initialNotice cli batchSize minSeverity trace
+    initialNotice cli batchSize minSeverity checkpointInterval trace
 
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
     let (fromChainPoint, upTo) = interval lcr
     initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
-    persistStep' <- case maybeApiServer of
-      Nothing -> return $ persistStep trace indexerRuntime checkpointSignal batchSize
-      Just runServer -> do
-        mvar <- IO.newMVar (indexerInitialState, initialBatchState)
-        _ <- IO.forkIO $ runServer indexerRuntime mvar -- start HTTP API server
-        return $ \batchState tup@(_, _, indexerState) -> do
-          _ <- IO.swapMVar mvar (indexerState, batchState) -- update mvar with indexer state and batch state
-          persistStep trace indexerRuntime checkpointSignal batchSize batchState tup
+    persistStep'' <- let
+      persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
+      in case maybeApiServer of
+        Nothing -> return persistStep'
+        Just runServer -> do
+          mvar <- IO.newMVar (indexerInitialState, initialBatchState)
+          _ <- IO.forkIO $ runServer indexerRuntime mvar -- start HTTP API server
+          return $ \batchState tup@(_, _, indexerState) -> do
+            _ <- IO.swapMVar mvar (indexerState, batchState) -- update mvar with indexer state and batch state
+            persistStep' batchState tup
 
     maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
 
@@ -162,7 +165,7 @@ runIndexer cli maybeApiServer batchSize stopSignal checkpointSignal statsSignal 
       -- Persist events in batches and write a checkpoint. Do this
       -- either when `batchSize` amount of events is collected or when
       -- a time limit is reached.
-      & S.foldM_ persistStep' (pure initialBatchState) pure
+      & S.foldM_ persistStep'' (pure initialBatchState) pure
 
     -- Streaming done, write final batch of events and checkpoint
     maybeCp <- persistStepFinal indexerRuntime batchState trace
@@ -201,9 +204,9 @@ getBufferedEvents = \case
 
 persistStep
   :: forall a . Indexer a
-  => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize
+  => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize -> CheckpointPredicateInterval
   -> BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
-persistStep trace indexerRuntime checkpointSignal batchSize batchState (slotNoBhh, newEvents, indexerState) = do
+persistStep trace indexerRuntime checkpointSignal batchSize isCheckpointTimeP batchState (slotNoBhh, newEvents, indexerState) = do
   let lastCheckpointTime' = lastCheckpointTime batchState
 
   now :: UTCTime <- getCurrentTime
@@ -217,7 +220,7 @@ persistStep trace indexerRuntime checkpointSignal batchSize batchState (slotNoBh
         return $ BatchEmpty now slotNoBhh indexerState
 
       isCheckpointTime :: Bool
-      isCheckpointTime = diffUTCTime now lastCheckpointTime' > 10
+      isCheckpointTime = isCheckpointTimeP lastCheckpointTime' now
 
       bufferedEvents = getBufferedEvents batchState
       bufferedAndNewEvents = newEvents : bufferedEvents
@@ -270,6 +273,21 @@ persistStepFinal indexerRuntime batchState trace = case batchState of
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
 
+-- * Checkpoint interval
+
+data CheckpointInterval
+  = Never
+  | Every NominalDiffTime
+  deriving (Eq, Show)
+
+type CheckpointPredicateInterval = UTCTime -> UTCTime -> Bool
+
+checkpointIntervalPredicate :: CheckpointInterval -> CheckpointPredicateInterval
+checkpointIntervalPredicate = \case
+  Never -> \_lastCheckpointTime _now -> True
+  Every n ->  \lastCheckpointTime now -> diffUTCTime now lastCheckpointTime > n
+
+
 -- * HTTP
 
 -- ** REST API
@@ -282,11 +300,12 @@ class Indexer a => IndexerHttpApi a where
 
 -- * Trace
 
-initialNotice :: Show a => a -> BatchSize -> CM.Severity -> Trace.Trace IO TS.Text -> IO ()
-initialNotice cli batchSize minSeverity trace = traceNotice trace
+initialNotice :: Show a => a -> BatchSize -> CM.Severity -> CheckpointInterval -> Trace.Trace IO TS.Text -> IO ()
+initialNotice cli batchSize minSeverity checkpointInterval trace = traceNotice trace
   $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
                 <> "\n  Batch size: " <> pretty (show batchSize)
                 <> "\n  Logging severity: " <> pretty (show minSeverity)
+                <> "\n  Checkpoint interval: " <> pretty (show checkpointInterval)
 
 -- * Local chainsync: config and runtime
 

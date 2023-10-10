@@ -75,7 +75,7 @@ renderDefault = renderStrict . layoutPretty defaultLayoutOptions
 -- * Profiling
 
 data ProfilingConfig = ProfilingConfig
-  { sampleRate_ :: Natural
+  { sampleRate_ :: NominalDiffTime
   , destination :: FilePath
   , comment :: String
   } deriving (Show)
@@ -98,8 +98,7 @@ getHandle outStr logMsg = do
   IO.hSetBuffering handle IO.LineBuffering $> handle
 
 profilerInit :: CM.Trace IO TS.Text -> String -> ProfilingConfig -> IO ProfilingRuntime
-profilerInit trace showedCli (ProfilingConfig n outStr comment) = do
-  let sampleRate = fromInteger $ toInteger n :: NominalDiffTime
+profilerInit trace showedCli (ProfilingConfig sampleRate outStr comment) = do
   let logMsg dest = traceNotice trace $ "Profiling enabled: using " <> dest <> " for output, sample rate " <> pretty (show sampleRate)
   ensureRtsStats
   handle <- getHandle outStr logMsg
