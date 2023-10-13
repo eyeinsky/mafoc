@@ -26,7 +26,7 @@ import Mafoc.Core
   , SlotNoBhh, TxIndexInBlock, maybeDatum
   )
 import Mafoc.Upstream (toAddressAny, NodeConfig)
-import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra, byronGenesisUtxoFromConfig)
+import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra, byronGenesisUtxoFromConfig, OnUtxo(OnUtxo, found, missing, toResult))
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.Exceptions qualified as E
 import Mafoc.LedgerState qualified as LedgerState
@@ -36,6 +36,7 @@ data Utxo = Utxo
   { chainsync :: LocalChainsyncConfig NodeConfig
   , dbPathAndTableName :: DbPathAndTableName
   , stateFilePrefix_ :: FilePath
+  , ignoreMissingUtxos :: Bool
   }
   deriving (Show)
 
@@ -48,11 +49,13 @@ instance Indexer Utxo where
       <$> O.mkCommonLocalChainsyncConfig O.commonNodeConnectionAndConfig
       <*> O.commonDbPathAndTableName
       <*> O.commonUtxoState
+      <*> O.commonIgnoreMissingUtxos
 
   data Runtime Utxo = Runtime
     { sqlConnection :: SQL.Connection
     , tableName :: String
     , stateFilePrefix :: FilePath
+    , onUtxo :: OnUtxo (Txo Unspent) (C.TxIn, Stxo)
     }
 
   newtype Event Utxo = Event (Txo Spent)
@@ -61,9 +64,9 @@ instance Indexer Utxo where
   newtype State Utxo = State (EventMap Unspent)
     deriving newtype (Eq, Semigroup, Monoid, CBOR.ToCBOR, CBOR.FromCBOR)
 
-  toEvents _runtime state blockInMode = toEventsPrim state blockInMode
+  toEvents Runtime{onUtxo} state blockInMode = toEventsPrim state onUtxo blockInMode
 
-  initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_} trace = do
+  initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_, ignoreMissingUtxos} trace = do
 
     networkId <- #getNetworkId chainsync
     chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
@@ -81,7 +84,9 @@ instance Indexer Utxo where
       C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
 
     let chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
-    return (state, chainsyncRuntime', Runtime sqlConnection tableName stateFilePrefix_)
+        onUtxo = if ignoreMissingUtxos then onUtxoIgnoreMissing else onUtxoDefault
+        runtime = Runtime{ sqlConnection, tableName, stateFilePrefix = stateFilePrefix_, onUtxo}
+    return (state, chainsyncRuntime', runtime)
 
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 
@@ -89,10 +94,27 @@ instance Indexer Utxo where
 
 -- * Event
 
-toEventsPrim :: State Utxo -> C.BlockInMode era -> (State Utxo, [Event Utxo])
-toEventsPrim (State utxos0) blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = (State utxos1, events1)
+onUtxoDefault :: OnUtxo TxoPrim (C.TxIn, Stxo)
+onUtxoDefault = OnUtxo
+  { found =   \spentTxIn  txId (slotNo, _bhh) utxo -> (spentTxIn, spend txId slotNo utxo)
+  , missing = \spentTxIn _txId (slotNo,  bhh) -> E.throw $ E.UTxO_not_found spentTxIn slotNo bhh
+  , toResult = id
+  }
+
+onUtxoIgnoreMissing :: OnUtxo TxoPrim (C.TxIn, Stxo)
+onUtxoIgnoreMissing = OnUtxo
+  { found =   \ spentTxIn  txId (slotNo, _bhh) utxo -> Just (spentTxIn, spend txId slotNo utxo)
+  , missing = \_spentTxIn _txId _slotNoBhh -> Nothing
+  , toResult = catMaybes
+  }
+
+
+toEventsPrim :: State Utxo -> OnUtxo (Txo Unspent) (C.TxIn, Stxo) -> C.BlockInMode era -> (State Utxo, [Event Utxo])
+toEventsPrim (State utxos0) OnUtxo{found, missing, toResult} blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = (State utxos1, events1)
   where
-    slotNo' = #slotNo blockInMode
+    slotNo = #slotNo blockInMode
+    blockNo = #blockNo blockInMode
+    bhh = #blockHeaderHash bh
     (utxos1, _, events1) = foldl step (utxos0, 0, []) txs
     step
       :: forall era . (C.IsCardanoEra era)
@@ -111,25 +133,18 @@ toEventsPrim (State utxos0) blockInMode@(C.BlockInMode (C.Block bh txs) _eim) = 
         (spentTxIns, txosNew) = txoEvent tx :: TxoEvent era
 
         txosNew' :: EventMap Unspent
-        txosNew' =
-          txosNew
-            & unsafeCastEra
-            & addTxId txId
-            & map (\(txIn, txOut) -> let
-                event = unspentTxo
-                  slotNo'
-                  (#blockHeaderHash blockInMode)
-                  (#blockNo blockInMode)
-                  bx txIn txOut
-                in (txIn, event))
-            & Map.fromList
+        txosNew' = txosNew
+          & unsafeCastEra
+          & addTxId txId
+          & map (\(txIn, txOut) -> (txIn, unspentTxo slotNo bhh blockNo bx txIn txOut))
+          & Map.fromList
 
-        stxos :: [(C.TxIn, Txo Spent)]
         utxosRemaining :: EventMap Unspent
-        (stxos, utxosRemaining) = spendTxos ([], utxos) spentTxIns $ \spentTxIn maybeTxo -> case maybeTxo of
-          Just txo -> (spentTxIn, spend txId slotNo' txo)
-          Nothing -> E.throw $ E.UTxO_not_found spentTxIn (#slotNo bh) (#blockHeaderHash bh)
-          -- ^ All spent utxo's must be found in the Utxo set, thus we throw.
+        (stxos', utxosRemaining) = spendTxos ([], utxos) spentTxIns $ \spentTxIn maybeTxo -> case maybeTxo of
+          Just txo ->   found spentTxIn txId (slotNo, bhh) txo
+          Nothing  -> missing spentTxIn txId (slotNo, bhh)
+        stxos :: [(C.TxIn, Txo Spent)]
+        stxos = toResult stxos'
 
 data Stxo = Stxo
   { txo :: TxoPrim

@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ExistentialQuantification #-}
 module Mafoc.Utxo where
 
 import Data.Map qualified as Map
@@ -34,10 +35,20 @@ import Marconi.ChainIndex.Types qualified as Marconi
 import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 import Mafoc.Exceptions qualified as E
 
+import Mafoc.Upstream (SlotNoBhh)
+
 type UtxoMapEra era = Map.Map C.TxIn (C.TxOut C.CtxTx era)
 type UtxoMap = UtxoMapEra Marconi.CurrentEra
 type UtxoListEra era = [(C.TxIn, C.TxOut C.CtxTx era)]
 type UtxoList = UtxoListEra Marconi.CurrentEra
+
+
+-- | Utxo resolving strategy
+data OnUtxo elem result = forall a . OnUtxo
+  { missing  :: C.TxIn -> C.TxId -> SlotNoBhh -> a
+  , found    :: C.TxIn -> C.TxId -> SlotNoBhh -> elem -> a
+  , toResult :: [a] -> [result]
+  }
 
 -- | Spend a list of txIns from the utxo map in init.
 spendTxos
@@ -52,7 +63,9 @@ spendTxos init_ txIns mkSpent = foldl step init_ txIns
     step :: ([spend], Map.Map k v) -> k -> ([spend], Map.Map k v)
     step (spentTxos, utxoMap') txIn = Map.alterF popUtxo txIn utxoMap'
       where
-        popUtxo found = (mkSpent txIn found : spentTxos, Nothing)
+        popUtxo found_ = (mkSpent txIn found_ : spentTxos, Nothing)
+
+--
 
 addTxId :: C.TxId -> [(C.TxIx, a)] -> [(C.TxIn, a)]
 addTxId txId list = map (\(ix, a) -> (C.TxIn txId ix, a)) list

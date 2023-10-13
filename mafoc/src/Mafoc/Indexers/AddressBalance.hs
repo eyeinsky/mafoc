@@ -24,13 +24,16 @@ import Mafoc.Core (
   SlotNoBhh,
   SlotNoBhhString(SlotNoBhhString),
   AssetIdString(AssetIdString),
+  CurrentEra
  )
 import Mafoc.Utxo qualified as Utxo
 import Mafoc.Upstream (txoAddressAny, toAddressAny)
+import Mafoc.Exceptions qualified as E
 
 data AddressBalance = AddressBalance
   { chainsync :: LocalChainsyncConfig_
   , addresses :: NE.NonEmpty (C.Address C.ShelleyAddr)
+  , ignoreMissingUtxos :: Bool
   }
   deriving (Show)
 
@@ -41,8 +44,12 @@ instance Indexer AddressBalance where
     AddressBalance
       <$> O.commonLocalChainsyncConfig
       <*> O.some_ O.commonAddress
+      <*> O.commonIgnoreMissingUtxos
 
-  data Runtime AddressBalance = Runtime { match :: C.AddressAny -> Maybe C.AddressAny }
+  data Runtime AddressBalance = Runtime
+    { match :: C.AddressAny -> Maybe C.AddressAny
+    , onUtxo :: Utxo.OnUtxo (C.TxOut C.CtxTx CurrentEra) (C.TxIn, C.TxOut C.CtxTx CurrentEra)
+    }
 
   data Event AddressBalance = Event
     -- when
@@ -60,7 +67,11 @@ instance Indexer AddressBalance where
 
   data State AddressBalance = State Utxo.UtxoMap
 
-  toEvents Runtime{match} (State utxoStateStart) blockInMode@(C.BlockInMode (C.Block _bh txs :: C.Block era) _eim) = (State utxoStateEnd, reverse events)
+  toEvents
+    Runtime{match, onUtxo = Utxo.OnUtxo{found, missing, toResult}}
+    (State utxoStateStart)
+    blockInMode@(C.BlockInMode (C.Block _bh txs :: C.Block era) _eim) = (State utxoStateEnd, reverse events)
+
     where
       (utxoStateEnd, events) = foldl stepTx (utxoStateStart, []) txs
 
@@ -68,13 +79,14 @@ instance Indexer AddressBalance where
       stepTx (utxosBefore, events') tx = ( utxosAfter, maybe events' (:events') maybeEvent)
         where
           txId = #calculateTxId tx :: C.TxId
+          slotNoBhh = #slotNoBhh blockInMode
           (spentTxIns, newTxos) = Utxo.txoEvent tx
 
           (maybeSpentTxos, remainingUtxos) = Utxo.spendTxos ([], utxosBefore) spentTxIns $
             \txIn maybeTxo -> case maybeTxo of
-              Just txo -> Just (txIn, txo)
-              Nothing -> Nothing
-          spentTxos = catMaybes maybeSpentTxos
+              Just txo ->  found txIn txId slotNoBhh txo
+              Nothing -> missing txIn txId slotNoBhh
+          spentTxos = toResult maybeSpentTxos
 
           createdTxos' = Utxo.addTxId txId $ flip mapMaybe newTxos $ \(txIx, txo) -> case match $ txoAddressAny txo of
             Just address -> Just (txIx, (address, txo))
@@ -110,10 +122,22 @@ instance Indexer AddressBalance where
                    balance
                    (Map.unionWith (<>) deposits spends)
 
-  initialize AddressBalance{chainsync, addresses} trace = do
+  initialize AddressBalance{chainsync, addresses, ignoreMissingUtxos} trace = do
     lcr <- initializeLocalChainsync_ chainsync trace
     IO.hSetBuffering IO.stdout IO.LineBuffering
-    return (State mempty, lcr, Runtime $ Utxo.addressListFilter addresses)
+    let runtime = Runtime
+          { match = Utxo.addressListFilter addresses
+          , onUtxo = if ignoreMissingUtxos
+            then Utxo.OnUtxo { found =   \txIn _ _ txo -> Just (txIn, txo)
+                             , missing = \_ _ _ -> Nothing
+                             , toResult = catMaybes
+                             }
+            else Utxo.OnUtxo { found =   \txIn _ _             txo -> (txIn, txo)
+                             , missing = \txIn _ (slotNo, bhh)     -> E.throw $ E.UTxO_not_found txIn slotNo bhh
+                             , toResult = id
+                             }
+          }
+    return (State mempty, lcr, runtime)
 
   persistMany _runtime events = mapM_ (BL8.putStrLn . A.encode) events
 

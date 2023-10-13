@@ -295,6 +295,15 @@ commonCheckpointInterval = O.option (O.eitherReader parse) $
       "never" -> Right Never
       _ ->  (\n -> if n == 0 then Never else Every n ) <$> parseNominalDiffTime str
 
+commonIgnoreMissingUtxos :: O.Parser Bool
+commonIgnoreMissingUtxos = O.switch (longOpt "ignore-missing-utxos" desc <> O.internal)
+  where
+    desc =
+      "Ignore missing transaction outputs. When processing spends then default is to throw \
+      \an exception when transaction input is not found from the UTxO set. This is useful \
+      \for benchmarking and debugging, when chain is traversed from the middle and earlier \
+      \transaction outputs are not known."
+
 -- * String parsers
 
 -- ** NominalDiffTime

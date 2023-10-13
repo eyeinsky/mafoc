@@ -117,7 +117,7 @@ instance Indexer Mamba where
 
       utxoState' :: State Utxo.Utxo
       utxoEvents :: [Event Utxo.Utxo]
-      (utxoState', utxoEvents) = Utxo.toEventsPrim utxoState blockInMode
+      (utxoState', utxoEvents) = Utxo.toEventsPrim utxoState Utxo.onUtxoDefault blockInMode
       datumEvents = Datum.toEventsPrim (#slotNo blockInMode) txs
 
       mintBurnEvents = MintBurn.toEventsPrim (\_ _ -> True) blockInMode :: [Event MintBurn.MintBurn]
