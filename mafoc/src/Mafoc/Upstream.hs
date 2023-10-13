@@ -6,6 +6,7 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE NamedFieldPuns         #-}
+{-# LANGUAGE NumericUnderscores         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream where
 
@@ -35,6 +36,8 @@ import Cardano.BM.Configuration.Model qualified as CM
 import Cardano.BM.Data.BackendKind qualified as CM
 import Cardano.BM.Data.Output qualified as CM
 import Cardano.BM.Data.Severity qualified as CM
+
+import Mafoc.Upstream.Orphans ()
 
 -- * Additions to cardano-api
 
@@ -352,11 +355,11 @@ instance IsLabel "getNetworkId" (NodeConfig -> IO C.NetworkId) where
 -- | Shamelessly stolen from Kupo's docs https://cardanosolutions.github.io/kupo/#section/Era-boundaries
 
 lastByron, lastShelley, lastAllegra, lastMary, lastAlonzo :: SlotNoBhh
-lastByron = (4492799, "f8084c61b6a238acec985b59310b6ecec49c0ab8352249afd7268da5cff2a457")
-lastShelley = (16588737, "4e9bbbb67e3ae262133d94c3da5bffce7b1127fc436e7433b87668dba34c354a")
-lastAllegra = (23068793, "69c44ac1dda2ec74646e4223bc804d9126f719b1c245dadc2ad65e8de1b276d7")
-lastMary = (39916796, "e72579ff89dc9ed325b723a33624b596c08141c7bd573ecfff56a1f7229e4d09")
-lastAlonzo = (72316796, "c58a24ba8203e7629422a24d9dc68ce2ed495420bf40d9dab124373655161a20")
+lastByron   = ( 4_492_799, "f8084c61b6a238acec985b59310b6ecec49c0ab8352249afd7268da5cff2a457")
+lastShelley = (16_588_737, "4e9bbbb67e3ae262133d94c3da5bffce7b1127fc436e7433b87668dba34c354a")
+lastAllegra = (23_068_793, "69c44ac1dda2ec74646e4223bc804d9126f719b1c245dadc2ad65e8de1b276d7")
+lastMary    = (39_916_796, "e72579ff89dc9ed325b723a33624b596c08141c7bd573ecfff56a1f7229e4d09")
+lastAlonzo  = (72_316_796, "c58a24ba8203e7629422a24d9dc68ce2ed495420bf40d9dab124373655161a20")
 
 data LedgerEra = Byron | Shelley | Allegra | Mary | Alonzo | Babbage
   deriving (Eq, Ord, Enum, Bounded, Show, Generic, C.ToJSON)

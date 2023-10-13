@@ -149,10 +149,6 @@ sqliteInit c tableName = liftIO $ do
     \   , quantity          INT  NOT NULL \
     \   , redeemer          BLOB          \
     \   , redeemer_hash     BLOB          )"
-  SQL.execute_ c $
-    " CREATE INDEX IF NOT EXISTS               \
-    \    minting_policy_events__txId_policyId  \
-    \ ON " <> tableName' <> " (tx_id, policy_id) "
 
 persistManySqlite :: SQL.Connection -> String -> [Event MintBurn] -> IO ()
 persistManySqlite sqlConnection tableName events =

@@ -31,7 +31,6 @@ import Streaming.Prelude qualified as S
 import Text.Printf (printf)
 
 import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
-import Marconi.ChainIndex.Orphans ()
 
 import Mafoc.Upstream (foldYield)
 import Mafoc.Signal qualified as Signal

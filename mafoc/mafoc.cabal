@@ -79,6 +79,7 @@ library
     Mafoc.Speed
     Mafoc.Upstream
     Mafoc.Upstream.Formats
+    Mafoc.Upstream.Orphans
     Mafoc.Utxo
 
   mixins:          base (Prelude as BasePrelude), base hiding (Prelude)

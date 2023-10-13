@@ -139,7 +139,7 @@ instance Indexer Mamba where
     ((ledgerCfg, extLedgerState), ledgerStateCp) <- loadLatestTrace ledgerStateFile (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
     (utxoState, utxoCp) <- StateFile.loadLatest utxoStateFile
       Utxo.parseState
-      (Utxo.byronGenesisUtxoFromConfig <$> LedgerState.getGenesisConfig (#nodeConfig chainsyncConfig))
+      (Utxo.initialState <$> LedgerState.getGenesisConfig (#nodeConfig chainsyncConfig))
 
     let (dbPath, tablePrefix) = defaultTableName "mamba" dbPathAndTableName
         tableMintBurn = tablePrefix <> "_mintburn"

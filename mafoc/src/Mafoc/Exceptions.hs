@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 module Mafoc.Exceptions
   ( module Mafoc.Exceptions
   , throw
@@ -8,6 +9,7 @@ module Mafoc.Exceptions
 import Control.Exception (Exception, throw, throwIO)
 import Data.Text qualified as TS
 import Codec.CBOR.Read (DeserialiseFailure)
+import Prettyprinter (Pretty(pretty))
 import Cardano.Api qualified as C
 
 data CardanoAssumptionBroken
@@ -17,8 +19,7 @@ data CardanoAssumptionBroken
     }
   | Epoch_number_disappears { previouslyExistingEpochNo :: C.EpochNo }
   | UTxO_not_found { attemptedToSpend :: C.TxIn
-                   , blockNo :: C.BlockNo
-                   , slotNoBhh :: C.SlotNo
+                   , slotNo :: C.SlotNo
                    , bhh :: C.Hash C.BlockHeader
                    }
   | Block_number_ahead_of_tip
@@ -27,6 +28,7 @@ data CardanoAssumptionBroken
     }
   deriving stock Show
   deriving anyclass Exception
+  deriving Pretty via Showing CardanoAssumptionBroken
 
 data MafocIOException
   = Can't_deserialise_LedgerState_from_CBOR FilePath DeserialiseFailure
@@ -48,6 +50,10 @@ data MafocIOException
   | TextException TS.Text
   deriving stock Show
   deriving anyclass Exception
+  deriving Pretty via Showing MafocIOException
 
 throwShow :: Show a => a -> IO b
 throwShow = throwIO . TextException . TS.pack . show
+
+newtype Showing a = Showing a
+instance Show a => Pretty (Showing a) where pretty (Showing a) = pretty (show a)

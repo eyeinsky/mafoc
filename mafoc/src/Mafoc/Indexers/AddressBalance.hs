@@ -14,7 +14,6 @@ import Data.Aeson ((.=))
 import Data.Aeson.Key qualified as A
 import Data.ByteString.Lazy.Char8 qualified as BL8
 
-import Marconi.ChainIndex.Orphans () -- ToJSON C.AddressAny
 import Cardano.Api qualified as C
 import Mafoc.CLI qualified as O
 import Mafoc.Core (
@@ -103,8 +102,6 @@ instance Indexer AddressBalance where
                 (Map.zipWithMatched $ \_k b a -> mergeBeforeAfter b a)
                 (toAddressValueMap utxosBefore)
                 (toAddressValueMap utxosAfter)
-                -- newtype Value = Value (Map AssetId Quantity)
-                -- Map AddressAny (Map AssetId (Quantity, Quantity))
 
               in Just $ Event
                    (#slotNoBhh blockInMode)
