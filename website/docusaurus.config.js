@@ -77,6 +77,13 @@ const config = {
             position: 'left',
             label: 'Docs',
           },
+          {
+            type: 'docSidebar',
+            sidebarId: 'tutorialSidebar',
+            position: 'left',
+            label: 'Haddock',
+            href: 'pathname:///haddock',
+          },
           // {to: '/blog', label: 'Blog', position: 'left'},
           {
             href: mafocGithub,
