@@ -10,7 +10,7 @@ const mafocGithub = 'https://github.com/eyeinsky/mafoc';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Mafoc',
-  tagline: 'Cardano indexer library',
+  tagline: 'The Cardano Indexer Library',
   favicon: 'img/favicon.ico',
 
   url: 'https://captainhaskell.ee',
