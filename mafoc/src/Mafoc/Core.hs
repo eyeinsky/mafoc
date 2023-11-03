@@ -18,9 +18,6 @@ module Mafoc.Core
   -- * Mafoc.Logging
   , renderPretty
   , traceInfo
-
-  -- * Re-exports from other packages
-  , Marconi.CurrentEra
   ) where
 
 import Control.Concurrent qualified as IO
@@ -45,8 +42,6 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace qualified as Trace
 import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Streaming qualified as CS
-import Marconi.ChainIndex.Indexers.MintBurn ()
-import Marconi.ChainIndex.Types qualified as Marconi
 
 import Mafoc.Exceptions qualified as E
 import Mafoc.Logging (traceInfo, traceDebug, renderPretty, traceNotice)
@@ -57,6 +52,7 @@ import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh,
                       , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath), TxIndexInBlock
                       , txAddressDatums, txDatums, plutusDatums, allDatums, maybeDatum, txPlutusDatums
                       , LedgerEra, slotEra
+                      , SecurityParam(SecurityParam), CurrentEra
                       )
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.Signal qualified as Signal
@@ -360,7 +356,7 @@ instance IsLabel "getNetworkId" (LocalChainsyncConfig NodeConfig -> IO C.Network
 data LocalChainsyncRuntime = LocalChainsyncRuntime
   { localNodeConnection  :: C.LocalNodeConnectInfo C.CardanoMode
   , interval             :: (C.ChainPoint, UpTo)
-  , securityParam        :: Marconi.SecurityParam
+  , securityParam        :: SecurityParam
   , logging              :: Bool
   , profiling            :: Maybe Logging.ProfilingConfig
   , pipelineSize         :: Word32
@@ -401,7 +397,7 @@ initializeLocalChainsync_ config trace = do
   initializeLocalChainsync config networkId trace
 
 rollbackRingBuffer
-  :: Marconi.SecurityParam
+  :: SecurityParam
   -> S.Stream (S.Of (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO ()
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
 rollbackRingBuffer securityParam' = RB.rollbackRingBuffer (fromIntegral securityParam') tipDistance blockSlotNoBhh

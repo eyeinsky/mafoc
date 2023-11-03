@@ -18,12 +18,11 @@ import Cardano.Api qualified as C
 import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (DbPathAndTableName), Interval (Interval),
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
-                   UpTo (CurrentTip, Infinity, SlotNo), CheckpointInterval(Every, Never))
+                   UpTo (CurrentTip, Infinity, SlotNo), CheckpointInterval(Every, Never),
+                   SecurityParam)
 import Mafoc.Upstream (LedgerEra, lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
-
-import Marconi.ChainIndex.Types qualified as Marconi
 
 -- * Options
 
@@ -85,7 +84,7 @@ commonNetworkId = mainnet <|> C.Testnet <$> testnet
          <> O.metavar "NATURAL"
          <> O.help "Specify a testnet magic id.")
 
-commonSecurityParam :: O.Parser Marconi.SecurityParam
+commonSecurityParam :: O.Parser SecurityParam
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
 commonSecurityParamEither :: O.Parser (Either C.NetworkId NodeConfig)
@@ -303,6 +302,14 @@ commonIgnoreMissingUtxos = O.switch (longOpt "ignore-missing-utxos" desc <> O.in
       \an exception when transaction input is not found from the UTxO set. This is useful \
       \for benchmarking and debugging, when chain is traversed from the middle and earlier \
       \transaction outputs are not known."
+
+testParserArgs :: O.Parser a -> [String] -> IO a
+testParserArgs cli args = O.execParserPure O.defaultPrefs pinfo args & O.handleParseResult
+  where
+    pinfo = parserToParserInfo "testProg" "testHeader" cli
+
+testParser :: O.Parser a -> String -> IO a
+testParser cli str = testParserArgs cli $ words str
 
 -- * String parsers
 

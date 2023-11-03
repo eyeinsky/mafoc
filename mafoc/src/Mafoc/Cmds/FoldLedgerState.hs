@@ -15,7 +15,7 @@ import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Tracing (defaultConfigStdout)
 import Cardano.Streaming qualified as CS
 import Mafoc.CLI qualified as Opt
-import Mafoc.Core (ConcurrencyPrimitive, NodeConfig (NodeConfig), NodeInfo,
+import Mafoc.Core (ConcurrencyPrimitive, NodeConfig, NodeInfo,
                    SocketPath (SocketPath), UpTo (SlotNo), blockChainPoint,
                    takeUpTo, blockProducer, rollbackRingBuffer)
 import Mafoc.Upstream (querySecurityParam)
@@ -24,7 +24,6 @@ import Mafoc.Signal qualified as Signal
 import Mafoc.StateFile qualified as StateFile
 import Mafoc.Exceptions qualified as E
 import Mafoc.Logging qualified as Logging
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 data FoldLedgerState = FoldLedgerState
   { maybeFromLedgerState :: Maybe FilePath
@@ -60,7 +59,7 @@ run config stopSignal statsSignal = do
     -- number and block header hash from the filename and the rest
     -- from the file content.
     let nodeInfo' = nodeInfo config
-    let nodeConfig@(NodeConfig nodeConfig') = #nodeConfig nodeInfo'
+    let nodeConfig = #nodeConfig nodeInfo'
     (fromCp, ledgerCfg, extLedgerState) <- case maybeFromLedgerState config of
       Just path -> do
         (slotNo, bhh) <- StateFile.bhhFromFileName path & \case
@@ -70,7 +69,7 @@ run config stopSignal statsSignal = do
         return (C.ChainPoint slotNo bhh, ledgerCfg, extLedgerState)
 
       Nothing -> do
-        (ledgerCfg, extLedgerState) <- Marconi.getInitialExtLedgerState nodeConfig'
+        (ledgerCfg, extLedgerState) <- LedgerState.init_ nodeConfig
         return (C.ChainPointAtGenesis, ledgerCfg, extLedgerState)
 
     let SocketPath socketPath' = #socketPath nodeInfo'
@@ -111,16 +110,16 @@ run config stopSignal statsSignal = do
 -- achieved by applying a sequence of blocks just prior to block
 -- stream given as argument.)
 foldLedgerState
-  :: Marconi.ExtLedgerCfg_
-  -> Marconi.ExtLedgerState_
+  :: LedgerState.ExtLedgerCfg_
+  -> LedgerState.ExtLedgerState_
   -> S.Stream (S.Of (C.BlockInMode C.CardanoMode)) IO ()
-  -> S.Stream (S.Of (C.ChainPoint, Marconi.ExtLedgerState_)) IO ()
+  -> S.Stream (S.Of (C.ChainPoint, LedgerState.ExtLedgerState_)) IO ()
 foldLedgerState ledgerCfg initialExtLedgerState = loop initialExtLedgerState
   where
     loop extLedgerState source = S.lift (S.next source) >>= \case
       Left r -> pure r
       Right (blockInMode, source') -> let
-        extLedgerState' = Marconi.applyBlock ledgerCfg extLedgerState blockInMode
+        extLedgerState' = LedgerState.applyBlock ledgerCfg extLedgerState blockInMode
         in do
         S.yield (blockChainPoint blockInMode, extLedgerState')
         loop extLedgerState' source'

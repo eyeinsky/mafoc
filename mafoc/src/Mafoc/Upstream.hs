@@ -7,8 +7,15 @@
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE NamedFieldPuns         #-}
 {-# LANGUAGE NumericUnderscores         #-}
+{-# LANGUAGE PatternSynonyms         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
-module Mafoc.Upstream where
+module Mafoc.Upstream
+  ( module Mafoc.Upstream
+  , module ReExports
+  ) where
+
+import Mafoc.Upstream.Orphans qualified as ReExports ()
+import Marconi.ChainIndex.Types as ReExports (SecurityParam(SecurityParam), CurrentEra, pattern CurrentEra)
 
 import System.FilePath ((</>))
 import GHC.OverloadedLabels (IsLabel (fromLabel))
@@ -24,7 +31,6 @@ import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
-import Marconi.ChainIndex.Types qualified as Marconi
 import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 import Mafoc.Exceptions qualified as E
@@ -36,8 +42,6 @@ import Cardano.BM.Configuration.Model qualified as CM
 import Cardano.BM.Data.BackendKind qualified as CM
 import Cardano.BM.Data.Output qualified as CM
 import Cardano.BM.Data.Severity qualified as CM
-
-import Mafoc.Upstream.Orphans ()
 
 -- * Additions to cardano-api
 
@@ -55,11 +59,11 @@ instance IsLabel "slotNoBhh" (C.BlockInMode era -> SlotNoBhh) where
 instance IsLabel "slotNo" (SlotNoBhh -> C.SlotNo) where
   fromLabel (slotNo, _) = slotNo
 
-getSecurityParamAndNetworkId :: FilePath -> IO (Marconi.SecurityParam, C.NetworkId)
+getSecurityParamAndNetworkId :: FilePath -> IO (SecurityParam, C.NetworkId)
 getSecurityParamAndNetworkId nodeConfig = do
   (env :: C.Env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
   let securityParam' = C.envSecurityParam env :: Word64
-  pure (Marconi.SecurityParam securityParam', CS.envNetworkId env)
+  pure (SecurityParam securityParam', CS.envNetworkId env)
 
 getNetworkId :: FilePath -> IO C.NetworkId
 getNetworkId nodeConfig = CS.envNetworkId . fst <$> CS.getEnvAndInitialLedgerStateHistory nodeConfig
@@ -101,7 +105,7 @@ queryCurrentEra localNodeConnectInfo =
   queryInMode = C.QueryCurrentEra C.CardanoModeIsMultiEra
 
 -- | Query security param from the local node given a Shelley based era.
-querySecurityParamEra :: C.LocalNodeConnectInfo C.CardanoMode -> C.ShelleyBasedEra era -> IO Marconi.SecurityParam
+querySecurityParamEra :: C.LocalNodeConnectInfo C.CardanoMode -> C.ShelleyBasedEra era -> IO SecurityParam
 querySecurityParamEra localNodeConnectInfo shelleyBasedEra = do
   C.queryNodeLocalState localNodeConnectInfo Nothing queryInMode >>= \case
     Left acquiringFailure -> throwIO acquiringFailure
@@ -114,10 +118,10 @@ querySecurityParamEra localNodeConnectInfo shelleyBasedEra = do
       C.QueryInEra (Marconi.toShelleyEraInCardanoMode shelleyBasedEra) $
         C.QueryInShelleyBasedEra shelleyBasedEra C.QueryGenesisParameters
 
-    getSecurityParam :: C.GenesisParameters -> Marconi.SecurityParam
+    getSecurityParam :: C.GenesisParameters -> SecurityParam
     getSecurityParam = fromIntegral . C.protocolParamSecurity
 
-querySecurityParam :: C.LocalNodeConnectInfo C.CardanoMode -> IO Marconi.SecurityParam
+querySecurityParam :: C.LocalNodeConnectInfo C.CardanoMode -> IO SecurityParam
 querySecurityParam localNodeConnectInfo = do
   C.AnyCardanoEra era <- queryCurrentEra localNodeConnectInfo
   case Marconi.shelleyBasedToCardanoEra era of

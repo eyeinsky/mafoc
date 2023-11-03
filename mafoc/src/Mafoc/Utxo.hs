@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Mafoc.Utxo where
 
 import Data.Map qualified as Map
@@ -30,17 +31,14 @@ import Ouroboros.Consensus.Cardano.Block qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
 import Ouroboros.Consensus.Shelley.Ledger qualified as O
 
-import Marconi.ChainIndex.Types (CurrentEra)
-import Marconi.ChainIndex.Types qualified as Marconi
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
+import Mafoc.LedgerState (ExtLedgerState_)
 import Mafoc.Exceptions qualified as E
-
-import Mafoc.Upstream (SlotNoBhh)
+import Mafoc.Upstream (SlotNoBhh, CurrentEra, pattern CurrentEra)
 
 type UtxoMapEra era = Map.Map C.TxIn (C.TxOut C.CtxTx era)
-type UtxoMap = UtxoMapEra Marconi.CurrentEra
+type UtxoMap = UtxoMapEra CurrentEra
 type UtxoListEra era = [(C.TxIn, C.TxOut C.CtxTx era)]
-type UtxoList = UtxoListEra Marconi.CurrentEra
+type UtxoList = UtxoListEra CurrentEra
 
 
 -- | Utxo resolving strategy
@@ -73,7 +71,7 @@ addTxId txId list = map (\(ix, a) -> (C.TxIn txId ix, a)) list
 unsafeCastEra
   :: (C.IsCardanoEra era)
   => [(a, C.TxOut C.CtxTx era)]
-  -> [(a, C.TxOut C.CtxTx Marconi.CurrentEra)]
+  -> [(a, C.TxOut C.CtxTx CurrentEra)]
 unsafeCastEra list = case traverse (traverse castToCurrentEra) list of
   Right a -> a
   Left _ -> E.throw castToCurrentEraFailedException
@@ -81,12 +79,12 @@ unsafeCastEra list = case traverse (traverse castToCurrentEra) list of
 castToCurrentEra
   :: (C.IsCardanoEra fromEra, C.EraCast f)
   => f fromEra
-  -> Either C.EraCastError (f Marconi.CurrentEra)
-castToCurrentEra = C.eraCast Marconi.CurrentEra
+  -> Either C.EraCastError (f CurrentEra)
+castToCurrentEra = C.eraCast CurrentEra
 
 unsafeCastToCurrentEra
   :: (C.IsCardanoEra fromEra, C.EraCast f)
-  => f fromEra -> f Marconi.CurrentEra
+  => f fromEra -> f CurrentEra
 unsafeCastToCurrentEra e = either (E.throw castToCurrentEraFailedException) id $ castToCurrentEra e
 
 castToCurrentEraFailedException :: E.MafocIOException
@@ -170,7 +168,7 @@ byronGenesisUtxoFromConfig (C.GenesisCardano _ byronConfig _ _ _) = ( hash, byro
           fromMaybe (E.throw $ E.The_impossible_happened "Hashing addresses from Byron genesis file shouldn't fail")
             . Crypto.abstractHashFromBytes . Crypto.abstractHashToBytes . Crypto.serializeCborHash
 
-genesisUtxoFromLedgerState :: forall ctx . Marconi.ExtLedgerState_ -> Map.Map C.TxIn (C.TxIn, C.TxOut ctx CurrentEra)
+genesisUtxoFromLedgerState :: forall ctx . ExtLedgerState_ -> Map.Map C.TxIn (C.TxIn, C.TxOut ctx CurrentEra)
 genesisUtxoFromLedgerState extLedgerState = case O.ledgerState extLedgerState of
   O.LedgerStateByron (st :: O.LedgerState Byron.ByronBlock) -> ledgerStateEventMapByron st
   O.LedgerStateShelley st -> ledgerStateEventMapShelley C.ShelleyBasedEraShelley st
