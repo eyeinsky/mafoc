@@ -1,7 +1,3 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE MultiWayIf        #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module RollbackRingBuffer where
 
 import Control.Exception qualified as IO

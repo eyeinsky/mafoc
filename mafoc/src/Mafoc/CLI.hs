@@ -1,7 +1,3 @@
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE OverloadedLabels #-}
 module Mafoc.CLI where
 
 import Data.Time (NominalDiffTime)

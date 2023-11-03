@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase             #-}
-
 module Mafoc.LedgerState
   ( module Mafoc.LedgerState
 

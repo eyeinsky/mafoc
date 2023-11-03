@@ -1,12 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Mafoc.Indexers.Mamba where
 
 import Data.Time (UTCTime)

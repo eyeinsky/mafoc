@@ -1,14 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes    #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE DerivingStrategies     #-}
-{-# LANGUAGE LambdaCase             #-}
-{-# LANGUAGE MultiWayIf             #-}
-{-# LANGUAGE NamedFieldPuns         #-}
-{-# LANGUAGE OverloadedLabels       #-}
-{-# LANGUAGE OverloadedStrings      #-}
-{-# LANGUAGE RankNTypes             #-}
-{-# LANGUAGE StarIsType             #-}
-{-# LANGUAGE TupleSections          #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module Mafoc.Core
   ( module Mafoc.Core

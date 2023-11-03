@@ -1,9 +1,3 @@
-{-# LANGUAGE OverloadedLabels        #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE MultiWayIf        #-}
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections     #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Mafoc.Indexers.EpochStakepoolSize where
 

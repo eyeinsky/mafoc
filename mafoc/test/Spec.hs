@@ -1,6 +1,3 @@
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Main (main) where
 
 import RingBuffer qualified

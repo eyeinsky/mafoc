@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 module RingBuffer where
 
 import Control.Monad (replicateM)

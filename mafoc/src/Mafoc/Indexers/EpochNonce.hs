@@ -1,7 +1,3 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedLabels        #-}
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.EpochNonce where
 
 import Cardano.Api qualified as C

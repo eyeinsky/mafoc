@@ -1,12 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE DataKinds         #-}
-{-# LANGUAGE TupleSections         #-}
-{-# LANGUAGE NamedFieldPuns         #-}
-{-# LANGUAGE NumericUnderscores         #-}
 {-# LANGUAGE PatternSynonyms         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Mafoc.Upstream

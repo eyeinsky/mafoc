@@ -1,7 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE TupleSections #-}
 module Mafoc.Indexers.Datum where
 
 import Database.SQLite.Simple qualified as SQL

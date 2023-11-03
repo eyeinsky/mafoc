@@ -1,8 +1,4 @@
 {-# LANGUAGE BlockArguments    #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE MultiWayIf        #-}
 module Mafoc.RollbackRingBuffer where
 
 import Control.Exception qualified as IO

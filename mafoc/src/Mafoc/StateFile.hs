@@ -1,6 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
-
 module Mafoc.StateFile where
 
 import Data.ByteString.Char8 qualified as C8

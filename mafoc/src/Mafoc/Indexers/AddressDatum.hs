@@ -1,7 +1,3 @@
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE LambdaCase    #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE OverloadedLabels #-}
 module Mafoc.Indexers.AddressDatum where
 
 import Options.Applicative qualified as Opt

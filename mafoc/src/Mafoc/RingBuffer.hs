@@ -1,4 +1,3 @@
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE DerivingStrategies #-}
 
 module Mafoc.RingBuffer

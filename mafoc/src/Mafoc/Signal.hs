@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 module Mafoc.Signal where
 
 import Control.Concurrent qualified as IO

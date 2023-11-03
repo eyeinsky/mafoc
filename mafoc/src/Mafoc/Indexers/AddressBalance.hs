@@ -1,8 +1,4 @@
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-
 module Mafoc.Indexers.AddressBalance where
 
 import System.IO qualified as IO

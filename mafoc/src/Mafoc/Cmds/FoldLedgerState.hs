@@ -1,9 +1,3 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE MultiWayIf        #-}
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE OverloadedLabels  #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Mafoc.Cmds.FoldLedgerState where
 
 import Options.Applicative qualified as Opt

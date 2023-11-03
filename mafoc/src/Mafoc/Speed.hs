@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 module Mafoc.Speed where
 
 import Control.Concurrent (MVar, modifyMVar_, newMVar)

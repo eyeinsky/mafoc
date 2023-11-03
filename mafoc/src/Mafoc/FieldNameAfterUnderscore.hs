@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 -- TODO Are UndecidableInstances unavoidable? The A.GToJSON' constraints require it.
 

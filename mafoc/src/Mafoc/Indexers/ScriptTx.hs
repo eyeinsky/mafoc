@@ -1,5 +1,3 @@
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 module Mafoc.Indexers.ScriptTx where
 
 import Database.SQLite.Simple qualified as SQL
