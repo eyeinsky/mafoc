@@ -32,7 +32,7 @@ instance Indexer IntraBlockSpends where
   initialize IntraBlockSpends{chainsyncConfig} trace = do
     traceInfo trace "Only blocks with intra-block spends are reported"
     lcr <- initializeLocalChainsync_ chainsyncConfig trace
-    return (stateless, lcr, Runtime)
+    return (Stateless (), lcr, Runtime)
 
   toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (_state, events)
     where

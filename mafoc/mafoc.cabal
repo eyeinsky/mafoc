@@ -72,6 +72,8 @@ library
     Mafoc.Upstream.Orphans
     Mafoc.Utxo
 
+    Mafoc.Questions.IntraBlockSpends
+
   mixins:          base (Prelude as BasePrelude), base hiding (Prelude)
   exposed-modules: Prelude
 

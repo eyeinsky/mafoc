@@ -31,6 +31,8 @@ import Mafoc.Indexers.Utxo qualified as Utxo
 import Mafoc.Signal qualified as Signal
 import Mafoc.Speed qualified as Speed
 
+import Mafoc.Questions.IntraBlockSpends qualified as IntraBlockSpends
+
 main :: IO ()
 main = do
   stopSignal <- Signal.setupCtrlCHandler 3
@@ -60,6 +62,7 @@ main = do
           Utxo               configFromCli -> runIndexerNoApi configFromCli
           AddressBalance     configFromCli -> runIndexerNoApi configFromCli
           Datum              configFromCli -> runIndexerNoApi configFromCli
+          IntraBlockSpends   configFromCli -> runIndexerNoApi configFromCli
           Mamba              configFromCli -> runIndexer      configFromCli $ case maybePort of
             Just port -> Just $ \runtime mvar -> do
               let app = Servant.serve (Proxy @(API Mamba.Mamba)) $ server runtime mvar
@@ -102,6 +105,7 @@ data IndexerCommand
   | AddressDatum AddressDatum.AddressDatum
   | Mamba Mamba.Mamba
   | Datum Datum.Datum
+  | IntraBlockSpends IntraBlockSpends.IntraBlockSpends
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -134,6 +138,7 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
       <> indexerCommand "noop" NoOp
       <> indexerCommand "scripttx" ScriptTx
       <> indexerCommand "utxo" Utxo
+      <> indexerCommand "intrablockspends" IntraBlockSpends
 
 indexerCommand :: forall a . Indexer a => String -> (a -> IndexerCommand) -> Opt.Mod Opt.CommandFields Command
 indexerCommand name f = Opt.command name $ Opt.parserToParserInfo descr (name <> " - " <> descr) $
