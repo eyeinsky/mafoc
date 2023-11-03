@@ -357,14 +357,22 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , concurrencyPrimitive :: ConcurrencyPrimitive
   }
 
-modifyStartingPoint :: LocalChainsyncRuntime -> (C.ChainPoint -> C.ChainPoint) -> LocalChainsyncRuntime
-modifyStartingPoint lcr f = lcr { interval = (f oldCp, upTo) }
+ensureStartFromCheckpoint :: LocalChainsyncRuntime -> C.ChainPoint -> IO LocalChainsyncRuntime
+ensureStartFromCheckpoint lcr@LocalChainsyncRuntime{interval = (cp, upTo)} stateCp = if cp <= stateCp
+  then return $ lcr { interval = (stateCp, upTo) }
+  else E.throwIO $ E.No_state_for_requested_starting_point
+       { E.requested = cp
+       , E.fromState = stateCp
+       }
+
+useLaterStartingPoint :: LocalChainsyncRuntime -> C.ChainPoint -> LocalChainsyncRuntime
+useLaterStartingPoint lcr cp = lcr { interval = (max oldCp cp, upTo) }
   where (oldCp, upTo) = interval lcr
 
 initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId  -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
 initializeLocalChainsync localChainsyncConfig networkId trace = do
   let SocketPath socketPath' = #socketPath localChainsyncConfig
-  let localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
+      localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
 
   -- Resolve possible SlotNo in interval start:
@@ -588,6 +596,9 @@ intervalStartToChainSyncStart
   -> (Bool, Either C.SlotNo C.ChainPoint)
   -> IO C.ChainPoint
 intervalStartToChainSyncStart trace maybeDbPathAndTableName (include, eitherSlotOrCp)
+  -- If a direct ChainPoint is given, return that:
+  | Right cp <- eitherSlotOrCp = pure cp
+  -- If only the SlotNo is given, resolve it to ChainPoint by help of a database
   | Just dbPathAndTableName <- maybeDbPathAndTableName, Left slotNo <- eitherSlotOrCp =
     let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
     in do
@@ -608,7 +619,6 @@ intervalStartToChainSyncStart trace maybeDbPathAndTableName (include, eitherSlot
             traceInfo trace $ pretty slotNo <> " resolved to " <> pretty cp
             pure cp
 
-  | Right cp <- eitherSlotOrCp = pure cp
   | otherwise = E.throwIO E.No_headerDb_specified
 
 -- * Address filter

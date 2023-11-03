@@ -9,7 +9,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, modifyStartingPoint, txAddressDatums)
+                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, ensureStartFromCheckpoint)
 import Mafoc.Indexers.Datum qualified as Datum
 
 data AddressDatum = AddressDatum
@@ -63,7 +63,7 @@ instance Indexer AddressDatum where
     (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tablePrefix
     sqliteInit sqlCon tableAddressDatums tableDatums
 
-    let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\cliChainPoint -> max checkpointedChainPoint cliChainPoint)
+    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tablePrefix tableAddressDatums tableDatums (mkMaybeAddressFilter addresses))
 
   persistMany Runtime{sqlConnection, tableAddressDatums, tableDatums} events = do

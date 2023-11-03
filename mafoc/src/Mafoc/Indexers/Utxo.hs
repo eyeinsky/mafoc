@@ -17,8 +17,8 @@ import Mafoc.CLI qualified as O
 import Mafoc.Core
   ( CurrentEra, DbPathAndTableName
   , Indexer(Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
-  , LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, interval, sqliteOpen, traceInfo
-  , SlotNoBhh, TxIndexInBlock, maybeDatum
+  , LocalChainsyncConfig, defaultTableName, initializeLocalChainsync, sqliteOpen, traceInfo
+  , SlotNoBhh, TxIndexInBlock, maybeDatum, ensureStartFromCheckpoint
   )
 import Mafoc.Upstream (toAddressAny, NodeConfig)
 import Mafoc.Utxo (spendTxos, addTxId, TxoEvent, txoEvent, unsafeCastEra, byronGenesisUtxoFromConfig, OnUtxo(OnUtxo, found, missing, toResult))
@@ -73,14 +73,14 @@ instance Indexer Utxo where
       stateFilePrefix_
       parseState
       (initialState <$> LedgerState.getGenesisConfig (#nodeConfig chainsync))
-
     case cp of
       C.ChainPoint{} -> traceInfo trace $ "Found checkpoint: " <> pretty cp
       C.ChainPointAtGenesis -> traceInfo trace $ "No checkpoint found, starting at: " <> pretty cp
+    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime cp
 
-    let chainsyncRuntime' = chainsyncRuntime { interval = (cp, snd $ interval chainsyncRuntime) }
-        onUtxo = if ignoreMissingUtxos then onUtxoIgnoreMissing else onUtxoDefault
+    let onUtxo = if ignoreMissingUtxos then onUtxoIgnoreMissing else onUtxoDefault
         runtime = Runtime{ sqlConnection, tableName, stateFilePrefix = stateFilePrefix_, onUtxo}
+
     return (state, chainsyncRuntime', runtime)
 
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events

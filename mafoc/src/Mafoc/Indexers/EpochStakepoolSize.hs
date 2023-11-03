@@ -11,7 +11,7 @@ import Cardano.Api.Shelley qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
-                   LocalChainsyncConfig, NodeConfig,
+                   LocalChainsyncConfig, NodeConfig, ensureStartFromCheckpoint,
                    loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
@@ -65,8 +65,10 @@ instance Indexer EpochStakepoolSize where
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
+    chainsyncRuntime'' <- ensureStartFromCheckpoint chainsyncRuntime' stateChainPoint
+
     return ( State extLedgerState (LedgerState.getEpochNo extLedgerState)
-           , chainsyncRuntime'
+           , chainsyncRuntime''
            , Runtime sqlCon tableName ledgerConfig)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events

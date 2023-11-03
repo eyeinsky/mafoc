@@ -7,7 +7,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, modifyStartingPoint)
+                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, ensureStartFromCheckpoint)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig_
@@ -32,7 +32,7 @@ instance Indexer NoOp where
     sqlCon <- sqliteOpen dbPath
     sqliteInitCheckpoints sqlCon
     checkpointedChainPoint <- fromMaybe C.ChainPointAtGenesis <$> getCheckpointSqlite sqlCon tableName
-    let chainsyncRuntime' = modifyStartingPoint chainsyncRuntime (\old -> max checkpointedChainPoint old)
+    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
   persistMany _runtime _events = return ()
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh

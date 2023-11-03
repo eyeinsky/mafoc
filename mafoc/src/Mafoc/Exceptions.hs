@@ -43,6 +43,16 @@ data MafocIOException
   | ChainPoints_don't_match [(String, Maybe C.ChainPoint)]
   -- | GHC.Stats.getRTSStats: GC stats not enabled. Use `+RTS -T -RTS' to enable them.
   | RTS_GC_stats_not_enabled
+  -- | For stateful indexers we can only start from chain points for
+  -- which we have a state. Thus, if a user requests to start indexing
+  -- from a later chain point then we throw this exception. (If the
+  -- user requests to start from an /earlier/ chain point then we
+  -- silently skip forward and start indexing from the state file's
+  -- chain point.)
+  | No_state_for_requested_starting_point
+    { requested :: C.ChainPoint -- ^ Requested ChainPoint to start indexing from
+    , fromState ::  C.ChainPoint -- ^ ChainPoint for latest state file we have available
+    }
   -- | An escape-hatch exception: an exception where we don't bother
   -- with structure, but just explain in text. Perhaps we'll find a
   -- category later.
