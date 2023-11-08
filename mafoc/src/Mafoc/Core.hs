@@ -122,7 +122,7 @@ runIndexer
   :: forall a . (Indexer a, Show a)
   => a
   -> CommonConfig
-  -> Maybe (Runtime a -> IO.MVar (State a, BatchState a) -> IO ())
+  -> Maybe (RunHttpApi a)
   -> IO ()
 runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = do
   c <- defaultConfigStderrSeverity severity
@@ -132,16 +132,15 @@ runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
     let (fromChainPoint, upTo) = interval lcr
     initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
-    persistStep'' <- let
+
+
+    let
+      persistStep' :: BatchStepper a
       persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
-      in case maybeApiServer of
-        Nothing -> return persistStep'
-        Just runServer -> do
-          mvar <- IO.newMVar (indexerInitialState, initialBatchState)
-          _ <- IO.forkIO $ runServer indexerRuntime mvar -- start HTTP API server
-          return $ \batchState tup@(_, _, indexerState) -> do
-            _ <- IO.swapMVar mvar (indexerState, batchState) -- update mvar with indexer state and batch state
-            persistStep' batchState tup
+
+    persistStep'' <- case maybeApiServer of
+      Nothing -> return persistStep'
+      Just runServer -> hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep'
 
     maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
 
@@ -203,10 +202,12 @@ getBufferedEvents = \case
   BatchState{bufferedEvents} -> bufferedEvents
   _                          -> []
 
+type BatchStepper a = BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
+
 persistStep
   :: forall a . Indexer a
   => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize -> CheckpointPredicateInterval
-  -> BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (BatchState a)
+  -> BatchStepper a
 persistStep trace indexerRuntime checkpointSignal batchSize isCheckpointTimeP batchState (slotNoBhh, newEvents, indexerState) = do
   let lastCheckpointTime' = lastCheckpointTime batchState
 
@@ -298,6 +299,22 @@ class Indexer a => IndexerHttpApi a where
   type API a
 
   server :: Runtime a -> IO.MVar (State a, BatchState a) -> Servant.Server (API a)
+
+type RunHttpApi a = Runtime a -> IO.MVar (State a, BatchState a) -> IO ()
+
+hookHttpApi
+  :: Runtime a
+  -> State a
+  -> BatchState a
+  -> RunHttpApi a
+  -> BatchStepper a
+  -> IO (BatchStepper a)
+hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep' = do
+  mvar <- IO.newMVar (indexerInitialState, initialBatchState)
+  _ <- IO.forkIO $ runServer indexerRuntime mvar -- start HTTP API server
+  return $ \batchState tup@(_, _, indexerState) -> do
+    _ <- IO.swapMVar mvar (indexerState, batchState) -- update mvar with indexer state and batch state
+    persistStep' batchState tup
 
 -- * Trace
 
