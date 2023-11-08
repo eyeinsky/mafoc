@@ -1,16 +1,6 @@
-* Mafoc
+* [[https://captainhaskell.ee/mafoc/][Mafoc]]
 
 /Maps and folds over Cardano blockchain/
-
----
-
-NOTE: although you can already run various indexers then this is very
-much work in progress.
-
-NOTE: This is fork of [[https://github.com/input-output-hk/marconi][marconi]], piggybacking on its nix
-configuration. The meat of this project is within the [[mafoc/src/Mafoc/Maps/BlockBasics.hs][mafoc folder]].
-
----
 
 ** Indexers
 
@@ -21,6 +11,7 @@ Indexers:
   blockbasics              Index slot number, block header hash and number of
                            transactions per block
   deposit                  Index deposits for a set of addresses
+  datum                    Index datums by hash
   epochnonce               Index epoch numbers and epoch nonces
   epochstakepoolsize       Index stakepool sizes (in ADA) per epoch
   mamba                    All mamba indexers
@@ -29,11 +20,13 @@ Indexers:
                            chainsync to measure speed ceiling
   scripttx                 Index transactions with scripts
   utxo                     Index transaction outputs
+  intrablockspends         Report the number of intra-block spends: where
+                           transaction spends UTxOs from the same block it
+                           itself is in.
 #+end_src
-(List brought to you by running =mafoc= with no arguments.)
+(Running =mafoc= with no arguments outputs the above list.)
 
 Run any of the above, e.g the =blockbasics= indexer:
-
 #+begin_src bash
   nix develop # Need to enter nix shell currently
 
