@@ -1,4 +1,3 @@
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
 module Mafoc.Exceptions
   ( module Mafoc.Exceptions

@@ -20,6 +20,7 @@ common lang
   default-language:   GHC2021
   default-extensions:
     DeriveAnyClass
+    DerivingStrategies
     LambdaCase
     MultiWayIf
     OverloadedLabels

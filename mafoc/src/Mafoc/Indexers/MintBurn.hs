@@ -1,5 +1,4 @@
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE DerivingStrategies #-}
 
 {- | Indexer for mint and burn events.
 

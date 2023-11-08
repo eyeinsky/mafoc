@@ -1,6 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes    #-}
 {-# LANGUAGE DataKinds              #-}
-{-# LANGUAGE DerivingStrategies     #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module Mafoc.Core
   ( module Mafoc.Core
@@ -84,8 +83,21 @@ class Indexer a where
   -- | Convert a state and a block to events and a new state.
   toEvents :: Runtime a -> State a -> C.BlockInMode C.CardanoMode -> (State a, [Event a])
 
-  -- | Initialize an indexer from @a@ to a runtime for local
-  -- chainsync, indexer's runtime configuration and the indexer state.
+  -- | Initialize an indexer from configuration @a@ to a tuple of
+  --
+  --     (1) indexer state. Stateful indexers load this from a file or
+  --     database, stateless indexers return a dummy state (equivalent
+  --     to @()@)
+  --
+  --     (2) chainsync runtime. To do this, they query security param
+  --     from node, resolve @SlotNo@ to @ChainPoint@, and get the
+  --     @NetworkId@ either directly from cli or via cardano-node's
+  --     config file.
+  --
+  --     (3) indexer-specific runtime. This includes sqlite
+  --     connection, relevant table names, filtering functions, and
+  --     whatever else static an indexer might need.
+  --
   initialize :: a -> Trace.Trace IO TS.Text -> IO (State a, LocalChainsyncRuntime, Runtime a)
 
   -- | Persist many events at a time, defaults to mapping over events with persist.
@@ -96,25 +108,26 @@ class Indexer a where
   -- runtime. Checkpoints are used for resuming
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
-type RunIndexer =
-     BatchSize
-  -> Signal.Stop
-  -> Signal.Checkpoint
-  -> Signal.ChainsyncStats
-  -> CM.Severity
-  -> CheckpointInterval
-  -> IO ()
+data CommonConfig = CommonConfig
+  { batchSize :: BatchSize
+  , stopSignal :: Signal.Stop
+  , checkpointSignal :: Signal.Checkpoint
+  , statsSignal :: Signal.ChainsyncStats
+  , severity :: CM.Severity
+  , checkpointInterval :: CheckpointInterval
+  }
 
 -- | Run an indexer
 runIndexer
   :: forall a . (Indexer a, Show a)
   => a
+  -> CommonConfig
   -> Maybe (Runtime a -> IO.MVar (State a, BatchState a) -> IO ())
-  -> RunIndexer
-runIndexer cli maybeApiServer batchSize stopSignal checkpointSignal statsSignal minSeverity checkpointInterval = do
-  c <- defaultConfigStderrSeverity minSeverity
+  -> IO ()
+runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = do
+  c <- defaultConfigStderrSeverity severity
   withTrace c "mafoc" $ \trace -> do
-    initialNotice cli batchSize minSeverity checkpointInterval trace
+    initialNotice cli batchSize severity checkpointInterval trace
 
     (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
     let (fromChainPoint, upTo) = interval lcr
@@ -289,10 +302,10 @@ class Indexer a => IndexerHttpApi a where
 -- * Trace
 
 initialNotice :: Show a => a -> BatchSize -> CM.Severity -> CheckpointInterval -> Trace.Trace IO TS.Text -> IO ()
-initialNotice cli batchSize minSeverity checkpointInterval trace = traceNotice trace
+initialNotice cli batchSize severity checkpointInterval trace = traceNotice trace
   $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
                 <> "\n  Batch size: " <> pretty (show batchSize)
-                <> "\n  Logging severity: " <> pretty (show minSeverity)
+                <> "\n  Logging severity: " <> pretty (show severity)
                 <> "\n  Checkpoint interval: " <> pretty (show checkpointInterval)
 
 -- * Local chainsync: config and runtime

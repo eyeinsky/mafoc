@@ -28,7 +28,7 @@ setupCtrlCHandler max' = do
 
 -- | Stop streaming when the signal MVar is filled with a True.
 takeWhileStopSignal :: Stop -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
-takeWhileStopSignal (Stop stopSignalMVar) = S.takeWhileM (\_ -> not <$> IO.readMVar stopSignalMVar)
+takeWhileStopSignal (Stop stopSignalMVar) = S.takeWhileM (\_a -> not <$> IO.readMVar stopSignalMVar)
 
 -- * Chekpoint
 

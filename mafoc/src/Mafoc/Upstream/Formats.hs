@@ -1,6 +1,5 @@
 {- | Conventional string formats used in Cardano. -}
 
-{-# LANGUAGE DerivingStrategies #-}
 module Mafoc.Upstream.Formats where
 
 import Data.Text qualified as TS

@@ -14,7 +14,7 @@ import Cardano.BM.Data.Severity qualified as CM
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, RunIndexer, CheckpointInterval)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -46,11 +46,12 @@ main = do
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
       IndexerCommand indexerCommand' batchSize severity maybePort checkpointInterval -> let
-        runIndexerNoApi :: (Indexer a, Show a) => a -> RunIndexer
+        commonConfig = CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval}
+        runIndexerNoApi :: (Indexer a, Show a) => a -> IO ()
         runIndexerNoApi configFromCli = case maybePort of
-          Just _port -> \_ _ _ _ _ _ -> E.throwIO E.Indexer_has_no_HTTP_API
-          Nothing -> runIndexer configFromCli Nothing
-        runIndexer' = case indexerCommand' of
+          Just _port -> E.throwIO E.Indexer_has_no_HTTP_API
+          Nothing -> runIndexer configFromCli commonConfig Nothing
+        in case indexerCommand' of
           BlockBasics        configFromCli -> runIndexerNoApi configFromCli
           MintBurn           configFromCli -> runIndexerNoApi configFromCli
           NoOp               configFromCli -> runIndexerNoApi configFromCli
@@ -63,12 +64,11 @@ main = do
           AddressBalance     configFromCli -> runIndexerNoApi configFromCli
           Datum              configFromCli -> runIndexerNoApi configFromCli
           IntraBlockSpends   configFromCli -> runIndexerNoApi configFromCli
-          Mamba              configFromCli -> runIndexer      configFromCli $ case maybePort of
+          Mamba              configFromCli -> runIndexer configFromCli commonConfig $ case maybePort of
             Just port -> Just $ \runtime mvar -> do
               let app = Servant.serve (Proxy @(API Mamba.Mamba)) $ server runtime mvar
               Warp.run port app
             Nothing -> Nothing
-        in runIndexer' batchSize stopSignal checkpointSignal statsSignal severity checkpointInterval
 
       FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal statsSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo

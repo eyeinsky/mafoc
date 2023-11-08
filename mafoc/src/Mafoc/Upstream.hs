@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE PatternSynonyms         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
