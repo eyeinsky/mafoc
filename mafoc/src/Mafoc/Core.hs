@@ -175,6 +175,13 @@ runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal
 
     traceInfo trace "Done."
 
+-- * Parallel
+
+type StatelessIndexer a = (Indexer a, Coercible (State a) ())
+
+stateless :: (State a ~ s, Coercible s ()) => s
+stateless = coerce ()
+
 -- * Buffered output
 
 data BatchState a

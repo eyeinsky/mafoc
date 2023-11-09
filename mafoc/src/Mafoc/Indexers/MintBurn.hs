@@ -40,6 +40,7 @@ import Mafoc.Core (
   setCheckpointSqlite,
   ensureStartFromCheckpoint,
   TxIndexInBlock,
+  stateless,
  )
 
 {- | Configuration data type which does double-duty as the tag for the
@@ -84,9 +85,9 @@ instance Indexer MintBurn where
     }
     deriving Show
 
-  data State MintBurn = EmptyState
+  newtype State MintBurn = Stateless ()
 
-  toEvents Runtime{assetFilter} _state blockInMode = (EmptyState, toEventsPrim assetFilter blockInMode)
+  toEvents Runtime{assetFilter} _state blockInMode = (stateless, toEventsPrim assetFilter blockInMode)
 
   initialize MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
@@ -98,7 +99,7 @@ instance Indexer MintBurn where
           Just (policyId, Just assetName) -> \policyId' assetName' -> policyId' == policyId && assetName' == assetName
           Just (policyId, Nothing)        -> \policyId' _          -> policyId' == policyId
           Nothing                         -> \_         _          -> True
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName assetFilter)
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName assetFilter)
 
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 

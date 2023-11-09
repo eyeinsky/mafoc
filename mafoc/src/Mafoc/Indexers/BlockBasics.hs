@@ -8,7 +8,7 @@ import Cardano.Api qualified as C
 import Mafoc.Core (DbPathAndTableName, eventsToSingleChainpoint,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_, initializeSqlite, ensureStartFromCheckpoint,
-                   setCheckpointSqlite)
+                   setCheckpointSqlite, stateless)
 
 -- * Block transaction count indexer
 
@@ -27,14 +27,14 @@ instance Indexer BlockBasics where
 
   newtype Event BlockBasics = Event (Word64, C.Hash C.BlockHeader, Int)
 
-  data State BlockBasics = EmptyState
+  newtype State BlockBasics = Stateless ()
 
   data Runtime BlockBasics = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
 
-  toEvents _runtime _state (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (EmptyState, [coerce (coerce slotNo :: Word64, hash, length txs)])
+  toEvents _runtime _state (C.BlockInMode (C.Block (C.BlockHeader slotNo hash _) txs) _) = (stateless, [coerce (coerce slotNo :: Word64, hash, length txs)])
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName $ coerce events
 
@@ -44,7 +44,7 @@ instance Indexer BlockBasics where
     (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
     sqliteInit sqlCon tableName
     chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
 

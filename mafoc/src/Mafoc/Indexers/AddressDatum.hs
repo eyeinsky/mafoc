@@ -9,7 +9,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, ensureStartFromCheckpoint)
+                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, ensureStartFromCheckpoint, stateless)
 import Mafoc.Indexers.Datum qualified as Datum
 
 data AddressDatum = AddressDatum
@@ -33,7 +33,7 @@ instance Indexer AddressDatum where
     , datums :: [Event Datum.Datum]
     }
 
-  data State AddressDatum = EmptyState
+  newtype State AddressDatum = Stateless ()
 
   data Runtime AddressDatum = Runtime
     { sqlConnection      :: SQL.Connection
@@ -43,7 +43,7 @@ instance Indexer AddressDatum where
     , maybeAddressFilter :: Maybe (C.Address C.ShelleyAddr -> Bool)
     }
 
-  toEvents Runtime{maybeAddressFilter} _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, [event])
+  toEvents Runtime{maybeAddressFilter} _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (stateless, [event])
     where
       filter' = case maybeAddressFilter of
         Just p -> filter ((\case C.AddressShelley addr -> p addr; _ -> False) . fst)
@@ -64,7 +64,7 @@ instance Indexer AddressDatum where
     sqliteInit sqlCon tableAddressDatums tableDatums
 
     chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tablePrefix tableAddressDatums tableDatums (mkMaybeAddressFilter addresses))
+    return (stateless, chainsyncRuntime', Runtime sqlCon tablePrefix tableAddressDatums tableDatums (mkMaybeAddressFilter addresses))
 
   persistMany Runtime{sqlConnection, tableAddressDatums, tableDatums} events = do
     sqliteInsertAddressDatums sqlConnection tableAddressDatums events

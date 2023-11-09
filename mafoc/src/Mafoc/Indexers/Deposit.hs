@@ -8,7 +8,7 @@ import Data.Aeson ((.=))
 import Data.List.NonEmpty qualified as NE
 
 import Cardano.Api qualified as C
-import Mafoc.Core (Indexer(Event, State, Runtime, description, parseCli, initialize, toEvents, persistMany, checkpoint), LocalChainsyncConfig_, initializeLocalChainsync_)
+import Mafoc.Core (Indexer(Event, State, Runtime, description, parseCli, initialize, toEvents, persistMany, checkpoint), LocalChainsyncConfig_, initializeLocalChainsync_, stateless)
 import Mafoc.CLI qualified as O
 import Mafoc.Utxo qualified as Utxo
 import Mafoc.Upstream (toAddressAny)
@@ -28,7 +28,7 @@ instance Indexer Deposit where
     , assets :: NE.NonEmpty (C.AddressAny, C.Value)
     }
 
-  data State Deposit = EmptyState
+  newtype State Deposit = Stateless ()
 
   data Runtime Deposit = Runtime { match :: C.AddressAny -> Maybe C.AddressAny }
 
@@ -42,7 +42,7 @@ instance Indexer Deposit where
   initialize Deposit{chainsync, addresses} trace = do
     lcr <- initializeLocalChainsync_ chainsync trace
     IO.hSetBuffering IO.stdout IO.LineBuffering
-    return (EmptyState, lcr, Runtime $ Utxo.addressListFilter addresses)
+    return (stateless, lcr, Runtime $ Utxo.addressListFilter addresses)
 
   toEvents Runtime{match} state bim@(C.BlockInMode (C.Block _ txs) _) = (state, mapMaybe toEvent txs)
     where

@@ -7,7 +7,7 @@ import Cardano.Api qualified as C
 import Mafoc.Core
   ( Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
   , DbPathAndTableName, defaultTableName, initializeSqlite, setCheckpointSqlite
-  , LocalChainsyncConfig_, initializeLocalChainsync_, ensureStartFromCheckpoint, TxIndexInBlock, maybeDatum, txPlutusDatums
+  , LocalChainsyncConfig_, initializeLocalChainsync_, ensureStartFromCheckpoint, TxIndexInBlock, maybeDatum, txPlutusDatums, stateless
   )
 import Mafoc.CLI qualified as O
 
@@ -34,14 +34,14 @@ instance Indexer Datum where
     }
     deriving Show
 
-  data State Datum = EmptyState
+  newtype State Datum = Stateless ()
 
   data Runtime Datum = Runtime
     { sqlConnection      :: SQL.Connection
     , tableName          :: String
     }
 
-  toEvents _runtime _state  blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, toEventsPrim (#slotNo blockInMode) txs)
+  toEvents _runtime _state  blockInMode@(C.BlockInMode (C.Block _ txs) _) = (stateless, toEventsPrim (#slotNo blockInMode) txs)
 
   initialize Datum{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
@@ -49,7 +49,7 @@ instance Indexer Datum where
     (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
     sqliteInit sqlCon tableName
     chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events
 

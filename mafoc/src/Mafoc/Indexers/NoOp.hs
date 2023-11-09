@@ -7,7 +7,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, ensureStartFromCheckpoint)
+                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, ensureStartFromCheckpoint, stateless)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig_
@@ -20,12 +20,12 @@ instance Indexer NoOp where
     <$> Opt.commonLocalChainsyncConfig
     <*> Opt.commonDbPathAndTableName
   data Event NoOp = EmptyEvent
-  data State NoOp = EmptyState
+  newtype State NoOp = Stateless ()
   data Runtime NoOp = Runtime
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
-  toEvents _runtime _state _blockInMode = (EmptyState, [EmptyEvent])
+  toEvents _runtime _state _blockInMode = (stateless, [EmptyEvent])
   initialize NoOp{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
@@ -33,6 +33,6 @@ instance Indexer NoOp where
     sqliteInitCheckpoints sqlCon
     checkpointedChainPoint <- fromMaybe C.ChainPointAtGenesis <$> getCheckpointSqlite sqlCon tableName
     chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
   persistMany _runtime _events = return ()
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh

@@ -7,7 +7,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, setCheckpointSqlite, ensureStartFromCheckpoint)
+                   initializeSqlite, setCheckpointSqlite, ensureStartFromCheckpoint, stateless)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi
 
 data ScriptTx = ScriptTx
@@ -29,9 +29,9 @@ instance Indexer ScriptTx where
     { sqlConnection :: SQL.Connection
     , tableName     :: String
     }
-  data State ScriptTx = EmptyState
+  newtype State ScriptTx = Stateless ()
 
-  toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (EmptyState, coerce event)
+  toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (stateless, coerce event)
     where
       event = let
         event'@(Marconi.ScriptTxEvent txScripts _) = Marconi.toUpdate txs (blockChainPoint blockInMode)
@@ -44,7 +44,7 @@ instance Indexer ScriptTx where
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
     (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
     chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
-    return (EmptyState, chainsyncRuntime', Runtime sqlCon tableName)
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events =
     Marconi.sqliteInsert sqlConnection tableName $ coerce events
