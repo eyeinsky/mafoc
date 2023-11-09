@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 
 module Cardano.Streaming.Callbacks where
@@ -27,19 +28,9 @@ blocksCallbackPipelined
   -> (H.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
   -> IO ()
 blocksCallbackPipelined n con point callback =
-  C.connectToLocalNode con $
-    C.LocalNodeClientProtocols
-      { C.localChainSyncClient =
-          C.LocalChainSyncClientPipelined $
-            CSP.ChainSyncClientPipelined $
-              pure $
-                CSP.SendMsgFindIntersect [point] onIntersect
-      , C.localTxSubmissionClient = Nothing
-      , C.localStateQueryClient = Nothing
-      , C.localTxMonitoringClient = Nothing
-      }
+  C.connectToLocalNode con $ localChainsyncClientPipelined $ pure $ CSP.SendMsgFindIntersect [point] onIntersect'
   where
-    onIntersect =
+    onIntersect' =
       CSP.ClientPipelinedStIntersect
         { CSP.recvMsgIntersectFound = \_ _ -> pure $ work n
         , CSP.recvMsgIntersectNotFound = throw H.NoIntersectionFound
@@ -83,21 +74,8 @@ blocksCallback
   -> C.ChainPoint
   -> (H.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ())
   -> IO ()
-blocksCallback con point callback =
-  C.connectToLocalNode con $
-    C.LocalNodeClientProtocols
-      { C.localChainSyncClient =
-          C.LocalChainSyncClient $ CS.ChainSyncClient $ pure $ CS.SendMsgFindIntersect [point] onIntersect
-      , C.localTxSubmissionClient = Nothing
-      , C.localStateQueryClient = Nothing
-      , C.localTxMonitoringClient = Nothing
-      }
+blocksCallback con point callback = C.connectToLocalNode con $ localChainsyncClient $ pure $ CS.SendMsgFindIntersect [point] $ onIntersect $ \_ _ -> sendRequestNext
   where
-    onIntersect =
-      CS.ClientStIntersect
-        { CS.recvMsgIntersectFound = \_ _ -> CS.ChainSyncClient sendRequestNext
-        , CS.recvMsgIntersectNotFound = throw H.NoIntersectionFound
-        }
     sendRequestNext = pure $ CS.SendMsgRequestNext onNext (pure onNext)
       where
         onNext =
@@ -109,3 +87,40 @@ blocksCallback con point callback =
                 callback $ H.RollBackward cp ct
                 sendRequestNext
             }
+
+intersectCallback
+  :: C.LocalNodeConnectInfo C.CardanoMode
+  -> C.ChainPoint
+  -> (C.ChainPoint -> C.ChainTip -> IO (CS.ClientStIdle (C.BlockInMode C.CardanoMode) C.ChainPoint C.ChainTip IO ()))
+  -> IO ()
+intersectCallback con point callback =
+  C.connectToLocalNode con $ localChainsyncClient $ pure $ CS.SendMsgFindIntersect [point] (onIntersect callback)
+
+onIntersect
+  :: (C.ChainPoint -> C.ChainTip -> IO (CS.ClientStIdle (C.BlockInMode C.CardanoMode) C.ChainPoint C.ChainTip IO ()))
+  -> CS.ClientStIntersect (C.BlockInMode C.CardanoMode) C.ChainPoint C.ChainTip IO ()
+onIntersect callback =
+  CS.ClientStIntersect
+    { CS.recvMsgIntersectFound = \cp ct -> CS.ChainSyncClient $ callback cp ct
+    , CS.recvMsgIntersectNotFound = throw H.NoIntersectionFound
+    }
+
+localChainsyncClient
+  :: IO (CS.ClientStIdle (C.BlockInMode C.CardanoMode) C.ChainPoint C.ChainTip IO ())
+  -> C.LocalNodeClientProtocolsInMode C.CardanoMode
+localChainsyncClient action = C.LocalNodeClientProtocols
+  { C.localChainSyncClient = C.LocalChainSyncClient $ CS.ChainSyncClient action
+  , C.localTxSubmissionClient = Nothing
+  , C.localStateQueryClient = Nothing
+  , C.localTxMonitoringClient = Nothing
+  }
+
+localChainsyncClientPipelined
+  :: IO (CSP.ClientPipelinedStIdle 'Z (C.BlockInMode C.CardanoMode) C.ChainPoint C.ChainTip IO ())
+  -> C.LocalNodeClientProtocolsInMode C.CardanoMode
+localChainsyncClientPipelined action = C.LocalNodeClientProtocols
+  { C.localChainSyncClient = C.LocalChainSyncClientPipelined $ CSP.ChainSyncClientPipelined action
+  , C.localTxSubmissionClient = Nothing
+  , C.localStateQueryClient = Nothing
+  , C.localTxMonitoringClient = Nothing
+  }
