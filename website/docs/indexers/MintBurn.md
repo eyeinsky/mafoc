@@ -1,5 +1,6 @@
+import CodeBlock from '@theme/CodeBlock';
+import sql from '!!raw-loader!@site/static/sql/mintburn.sql';
+
 # MintBurn
 
-```sql
-
-```
+<CodeBlock className='language-sql'>{sql}</CodeBlock>
