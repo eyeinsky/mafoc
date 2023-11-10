@@ -1,6 +1,6 @@
-import CodeBlock from '@theme/CodeBlock';
 import sql from '!!raw-loader!@site/static/sql/epochstakepoolsize.sql';
+import {DbSyncSql} from '@site/src/components/Common.js';
 
 # EpochStakepoolSize
 
-<CodeBlock className='language-sql'>{sql}</CodeBlock>
+<DbSyncSql sql={sql} />

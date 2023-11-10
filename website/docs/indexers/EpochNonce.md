@@ -1,6 +1,6 @@
-import CodeBlock from '@theme/CodeBlock';
 import sql from '!!raw-loader!@site/static/sql/epochnonce.sql';
+import {DbSyncSql} from '@site/src/components/Common.js';
 
 # EpochNonce
 
-<CodeBlock className='language-sql'>{sql}</CodeBlock>
+<DbSyncSql sql={sql} />

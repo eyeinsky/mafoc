@@ -1,6 +1,6 @@
-import CodeBlock from '@theme/CodeBlock';
 import sql from '!!raw-loader!@site/static/sql/addressbalance.sql';
+import {DbSyncSql} from '@site/src/components/Common.js';
 
 # AddressBalance
 
-<CodeBlock className='language-sql'>{sql}</CodeBlock>
+<DbSyncSql sql={sql} />
