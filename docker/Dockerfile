@@ -1,0 +1,7 @@
+FROM scratch
+WORKDIR /
+ARG NIX_STORE
+ARG EXE
+COPY $NIX_STORE /
+COPY $EXE       /app
+ENTRYPOINT ["/app"]
