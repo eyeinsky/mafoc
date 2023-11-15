@@ -10,6 +10,43 @@ const indexerLink = (name, text) => <a href='./docs/indexers'>{text}</a>
 
 const FeatureList = [
   {
+    title: 'Custom indexers',
+    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
+    description: (
+      <>
+        <p>
+          Quickly write a custom indexer by picking the data that you need from the blockchain
+          and storing it however you want.
+        </p>
+        <p>
+          Parallelism, profiling and logging are brought to you by the framework.
+        </p>
+      </>
+    )
+  },
+
+  {
+    title: 'Deploy anywhere',
+    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
+    description: (
+      <>
+        Easily build your indexer into a docker container and run anywhere, including Apple silicon Macs.
+      </>
+    )
+  },
+
+  {
+    title: 'Data matches Cardano DB Sync',
+    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
+    description: (
+      <>
+        Every {indexersLink('indexer in Mafoc')} corresponds to a subset of
+        Cardano DB Sync. Testing against it we know we have the right data.
+      </>
+    ),
+  },
+
+  {
     title: 'For users',
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
@@ -17,39 +54,6 @@ const FeatureList = [
         Run any of the predefined indexers out of the box, e.g
         monitor {indexerLink('Deposit', 'incoming transactions')} or {indexerLink('AddressBalance', 'balance')} of
         an address.
-      </>
-    ),
-  },
-
-  {
-    title: 'For developers',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
-    description: (
-      <>
-        Docusaurus lets you focus on your docs, and we&apos;ll do the chores. Go
-        ahead and move your docs into the <code>docs</code> directory.
-      </>
-    ),
-  },
-
-  {
-    title: 'Matches Cardano DB Sync',
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
-    description: (
-      <>
-        Every {indexersLink('indexer in Mafoc')} corresponds to some subset of
-        Cardano DB Sync. Having tests for that we know we have the right data.
-      </>
-    ),
-  },
-
-  {
-    title: 'Propose an indexer',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
-    description: (
-      <>
-        Wish an indexer existed for some type of data but
-        doesn't? <a href='https://github.com/eyeinsky/mafoc/issues/new?title=[new indexer]'>Propose it here</a>.
       </>
     ),
   },
