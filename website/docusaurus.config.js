@@ -11,7 +11,7 @@ const mafocGithub = 'https://github.com/eyeinsky/mafoc';
 const config = {
   title: 'Mafoc',
   tagline: 'The Cardano Indexer Library',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/mafoc-logo.svg',
 
   url: 'https://captainhaskell.ee',
   baseUrl: '/mafoc/',
@@ -66,8 +66,8 @@ const config = {
       navbar: {
         title: 'Mafoc',
         logo: {
-          alt: 'My Site Logo',
-          src: 'img/logo.svg',
+          alt: 'Mafoc Logo',
+          src: 'img/mafoc-logo.svg',
         },
         items: [
           {
