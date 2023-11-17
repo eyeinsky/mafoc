@@ -19,11 +19,14 @@ import Database.SQLite.Simple.ToField qualified as SQL
 import Database.SQLite.Simple.FromField qualified as SQL
 import Data.Map.Strict qualified as M
 import Data.Either (rights)
+import Control.Concurrent qualified as IO
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
+import Cardano.Streaming.Callbacks qualified as CS
+import Ouroboros.Network.Protocol.ChainSync.Client qualified as CS
 import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 import Mafoc.Exceptions qualified as E
@@ -120,6 +123,14 @@ querySecurityParam localNodeConnectInfo = do
   case Marconi.shelleyBasedToCardanoEra era of
     Nothing -> throwIO $ UnspecifiedException "The security parameter can only be queried in shelley based era."
     Just shelleyBasedEra -> querySecurityParamEra localNodeConnectInfo shelleyBasedEra
+
+queryNodeTip :: C.LocalNodeConnectInfo C.CardanoMode -> IO C.ChainTip
+queryNodeTip localNodeConnectInfo = do
+  mvar <- IO.newEmptyMVar
+  C.connectToLocalNode localNodeConnectInfo $ CS.localChainsyncClient $
+    pure $ CS.SendMsgFindIntersect [C.ChainPointAtGenesis] $ CS.onIntersect $ \_ ct -> do
+      IO.putMVar mvar ct $> CS.SendMsgDone ()
+  IO.readMVar mvar
 
 -- ** Block accessors
 

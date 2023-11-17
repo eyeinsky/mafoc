@@ -109,6 +109,7 @@ library
     , cardano-ledger-api
     , cardano-ledger-babbage
     , cardano-ledger-conway
+    , ouroboros-network-protocols
 
   ------------------------
   -- Non-IOG dependencies
