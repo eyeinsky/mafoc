@@ -52,10 +52,17 @@ data MafocIOException
     { requested :: C.ChainPoint -- ^ Requested ChainPoint to start indexing from
     , fromState ::  C.ChainPoint -- ^ ChainPoint for latest state file we have available
     }
+  -- | HTTP API was requested from an indexer which doesn't have an API defined.
+  | Indexer_has_no_HTTP_API
+  -- | Indexers that require state (utxo, epochstakepoolsizes,
+  -- epochnonce, addressbalance) to extract their events can't index
+  -- the chain in parallel as state is folded sequentially from
+  -- genesis. Thus, starting from the middle is not possible
+  -- because we don't have a state for that point.
+  | Stateful_indexer_can't_be_run_with_parallelilsm
   -- | An escape-hatch exception: an exception where we don't bother
   -- with structure, but just explain in text. Perhaps we'll find a
   -- category later.
-  | Indexer_has_no_HTTP_API
   | TextException TS.Text
   deriving stock Show
   deriving anyclass Exception

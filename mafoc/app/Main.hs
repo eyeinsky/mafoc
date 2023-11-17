@@ -14,7 +14,7 @@ import Cardano.BM.Data.Severity qualified as CM
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval, DbPathAndTableName)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
@@ -45,7 +45,7 @@ main = do
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-      IndexerCommand indexerCommand' batchSize severity maybePort checkpointInterval -> let
+      IndexerCommand indexerCommand' batchSize severity maybePort checkpointInterval _parallelism -> let
         commonConfig = CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval}
         runIndexerNoApi :: (Indexer a, Show a) => a -> IO ()
         runIndexerNoApi configFromCli = case maybePort of
@@ -87,7 +87,7 @@ printRollbackException io = io `IO.catches`
 
 data Command
   = Speed Speed.BlockSource
-  | IndexerCommand IndexerCommand BatchSize CM.Severity (Maybe Int) CheckpointInterval
+  | IndexerCommand IndexerCommand BatchSize CM.Severity (Maybe Int) CheckpointInterval Parallelism
   | FoldLedgerState FoldLedgerState.FoldLedgerState
   | SlotNoChainPoint FilePath C.SlotNo
   deriving Show
@@ -106,6 +106,14 @@ data IndexerCommand
   | Mamba Mamba.Mamba
   | Datum Datum.Datum
   | IntraBlockSpends IntraBlockSpends.IntraBlockSpends
+  deriving Show
+
+data Parallelism
+  = NoParallelism
+  | RunParallel
+    { headerDb :: DbPathAndTableName
+    , maxWorkers :: Natural
+    }
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -148,6 +156,7 @@ indexerCommand name f = Opt.command name $ Opt.parserToParserInfo descr (name <>
   <*> Opt.commonLogSeverity
   <*> Opt.commonRunHttpApi
   <*> Opt.commonCheckpointInterval
+  <*> pure NoParallelism
   where
     descr = TS.unpack (description @a)
 
