@@ -6,13 +6,14 @@ sidebar_position: 50
 
 ## Docker (linux, macOS, Windows)
 
-The easiest way to start mafoc is to use docker.
+The easiest way to start mafoc is to use docker:
 ```bash
 docker run --rm -it markus77/mafoc
 ```
-The above lists all available indexers and doesn't need a local node present.
+The above lists all available indexers.
 
-Start a specific indexer, say to index datums:
+
+Start a specific indexer, say, to index datums:
 ```bash
 docker run --rm -it \
     -v /path/to/node.socket:/socket \
@@ -26,7 +27,7 @@ and also a folder for where to store the database.
 
 ## Nix
 
-On NixOS or Linux with the nix package manager should work.
+On NixOS or Linux with the [nix](https://nixos.org/) package manager the following should work:
 
 ```bash
 nix develop
