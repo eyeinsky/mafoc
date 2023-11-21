@@ -4,7 +4,6 @@ import Data.Time (NominalDiffTime)
 import Data.List qualified as L
 import Data.Text qualified as TS
 import Data.Text.Encoding qualified as TS
-import Options.Applicative ((<|>))
 import Options.Applicative qualified as O
 import Text.Read qualified as Read
 import Data.List.NonEmpty qualified as NE
@@ -19,6 +18,7 @@ import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (Db
 import Mafoc.Upstream (LedgerEra, lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
+import Mafoc.MultiAsset (AssetFingerprint, AsType(AsAssetFingerprint))
 
 -- * Options
 
@@ -33,6 +33,15 @@ commonDbPathAndTableName = O.option (O.eitherReader parseDbPathAndTableName) $ o
   "Optional path to sqlite database (defaults to default.db) and a table name (default is indexer-specific)."
   <> O.value (DbPathAndTableName Nothing Nothing)
 
+commonAssetFingerprint :: O.Parser AssetFingerprint
+commonAssetFingerprint = assetFingerprint $ O.long "fingerprint"
+
+assetFingerprint :: O.Mod O.OptionFields AssetFingerprint -> O.Parser AssetFingerprint
+assetFingerprint = O.option (O.eitherReader f)
+  where
+    f :: String -> Either String AssetFingerprint
+    f = either (Left . C.displayError) Right . C.deserialiseFromBech32 AsAssetFingerprint . TS.pack
+
 parseDbPathAndTableName :: String -> Either String DbPathAndTableName
 parseDbPathAndTableName str = let
       (dbPath, tableName) = L.span (/= ':') str
@@ -41,7 +50,6 @@ parseDbPathAndTableName str = let
         ':' : rest@(_:_) -> Just rest
         _                -> Nothing
       in Right $ DbPathAndTableName dbPath' tableName'
-
 
 commonNodeConfig :: O.Parser FilePath
 commonNodeConfig = O.strOption (opt 'c' "node-config" "Path to node configuration.")
@@ -260,14 +268,23 @@ commonLogSeverity = let
      <> O.value CM.Notice
 
 commonMaybeAssetId :: O.Parser (Maybe (C.PolicyId, Maybe C.AssetName))
-commonMaybeAssetId = O.option (O.eitherReader parse) (longOpt "asset-id" "Either ${policyId}.${assetName} or just ${policyId}")
+commonMaybeAssetId = O.option
+  (O.eitherReader $ fmap Just . parseAssetId)
+  (longOpt "asset-id" "Either ${policyId}.${assetName} or just ${policyId}" <> O.value Nothing)
+
+commonAssetId :: O.Parser (C.PolicyId, Maybe C.AssetName)
+commonAssetId = O.option
+  (O.eitherReader parseAssetId)
+  (longOpt "asset-id" "Either ${policyId}.${assetName} or just ${policyId}")
+
+parseAssetId :: String -> Either String (C.PolicyId, Maybe C.AssetName)
+parseAssetId str = case span (/= '.') str of
+  (policyIdStr, []) -> (,Nothing) <$> parsePolicyId policyIdStr
+  (policyIdStr, assetNameStr@(_ : _)) -> do
+    policyId <- parsePolicyId policyIdStr
+    assetName <- parseAssetName assetNameStr
+    return (policyId, Just assetName)
   where
-    parse str = case span (/= '.') str of
-      (policyIdStr, []) -> (\policyId -> Just (policyId, Nothing)) <$> parsePolicyId policyIdStr
-      (policyIdStr, assetNameStr@(_ : _)) -> do
-        policyId <- parsePolicyId policyIdStr
-        assetName <- parseAssetName assetNameStr
-        return $ Just (policyId, Just assetName)
     parsePolicyId :: String -> Either String C.PolicyId
     parsePolicyId = first show . C.deserialiseFromRawBytesHex C.AsPolicyId . TS.encodeUtf8 . TS.pack
     parseAssetName :: String -> Either String C.AssetName

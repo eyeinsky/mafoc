@@ -23,6 +23,7 @@ import Mafoc.Indexers.Datum qualified as Datum
 import Mafoc.Indexers.Deposit qualified as Deposit
 import Mafoc.Indexers.EpochNonce qualified as EpochNonce
 import Mafoc.Indexers.EpochStakepoolSize qualified as EpochStakepoolSize
+import Mafoc.Indexers.Fingerprint qualified as Fingerprint
 import Mafoc.Indexers.Mamba qualified as Mamba
 import Mafoc.Indexers.MintBurn qualified as MintBurn
 import Mafoc.Indexers.NoOp qualified as NoOp
@@ -57,6 +58,7 @@ main = do
           NoOp               configFromCli -> runIndexerNoApi configFromCli
           EpochStakepoolSize configFromCli -> runIndexerNoApi configFromCli
           EpochNonce         configFromCli -> runIndexerNoApi configFromCli
+          Fingerprint        configFromCli -> runIndexerNoApi configFromCli
           ScriptTx           configFromCli -> runIndexerNoApi configFromCli
           Deposit            configFromCli -> runIndexerNoApi configFromCli
           AddressDatum       configFromCli -> runIndexerNoApi configFromCli
@@ -98,6 +100,7 @@ data IndexerCommand
   | NoOp NoOp.NoOp
   | EpochStakepoolSize EpochStakepoolSize.EpochStakepoolSize
   | EpochNonce EpochNonce.EpochNonce
+  | Fingerprint Fingerprint.Fingerprint
   | ScriptTx ScriptTx.ScriptTx
   | Deposit Deposit.Deposit
   | Utxo Utxo.Utxo
@@ -141,6 +144,7 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
       <> indexerCommand "datum" Datum
       <> indexerCommand "epochnonce" EpochNonce
       <> indexerCommand "epochstakepoolsize" EpochStakepoolSize
+      <> indexerCommand "fingerprint" Fingerprint
       <> indexerCommand "mamba" Mamba
       <> indexerCommand "mintburn" MintBurn
       <> indexerCommand "noop" NoOp

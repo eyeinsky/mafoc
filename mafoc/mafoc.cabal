@@ -50,6 +50,7 @@ library
     Mafoc.Exceptions
     Mafoc.FieldNameAfterUnderscore
     Mafoc.LedgerState
+    Mafoc.MultiAsset
     Mafoc.Signal
     Mafoc.StateFile
     Mafoc.Indexers.AddressBalance
@@ -59,6 +60,7 @@ library
     Mafoc.Indexers.BlockBasics
     Mafoc.Indexers.EpochNonce
     Mafoc.Indexers.EpochStakepoolSize
+    Mafoc.Indexers.Fingerprint
     Mafoc.Indexers.Mamba
     Mafoc.Indexers.MintBurn
     Mafoc.Indexers.NoOp
@@ -119,11 +121,14 @@ library
     , async
     , base                  >=4.9 && <5
     , base16-bytestring
+    , bech32
     , bytestring
     , cborg
     , containers
+    , cryptonite
     , directory
     , filepath
+    , memory
     , optparse-applicative
     , prettyprinter
     , primitive

@@ -19,6 +19,7 @@ import Data.Char as Export (isDigit, toLower, toUpper)
 import Text.Read as Export (readEither, readMaybe)
 import Data.Bifunctor as Export (first, second)
 
+import Control.Applicative as Export ((<|>), Alternative)
 import Control.Monad.Trans.Class as Export (MonadTrans, lift)
 import Control.Monad.IO.Class as Export (MonadIO, liftIO)
 import Control.Monad as Export (foldM, forM_)
