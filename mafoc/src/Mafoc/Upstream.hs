@@ -191,6 +191,9 @@ instance IsLabel "chainPoint" (C.BlockInMode era -> C.ChainPoint) where
 instance IsLabel "chainPoint" (SlotNoBhh -> C.ChainPoint) where
   fromLabel (slotNo, bhh) = C.ChainPoint slotNo bhh
 
+instance IsLabel "chainPoint" (C.ChainTip -> C.ChainPoint) where
+  fromLabel = C.chainTipToChainPoint
+
 -- *** BlockNo
 
 instance IsLabel "blockNo" (C.BlockHeader -> C.BlockNo) where

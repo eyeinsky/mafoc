@@ -29,7 +29,7 @@ import System.FilePath ((</>))
 import Servant.Server qualified as Servant
 
 import Cardano.Api qualified as C
-import Cardano.BM.Setup (withTrace)
+import Cardano.BM.Setup qualified as Trace
 import Cardano.BM.Trace qualified as Trace
 import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Streaming qualified as CS
@@ -124,56 +124,69 @@ runIndexer
   -> CommonConfig
   -> Maybe (RunHttpApi a)
   -> IO ()
-runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = do
-  c <- defaultConfigStderrSeverity severity
-  withTrace c "mafoc" $ \trace -> do
-    initialNotice cli batchSize severity checkpointInterval trace
+runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = stderrTrace severity $ \trace -> do
+  initialNotice cli batchSize severity checkpointInterval trace
+  (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
+  let (fromChainPoint, upTo) = interval lcr
+  initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
 
-    (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
-    let (fromChainPoint, upTo) = interval lcr
-    initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
+  let
+    persistStep' :: BatchStepper a
+    persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
 
+  persistStep'' <- case maybeApiServer of
+    Nothing -> return persistStep'
+    Just runServer -> hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep'
 
-    let
-      persistStep' :: BatchStepper a
-      persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
+  maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
 
-    persistStep'' <- case maybeApiServer of
-      Nothing -> return persistStep'
-      Just runServer -> hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep'
+  traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
+  indexSection statsSignal stopSignal indexerInitialState persistStep'' initialBatchState indexerRuntime maybeProfiling trace lcr
+  traceInfo trace "Done."
 
-    maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
+indexSection
+  :: Indexer a
+  => Signal.ChainsyncStats
+  -> Signal.Stop
+  -> State a
+  -> BatchStepper a
+  -> BatchState a
+  -> Runtime a
+  -> Maybe Logging.ProfilingRuntime
+  -> Trace.Trace IO TS.Text
+  -> LocalChainsyncRuntime
+  -> IO ()
+indexSection statsSignal stopSignal indexerInitialState persistStep_ initialBatchState indexerRuntime maybeProfiling trace lcr = let
+  (fromChainPoint, upTo) = interval lcr
+  in do
+  batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint (concurrencyPrimitive lcr)
+    & (if logging lcr then Logging.logging trace statsSignal else id)
+    & maybe id Logging.profileStep maybeProfiling
+    & S.drop 1 -- The very first event from local chainsync is always a
+               -- rewind. We skip this because we don't have anywhere to
+               -- rollback to anyway.
+    & takeUpTo trace upTo stopSignal
+    & rollbackRingBuffer (securityParam lcr)
 
-    -- Start streaming blocks over local chainsync
-    traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
-    batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint (concurrencyPrimitive lcr)
-      & (if logging lcr then Logging.logging trace statsSignal else id)
-      & maybe id Logging.profileStep maybeProfiling
-      & S.drop 1 -- The very first event from local chainsync is always a
-                 -- rewind. We skip this because we don't have anywhere to
-                 -- rollback to anyway.
-      & takeUpTo trace upTo stopSignal
-      & rollbackRingBuffer (securityParam lcr)
+    -- Fold over stream of blocks by converting them to events, then
+    -- pass them on together with a chain point and indexer state
+    & foldYield (\indexerState blockInMode -> do
+                    let (indexerState', events) = toEvents indexerRuntime indexerState blockInMode
+                    return (indexerState', (blockSlotNoBhh blockInMode, events, indexerState'))
+                ) indexerInitialState
 
-      -- Fold over stream of blocks by converting them to events, then
-      -- pass them on together with a chain point and indexer state
-      & foldYield (\indexerState blockInMode -> do
-                      let (indexerState', events) = toEvents indexerRuntime indexerState blockInMode
-                      return (indexerState', (blockSlotNoBhh blockInMode, events, indexerState'))
-                  ) indexerInitialState
+    -- Persist events in batches and write a checkpoint. Do this
+    -- either when `batchSize` amount of events is collected or when
+    -- a time limit is reached.
+    & S.foldM_ persistStep_ (pure initialBatchState) pure
 
-      -- Persist events in batches and write a checkpoint. Do this
-      -- either when `batchSize` amount of events is collected or when
-      -- a time limit is reached.
-      & S.foldM_ persistStep'' (pure initialBatchState) pure
+  -- Streaming done, write final batch of events and checkpoint
+  maybeCp <- persistStepFinal indexerRuntime batchState trace
 
-    -- Streaming done, write final batch of events and checkpoint
-    maybeCp <- persistStepFinal indexerRuntime batchState trace
+  -- Write last profiler event
+  _ <- traverse (\profiling -> Logging.profilerEnd profiling maybeCp) maybeProfiling
 
-    -- Write last profiler event
-    _ <- traverse (\profiling -> Logging.profilerEnd profiling maybeCp) maybeProfiling
-
-    traceInfo trace "Done."
+  return ()
 
 -- * Parallel
 
@@ -325,6 +338,11 @@ hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persi
 
 -- * Trace
 
+stderrTrace :: CM.Severity -> (Trace.Trace IO TS.Text -> IO a) -> IO a
+stderrTrace severity f = do
+  c <- defaultConfigStderrSeverity severity
+  Trace.withTrace c "mafoc" f
+
 initialNotice :: Show a => a -> BatchSize -> CM.Severity -> CheckpointInterval -> Trace.Trace IO TS.Text -> IO ()
 initialNotice cli batchSize severity checkpointInterval trace = traceNotice trace
   $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
@@ -412,7 +430,7 @@ initializeLocalChainsync localChainsyncConfig networkId trace = do
       localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
 
-  -- Resolve possible SlotNo in interval start:
+  -- Resolve any bare SlotNo to ChainPoint
   let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo localChainsyncConfig
   cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
 
@@ -607,7 +625,7 @@ eventsToSingleChainpoint = \case
   ((slotNo, hash) : _) -> Just (C.ChainPoint (coerce slotNo) hash)
   _                    -> Nothing
 
-
+-- | Resolve @SlotNo@ to @ChainPoint@ by finding block header hash from an Sqlite table
 chainPointForSlotNo :: SQL.Connection -> String -> C.SlotNo -> IO (Maybe C.ChainPoint)
 chainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
   where
