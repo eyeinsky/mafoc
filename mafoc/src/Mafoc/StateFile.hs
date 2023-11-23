@@ -1,10 +1,12 @@
 module Mafoc.StateFile where
 
+import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as C8
 import Data.List qualified as L
 import Data.Text qualified as TS
 import System.Directory (listDirectory, removeFile)
 import Text.Read qualified as Read
+import Control.Exception qualified as E
 
 import Cardano.Api qualified as C
 
@@ -53,6 +55,18 @@ list dirPath prefix = L.sortBy (flip compare `on` snd) . mapMaybe parse <$> list
         | prefix == filePrefix -> Just (fn, slotNoBhh)
         | otherwise -> Nothing
       Left _err -> Nothing
+
+-- * CBOR
+
+readCbor :: C.SerialiseAsCBOR a => C.AsType a -> FilePath -> IO a
+readCbor asType path = do
+  bs <- BS.readFile path
+  case C.deserialiseFromCBOR asType bs of
+    Left decoderError -> E.throwIO decoderError
+    Right eventMap -> return eventMap
+
+storeCbor :: C.SerialiseAsCBOR a => a -> FilePath -> IO ()
+storeCbor state path = BS.writeFile path $ C.serialiseToCBOR state
 
 -- * Parsers
 

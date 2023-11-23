@@ -220,11 +220,7 @@ storeStateFile prefix slotNoBhh state =
   StateFile.store prefix slotNoBhh $ \path -> BS.writeFile path $ C.serialiseToCBOR state
 
 parseState :: FilePath -> IO (State Utxo)
-parseState path = do
-  bs <- BS.readFile path
-  case C.deserialiseFromCBOR AsUtxoState bs of
-    Left decoderError -> E.throwIO decoderError
-    Right eventMap -> return eventMap
+parseState path = StateFile.readCbor AsUtxoState path
 
 instance C.HasTypeProxy (State Utxo) where
   data AsType (State Utxo) = AsUtxoState
