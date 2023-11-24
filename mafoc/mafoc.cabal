@@ -53,6 +53,7 @@ library
     Mafoc.MultiAsset
     Mafoc.Signal
     Mafoc.StateFile
+    Mafoc.Indexers.AddressAppears
     Mafoc.Indexers.AddressBalance
     Mafoc.Indexers.AddressDatum
     Mafoc.Indexers.Datum

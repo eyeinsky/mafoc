@@ -16,6 +16,7 @@ import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval, DbPathAndTableName)
 import Mafoc.Exceptions qualified as E
+import Mafoc.Indexers.AddressAppears qualified as AddressAppears
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
 import Mafoc.Indexers.AddressDatum qualified as AddressDatum
 import Mafoc.Indexers.BlockBasics qualified as BlockBasics
@@ -66,6 +67,7 @@ main = do
           AddressBalance     configFromCli -> runIndexerNoApi configFromCli
           Datum              configFromCli -> runIndexerNoApi configFromCli
           IntraBlockSpends   configFromCli -> runIndexerNoApi configFromCli
+          AddressAppears     configFromCli -> runIndexerNoApi configFromCli
           Mamba              configFromCli -> runIndexer configFromCli commonConfig $ case maybePort of
             Just port -> Just $ \runtime mvar -> do
               let app = Servant.serve (Proxy @(API Mamba.Mamba)) $ server runtime mvar
@@ -104,6 +106,7 @@ data IndexerCommand
   | ScriptTx ScriptTx.ScriptTx
   | Deposit Deposit.Deposit
   | Utxo Utxo.Utxo
+  | AddressAppears AddressAppears.AddressAppears
   | AddressBalance AddressBalance.AddressBalance
   | AddressDatum AddressDatum.AddressDatum
   | Mamba Mamba.Mamba
@@ -137,7 +140,8 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
 
     indexers :: Opt.Mod Opt.CommandFields Command
     indexers =
-         indexerCommand "addressbalance" AddressBalance
+         indexerCommand "addressappears" AddressAppears
+      <> indexerCommand "addressbalance" AddressBalance
       <> indexerCommand "addressdatum" AddressDatum
       <> indexerCommand "blockbasics" BlockBasics
       <> indexerCommand "deposit" Deposit
