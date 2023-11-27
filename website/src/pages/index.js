@@ -17,8 +17,8 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/docs/intro">
-            🚧🚧🚧 UNDER CONSTRUCTION 🚧🚧🚧
+            to="https://cardano.ideascale.com/c/idea/111683">
+             🚀🚀🚀 Catalyst Fund11 proposal 🚀🚀🚀
           </Link>
         </div>
       </div>
