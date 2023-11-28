@@ -2,15 +2,7 @@ import {DbSyncSql} from '@site/src/components/Common.js';
 
 # Mamba
 
-<DbSyncSql>
+Composite of utxo, epochnonce, epochstakepoolsize, mintburn
+and datum indexers.
 
-Mamba is a composite indexer based on the following indexers:
-- Utxo
-- EpochNonce
-- EpochStakepoolSize
-- MintBurn
-- Datum
-
-See each of them for their equivalent Cardano DB Sync SQL query.
-
-</DbSyncSql>
+See each of the separate indexers as to what data they provide.
