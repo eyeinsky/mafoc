@@ -602,15 +602,30 @@ getCheckpointSqlite sqlCon name = do
     []              -> return Nothing
     _               -> E.throwIO $ E.The_impossible_happened "Indexer can't have more than one checkpoint in sqlite"
 
--- ** Initialise
+-- ** Initialize
 
--- | If ChainPointAtGenesis is returned, then there was no chain point in the database.
-initializeSqlite :: FilePath -> String -> IO (SQL.Connection, C.ChainPoint)
-initializeSqlite dbPath tableName = do
+-- | Adjust @LocalChainsyncRuntime@ with chekpointed chainpoint if it
+-- is later than what was requested from the CLI.
+useSqliteCheckpoint :: FilePath -> String -> Trace.Trace IO TS.Text -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
+useSqliteCheckpoint dbPath tableName trace chainsyncRuntime = do
   sqlCon <- sqliteOpen dbPath
   sqliteInitCheckpoints sqlCon
-  checkpointedChainPoint <- fromMaybe C.ChainPointAtGenesis <$> getCheckpointSqlite sqlCon tableName
-  return (sqlCon, checkpointedChainPoint)
+  chainsyncRuntime' <- getCheckpointSqlite sqlCon tableName >>= \case
+    Just existingCheckpoint -> let (requested, upTo) = interval chainsyncRuntime
+      in if requested > existingCheckpoint
+      then do
+      traceInfo trace
+        $ "Found chekpoint at" <+> pretty existingCheckpoint
+        <+> "but using chainpoint requested from CLI because it's later" <+> pretty requested
+      pure $ chainsyncRuntime { interval = (requested, upTo) }
+      else do
+      traceInfo trace
+        $ "Found chekpoint at" <+> pretty existingCheckpoint
+        <+> ", using that instead of the one requested from CLI" <+> pretty requested
+        -- todo use exclamation mark to force
+      pure $ chainsyncRuntime { interval = (existingCheckpoint, upTo) }
+    Nothing -> pure chainsyncRuntime
+  return (sqlCon, chainsyncRuntime')
 
 sqliteOpen :: FilePath -> IO SQL.Connection
 sqliteOpen dbPath = do
