@@ -57,10 +57,10 @@ instance Indexer EpochStakepoolSize where
       EpochResolution.SameOrAbsent -> []
       EpochResolution.AssumptionBroken exception -> throw exception
 
-  initialize EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
+  initialize cli@EpochStakepoolSize{chainsyncConfig, dbPathAndTableName} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig
     networkId <- #getNetworkId nodeConfig
-    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace $ show cli
     let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName

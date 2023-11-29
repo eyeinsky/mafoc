@@ -26,8 +26,8 @@ instance Indexer NoOp where
     , tableName     :: String
     }
   toEvents _runtime _state _blockInMode = (stateless, [EmptyEvent])
-  initialize NoOp{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@NoOp{chainsync, dbPathAndTableName} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInitCheckpoints sqlCon

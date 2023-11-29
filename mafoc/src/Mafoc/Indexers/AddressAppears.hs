@@ -43,8 +43,8 @@ instance Indexer AddressAppears where
     , address :: C.AddressAny
     } deriving (Show, Generic, A.ToJSON)
 
-  initialize AddressAppears{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@AddressAppears{chainsync, dbPathAndTableName} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     (sqlConnection, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlConnection tableName

@@ -39,8 +39,8 @@ instance Indexer Deposit where
       <$> O.commonLocalChainsyncConfig
       <*> O.some_ O.commonAddress
 
-  initialize Deposit{chainsync, addresses} trace = do
-    lcr <- initializeLocalChainsync_ chainsync trace
+  initialize cli@Deposit{chainsync, addresses} trace = do
+    lcr <- initializeLocalChainsync_ chainsync trace $ show cli
     IO.hSetBuffering IO.stdout IO.LineBuffering
     return (stateless, lcr, Runtime $ Utxo.addressListFilter addresses)
 

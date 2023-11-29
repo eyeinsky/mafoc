@@ -88,8 +88,8 @@ instance Indexer MintBurn where
 
   toEvents Runtime{assetFilter} _state blockInMode = (stateless, toEventsPrim assetFilter blockInMode)
 
-  initialize MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName

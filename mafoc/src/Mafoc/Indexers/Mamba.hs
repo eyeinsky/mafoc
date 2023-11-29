@@ -125,7 +125,7 @@ instance Indexer Mamba where
 
       state' = State extLedgerState' maybeEpochNo' utxoState' $ #blockNo blockInMode
 
-  initialize Mamba{chainsyncConfig, dbPathAndTableName, stateFilePrefix} trace = do
+  initialize cli@Mamba{chainsyncConfig, dbPathAndTableName, stateFilePrefix} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig
         ledgerStateFile = stateFilePrefix <> "_ledgerState"
         utxoStateFile = stateFilePrefix <> "_utxo"
@@ -159,7 +159,7 @@ instance Indexer Mamba where
 
         localChainsyncRuntime <- do
           networkId <- #getNetworkId nodeConfig
-          localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+          localChainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace $ show cli
           let cliCp = fst $ interval localChainsyncRuntime'
           if cliCp <= stateCp
             then return $ localChainsyncRuntime' {interval = (stateCp, snd $ interval localChainsyncRuntime') }

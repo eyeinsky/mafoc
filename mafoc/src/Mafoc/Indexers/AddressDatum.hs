@@ -55,8 +55,8 @@ instance Indexer AddressDatum where
         , datums = Datum.toEventsPrim (#slotNo blockInMode) txs
         }
 
-  initialize AddressDatum{chainsync, dbPathAndTableName, addresses} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@AddressDatum{chainsync, dbPathAndTableName, addresses} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tablePrefix) = defaultTableName "address_datums" dbPathAndTableName
         tableAddressDatums = tablePrefix <> "_address_datums"
         tableDatums = tablePrefix <> "_datums"

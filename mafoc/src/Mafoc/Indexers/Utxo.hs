@@ -61,10 +61,10 @@ instance Indexer Utxo where
 
   toEvents Runtime{onUtxo} state blockInMode = toEventsPrim state onUtxo blockInMode
 
-  initialize Utxo{chainsync, dbPathAndTableName, stateFilePrefix_, ignoreMissingUtxos} trace = do
+  initialize cli@Utxo{chainsync, dbPathAndTableName, stateFilePrefix_, ignoreMissingUtxos} trace = do
 
     networkId <- #getNetworkId chainsync
-    chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace
+    chainsyncRuntime <- initializeLocalChainsync chainsync networkId trace $ show cli
     let (dbPath, tableName) = defaultTableName "utxo" dbPathAndTableName
     sqlConnection <- sqliteOpen dbPath
     sqliteInit sqlConnection tableName

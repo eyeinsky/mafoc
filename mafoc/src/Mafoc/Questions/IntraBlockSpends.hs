@@ -29,9 +29,9 @@ instance Indexer IntraBlockSpends where
 
   description = "Report the number of intra-block spends: where transaction spends UTxOs from the same block it itself is in."
 
-  initialize IntraBlockSpends{chainsyncConfig} trace = do
+  initialize cli@IntraBlockSpends{chainsyncConfig} trace = do
     traceInfo trace "Only blocks with intra-block spends are reported"
-    lcr <- initializeLocalChainsync_ chainsyncConfig trace
+    lcr <- initializeLocalChainsync_ chainsyncConfig trace (show cli)
     return (stateless, lcr, Runtime)
 
   toEvents _runtime _state blockInMode@(C.BlockInMode (C.Block _ txs) _) = (_state, events)

@@ -138,10 +138,8 @@ runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal
     Nothing -> return persistStep'
     Just runServer -> hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep'
 
-  maybeProfiling <- traverse (Logging.profilerInit trace (show cli)) (profiling lcr)
-
   traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
-  indexSection statsSignal stopSignal indexerInitialState persistStep'' initialBatchState indexerRuntime maybeProfiling trace lcr
+  indexSection statsSignal stopSignal indexerInitialState persistStep'' initialBatchState indexerRuntime trace lcr
   traceInfo trace "Done."
 
 indexSection
@@ -152,16 +150,19 @@ indexSection
   -> BatchStepper a
   -> BatchState a
   -> Runtime a
-  -> Maybe Logging.ProfilingRuntime
   -> Trace.Trace IO TS.Text
   -> LocalChainsyncRuntime
   -> IO ()
-indexSection statsSignal stopSignal indexerInitialState persistStep_ initialBatchState indexerRuntime maybeProfiling trace lcr = let
+indexSection statsSignal stopSignal indexerInitialState persistStep_ initialBatchState indexerRuntime trace lcr = let
   (fromChainPoint, upTo) = interval lcr
+  (profilerStep_, profilerEnd_) = case profiling lcr of
+    Just profilerRuntime -> (Logging.profileStep profilerRuntime, Logging.profilerEnd profilerRuntime)
+    Nothing -> (id, \_ -> return ())
+
   in do
   batchState <- blockProducer (localNodeConnection lcr) (pipelineSize lcr) fromChainPoint (concurrencyPrimitive lcr)
     & (if logging lcr then Logging.logging trace statsSignal else id)
-    & maybe id Logging.profileStep maybeProfiling
+    & profilerStep_
     & S.drop 1 -- The very first event from local chainsync is always a
                -- rewind. We skip this because we don't have anywhere to
                -- rollback to anyway.
@@ -184,7 +185,7 @@ indexSection statsSignal stopSignal indexerInitialState persistStep_ initialBatc
   maybeCp <- persistStepFinal indexerRuntime batchState trace
 
   -- Write last profiler event
-  _ <- traverse (\profiling -> Logging.profilerEnd profiling maybeCp) maybeProfiling
+  _ <- profilerEnd_ maybeCp
 
   return ()
 
@@ -405,7 +406,7 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
   , interval             :: (C.ChainPoint, UpTo)
   , securityParam        :: SecurityParam
   , logging              :: Bool
-  , profiling            :: Maybe Logging.ProfilingConfig
+  , profiling            :: Maybe Logging.ProfilingRuntime
   , pipelineSize         :: Word32
 
   -- * Internal
@@ -424,8 +425,8 @@ useLaterStartingPoint :: LocalChainsyncRuntime -> C.ChainPoint -> LocalChainsync
 useLaterStartingPoint lcr cp = lcr { interval = (max oldCp cp, upTo) }
   where (oldCp, upTo) = interval lcr
 
-initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId  -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
-initializeLocalChainsync localChainsyncConfig networkId trace = do
+initializeLocalChainsync :: LocalChainsyncConfig a -> C.NetworkId  -> Trace.Trace IO TS.Text -> String -> IO LocalChainsyncRuntime
+initializeLocalChainsync localChainsyncConfig networkId trace cliShow = do
   let SocketPath socketPath' = #socketPath localChainsyncConfig
       localNodeCon = CS.mkLocalNodeConnectInfo networkId socketPath'
   securityParam' <- querySecurityParam localNodeCon
@@ -434,22 +435,24 @@ initializeLocalChainsync localChainsyncConfig networkId trace = do
   let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo localChainsyncConfig
   cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
 
+  maybeProfiling :: Maybe Logging.ProfilingRuntime <- traverse (Logging.profilerInit trace cliShow) (profiling_ localChainsyncConfig)
+
   return $ LocalChainsyncRuntime
     localNodeCon
     (cliChainPoint, upTo)
     securityParam'
     (logging_ localChainsyncConfig)
-    (profiling_ localChainsyncConfig)
+    maybeProfiling
     (pipelineSize_ localChainsyncConfig)
     (concurrencyPrimitive_ localChainsyncConfig)
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
 -- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
 -- config which can be used to generate a stream of blocks.
-initializeLocalChainsync_ :: LocalChainsyncConfig_ -> Trace.Trace IO TS.Text -> IO LocalChainsyncRuntime
-initializeLocalChainsync_ config trace = do
+initializeLocalChainsync_ :: LocalChainsyncConfig_ -> Trace.Trace IO TS.Text -> String -> IO LocalChainsyncRuntime
+initializeLocalChainsync_ config trace cliShow = do
   networkId <- #getNetworkId config
-  initializeLocalChainsync config networkId trace
+  initializeLocalChainsync config networkId trace cliShow
 
 rollbackRingBuffer
   :: SecurityParam
