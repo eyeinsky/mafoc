@@ -36,9 +36,8 @@ import Mafoc.Core (
   LocalChainsyncConfig_,
   defaultTableName,
   initializeLocalChainsync_,
-  initializeSqlite,
+  useSqliteCheckpoint,
   setCheckpointSqlite,
-  ensureStartFromCheckpoint,
   TxIndexInBlock,
   stateless,
  )
@@ -92,9 +91,8 @@ instance Indexer MintBurn where
   initialize MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
-    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     let assetFilter = case maybePolicyIdAndAssetName of
           Just (policyId, Just assetName) -> \policyId' assetName' -> policyId' == policyId && assetName' == assetName
           Just (policyId, Nothing)        -> \policyId' _          -> policyId' == policyId

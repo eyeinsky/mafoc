@@ -9,7 +9,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, ensureStartFromCheckpoint, stateless)
+                   useSqliteCheckpoint, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, stateless)
 import Mafoc.Indexers.Datum qualified as Datum
 
 data AddressDatum = AddressDatum
@@ -60,10 +60,8 @@ instance Indexer AddressDatum where
     let (dbPath, tablePrefix) = defaultTableName "address_datums" dbPathAndTableName
         tableAddressDatums = tablePrefix <> "_address_datums"
         tableDatums = tablePrefix <> "_datums"
-    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tablePrefix
+    (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tablePrefix trace chainsyncRuntime
     sqliteInit sqlCon tableAddressDatums tableDatums
-
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     return (stateless, chainsyncRuntime', Runtime sqlCon tablePrefix tableAddressDatums tableDatums (mkMaybeAddressFilter addresses))
 
   persistMany Runtime{sqlConnection, tableAddressDatums, tableDatums} events = do
