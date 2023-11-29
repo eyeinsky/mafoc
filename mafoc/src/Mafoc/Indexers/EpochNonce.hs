@@ -57,10 +57,10 @@ instance Indexer EpochNonce where
       EpochResolution.SameOrAbsent -> []
       EpochResolution.AssumptionBroken exception -> E.throw exception
 
-  initialize EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
+  initialize cli@EpochNonce{chainsyncConfig, dbPathAndTableName} trace = do
     let nodeConfig = #nodeConfig chainsyncConfig
     networkId <- #getNetworkId nodeConfig
-    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace
+    chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace $ show cli
 
     let (dbPath, tableName) = defaultTableName "epoch_nonce" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath

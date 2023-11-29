@@ -39,8 +39,8 @@ instance Indexer ScriptTx where
              [] -> []
              _  -> [event']
 
-  initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@ScriptTx{chainsync, dbPathAndTableName} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     return (stateless, chainsyncRuntime', Runtime sqlCon tableName)

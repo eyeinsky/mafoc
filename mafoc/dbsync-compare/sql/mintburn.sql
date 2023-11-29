@@ -1,8 +1,8 @@
 SELECT block.slot_no
      , block.hash
      , block.block_no
-     , tx.block_index
      , tx.hash
+     , tx.block_index
      , multi_asset.policy
      , multi_asset.name
      , ma_tx_mint.quantity
@@ -18,3 +18,4 @@ SELECT block.slot_no
         JOIN redeemer_data ON redeemer_data.id = redeemer.redeemer_data_id
        WHERE redeemer.purpose = 'mint'
     ) redeemer_join ON redeemer_join.tx_id = tx.id
+                   AND redeemer_join.script_hash = multi_asset.policy

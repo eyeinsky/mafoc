@@ -43,8 +43,8 @@ instance Indexer Fingerprint where
     , blockHeaderHash :: C.Hash C.BlockHeader
     }
 
-  initialize Fingerprint{chainsync, maybeAssetFilter} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@Fingerprint{chainsync, maybeAssetFilter} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
 
     let assetFilter = case maybeAssetFilter of
           Nothing -> \blockInMode -> map (mk blockInMode) $ getEvents pass pass blockInMode

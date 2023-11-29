@@ -43,8 +43,8 @@ instance Indexer Datum where
 
   toEvents _runtime _state  blockInMode@(C.BlockInMode (C.Block _ txs) _) = (stateless, toEventsPrim (#slotNo blockInMode) txs)
 
-  initialize Datum{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
+  initialize cli@Datum{chainsync, dbPathAndTableName} trace = do
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName "datums" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName

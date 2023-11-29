@@ -72,7 +72,7 @@ getEvents' guardAssetId (C.BlockInMode (C.Block _ txs) _) = do
 fill :: Word64 -> [(Word64, a)] -> [Maybe a]
 fill n xs = case xs of
   (ix, b) : xs' -> case compare n ix of
-    LT -> Nothing : fill n xs'
+    LT -> Nothing : fill (n + 1) xs
     EQ -> Just b : fill (n + 1) xs'
     GT -> error $ "this should never ever happen " <> show (n, ix)
   [] -> repeat Nothing
