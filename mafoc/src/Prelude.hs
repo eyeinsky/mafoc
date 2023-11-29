@@ -6,7 +6,7 @@ module Prelude
 import BasePrelude as Export
 
 import Data.Coerce as Export (Coercible, coerce)
-import Data.Functor as Export (void, ($>))
+import Data.Functor as Export (void, ($>), (<&>))
 import Data.Maybe as Export (fromMaybe, mapMaybe, listToMaybe, catMaybes)
 import Data.Proxy as Export (Proxy (Proxy))
 import Control.Monad as Export (when)

@@ -7,7 +7,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, blockChainPoint, defaultTableName, initializeLocalChainsync_,
-                   initializeSqlite, setCheckpointSqlite, ensureStartFromCheckpoint, stateless)
+                   useSqliteCheckpoint, setCheckpointSqlite, stateless)
 import Marconi.ChainIndex.Indexers.ScriptTx qualified as Marconi
 
 data ScriptTx = ScriptTx
@@ -42,8 +42,7 @@ instance Indexer ScriptTx where
   initialize ScriptTx{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "scripttx" dbPathAndTableName
-    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
+    (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events =

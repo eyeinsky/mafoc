@@ -12,7 +12,7 @@ import Mafoc.Utxo (txoEvent)
 import Mafoc.Core
   ( Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents), stateless
   , LocalChainsyncConfig_ , initializeLocalChainsync_
-  , DbPathAndTableName, defaultTableName, initializeSqlite, setCheckpointSqlite, ensureStartFromCheckpoint
+  , DbPathAndTableName, defaultTableName, setCheckpointSqlite, useSqliteCheckpoint
   )
 import Mafoc.Upstream (toAddressAny)
 
@@ -46,9 +46,8 @@ instance Indexer AddressAppears where
   initialize AddressAppears{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
-    (sqlConnection, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    (sqlConnection, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlConnection tableName
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     let persistMany_ = persistManySqlite sqlConnection tableName
     return (stateless, chainsyncRuntime', Runtime{persistMany_, tableName, sqlConnection})
 

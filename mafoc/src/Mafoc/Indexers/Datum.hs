@@ -6,8 +6,8 @@ import Cardano.Api qualified as C
 
 import Mafoc.Core
   ( Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
-  , DbPathAndTableName, defaultTableName, initializeSqlite, setCheckpointSqlite
-  , LocalChainsyncConfig_, initializeLocalChainsync_, ensureStartFromCheckpoint, TxIndexInBlock, maybeDatum, txPlutusDatums, stateless
+  , DbPathAndTableName, defaultTableName, useSqliteCheckpoint, setCheckpointSqlite
+  , LocalChainsyncConfig_, initializeLocalChainsync_, TxIndexInBlock, maybeDatum, txPlutusDatums, stateless
   )
 import Mafoc.CLI qualified as O
 
@@ -46,9 +46,8 @@ instance Indexer Datum where
   initialize Datum{chainsync, dbPathAndTableName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace
     let (dbPath, tableName) = defaultTableName "datums" dbPathAndTableName
-    (sqlCon, checkpointedChainPoint) <- initializeSqlite dbPath tableName
+    (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
     return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
 
   persistMany Runtime{sqlConnection, tableName} events = sqliteInsert sqlConnection tableName events

@@ -1,13 +1,13 @@
 module Mafoc.Indexers.NoOp where
 
 import Database.SQLite.Simple qualified as SQL
+import Prettyprinter (Pretty (pretty), (<+>))
 
-import Cardano.Api qualified as C
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, ensureStartFromCheckpoint, stateless)
+                   setCheckpointSqlite, getCheckpointSqlite, sqliteInitCheckpoints, sqliteOpen, useLaterStartingPoint, stateless, traceInfo)
 
 data NoOp = NoOp
   { chainsync          :: LocalChainsyncConfig_
@@ -31,8 +31,10 @@ instance Indexer NoOp where
     let (dbPath, tableName) = defaultTableName "noop" dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInitCheckpoints sqlCon
-    checkpointedChainPoint <- fromMaybe C.ChainPointAtGenesis <$> getCheckpointSqlite sqlCon tableName
-    chainsyncRuntime' <- ensureStartFromCheckpoint chainsyncRuntime checkpointedChainPoint
+    maybeCheckpointedChainPoint <- getCheckpointSqlite sqlCon tableName
+    chainsyncRuntime' <- case maybeCheckpointedChainPoint of
+      Just cp -> traceInfo trace ("Found checkpoint " <+> pretty cp) $> useLaterStartingPoint chainsyncRuntime cp
+      Nothing -> traceInfo trace "No checkpoint found" $> chainsyncRuntime
     return (stateless, chainsyncRuntime', Runtime sqlCon tableName)
   persistMany _runtime _events = return ()
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
