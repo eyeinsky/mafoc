@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -Wno-missing-import-lists #-}
 module Prelude
-  ( module Export
+  ( module Prelude
+  , module Export
   ) where
 
 import BasePrelude as Export
@@ -23,3 +24,6 @@ import Control.Applicative as Export ((<|>), Alternative)
 import Control.Monad.Trans.Class as Export (MonadTrans, lift)
 import Control.Monad.IO.Class as Export (MonadIO, liftIO)
 import Control.Monad as Export (foldM, forM, forM_)
+
+labelPrint :: Show a => String -> a -> IO ()
+labelPrint label a = putStrLn $ label <> ": " <> show a
