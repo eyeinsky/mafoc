@@ -47,13 +47,6 @@ getEvents guardPolicy guardAssetName (C.BlockInMode (C.Block _ txs) _) = do
     , C.Quantity quantity
     , maybeRedeemer
     )
-  where
-    fill n xs = case xs of
-      (a, b) : xs' -> case compare a n of
-        LT -> Nothing : fill n xs'
-        EQ -> Just b : fill (n + 1) xs'
-        GT -> error "this should never ever happen"
-      [] -> repeat Nothing
 
 getEvents'
   :: (C.PolicyId -> C.AssetName -> [()]) -> C.BlockInMode mode
@@ -75,16 +68,14 @@ getEvents' guardAssetId (C.BlockInMode (C.Block _ txs) _) = do
     , C.Quantity quantity
     , maybeRedeemer
     )
-  where
-    fill n xs = case xs of
-      (a, b) : xs' -> case compare a n of
-        LT -> Nothing : fill n xs'
-        EQ -> Just b : fill (n + 1) xs'
-        GT -> error "this should never ever happen"
-      [] -> repeat Nothing
 
-
-
+fill :: Word64 -> [(Word64, a)] -> [Maybe a]
+fill n xs = case xs of
+  (ix, b) : xs' -> case compare n ix of
+    LT -> Nothing : fill (n + 1) xs
+    EQ -> Just b : fill (n + 1) xs'
+    GT -> error $ "this should never ever happen " <> show (n, ix)
+  [] -> repeat Nothing
 
 restrict :: (Alternative f, Eq a) => a -> a -> f ()
 restrict a b = guard (a == b)
