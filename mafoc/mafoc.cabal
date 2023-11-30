@@ -134,6 +134,7 @@ library
     , prettyprinter
     , primitive
     , process
+    , scientific
     , servant-server
     , sqlite-simple
     , stm

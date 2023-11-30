@@ -700,8 +700,3 @@ mkMaybeAddressFilter :: [C.Address C.ShelleyAddr] -> Maybe (C.Address C.ShelleyA
 mkMaybeAddressFilter addresses = case addresses of
   [] -> Nothing
   _ -> Just $ \address -> address `elem` Set.fromList addresses
-
--- * Generic
-
-todo :: a
-todo = undefined
