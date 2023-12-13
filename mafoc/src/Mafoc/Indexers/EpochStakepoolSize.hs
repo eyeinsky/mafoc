@@ -7,6 +7,7 @@ import Database.SQLite.Simple qualified as SQL
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
+import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
@@ -15,6 +16,8 @@ import Mafoc.Core (DbPathAndTableName,
                    loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
+import Mafoc.Exceptions qualified as E
+
 
 data EpochStakepoolSize = EpochStakepoolSize
   { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
@@ -49,11 +52,14 @@ instance Indexer EpochStakepoolSize where
   toEvents Runtime{ledgerCfg} state blockInMode = (State newExtLedgerState maybeCurrentEpochNo, coerce maybeEvent)
     where
     newExtLedgerState = LedgerState.applyBlock ledgerCfg (extLedgerState state) blockInMode
-    maybeCurrentEpochNo = LedgerState.getEpochNo newExtLedgerState
-    stakeMap = LedgerState.getStakeMap newExtLedgerState
+    newLedgerState = O.ledgerState newExtLedgerState
+    maybeCurrentEpochNo = LedgerState.getEpochNo newLedgerState
+
     maybeEvent :: [Event EpochStakepoolSize]
     maybeEvent = case EpochResolution.resolve (maybeEpochNo state) maybeCurrentEpochNo of
-      EpochResolution.New epochNo -> [Event epochNo stakeMap]
+      EpochResolution.New _epochNo -> case LedgerState.getEpochNoAndStakeMap newLedgerState of
+        Just (epochNo, stakeMap) -> [Event epochNo stakeMap]
+        Nothing -> throw $ E.TextException "!!! The impossible happened, (empty) stake map must exist on epoch boundary"
       EpochResolution.SameOrAbsent -> []
       EpochResolution.AssumptionBroken exception -> throw exception
 
@@ -67,7 +73,7 @@ instance Indexer EpochStakepoolSize where
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
     chainsyncRuntime'' <- ensureStartFromCheckpoint chainsyncRuntime' stateChainPoint
 
-    return ( State extLedgerState (LedgerState.getEpochNo extLedgerState)
+    return ( State extLedgerState (LedgerState.getEpochNo $ O.ledgerState extLedgerState)
            , chainsyncRuntime''
            , Runtime sqlCon tableName ledgerConfig)
 

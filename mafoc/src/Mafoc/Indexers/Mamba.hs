@@ -22,6 +22,7 @@ import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Cardano.Ledger.Shelley.API qualified as Ledger
 import Cardano.Slotting.Time qualified as Slotting
+import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Mafoc.CLI qualified as O
 import Mafoc.Core
@@ -105,9 +106,7 @@ instance Indexer Mamba where
   toEvents Runtime{ledgerCfg} State{extLedgerState, maybeEpochNo, utxoState} blockInMode@(C.BlockInMode (C.Block _ txs) _) = (state', [event])
     where
       extLedgerState' = LedgerState.applyBlock ledgerCfg extLedgerState blockInMode :: LedgerState.ExtLedgerState_
-      maybeEpochNo' = LedgerState.getEpochNo extLedgerState'
-      stakeMap = LedgerState.getStakeMap extLedgerState'
-      epochNonce = LedgerState.getEpochNonce extLedgerState'
+      maybeEpochNo' = LedgerState.getEpochNo $ O.ledgerState extLedgerState'
 
       utxoState' :: State Utxo.Utxo
       utxoEvents :: [Event Utxo.Utxo]
@@ -117,7 +116,11 @@ instance Indexer Mamba where
       mintBurnEvents = MintBurn.toEventsPrim (\_ _ -> True) blockInMode :: [Event MintBurn.MintBurn]
 
       newEpochEvent = case EpochResolution.resolve maybeEpochNo maybeEpochNo' of
-        EpochResolution.New epochNo -> Just (stakeMap, EpochNonce.Event epochNo epochNonce (#blockNo blockInMode) (#blockHeaderHash blockInMode) (#slotNo blockInMode))
+        EpochResolution.New epochNo -> let
+          epochNonce = LedgerState.getEpochNonce extLedgerState'
+          in case LedgerState.getEpochNoAndStakeMap (O.ledgerState extLedgerState') of
+             Just (_epochNo, stakeMap) -> Just (stakeMap, EpochNonce.Event epochNo epochNonce (#blockNo blockInMode) (#blockHeaderHash blockInMode) (#slotNo blockInMode))
+             Nothing -> undefined -- TODO
         EpochResolution.SameOrAbsent -> Nothing
         EpochResolution.AssumptionBroken exception -> E.throw exception
 
@@ -170,7 +173,7 @@ instance Indexer Mamba where
         let lnc = localNodeConnection localChainsyncRuntime
         eraHistory <- either E.throwShow pure =<< C.queryNodeLocalState lnc Nothing (C.QueryEraHistory C.CardanoModeIsMultiEra)
         systemStart <- either E.throwShow pure =<< C.queryNodeLocalState lnc Nothing C.QuerySystemStart
-        let state = State extLedgerState (LedgerState.getEpochNo extLedgerState) utxoState 0
+        let state = State extLedgerState (LedgerState.getEpochNo $ O.ledgerState extLedgerState) utxoState 0
             runtime = Runtime{sqlConnection, tableMintBurn, tableUtxo, tableEpochStakepoolSize, tableEpochNonce, tableDatum, ledgerCfg, ledgerStateFile, utxoStateFile, eraHistory, systemStart}
         return (state, localChainsyncRuntime, runtime)
 

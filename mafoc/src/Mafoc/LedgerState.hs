@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 module Mafoc.LedgerState where
 
 import Control.Monad.Trans.Except (runExceptT, withExceptT)
@@ -8,12 +9,23 @@ import Data.Text qualified as TS
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
+import Cardano.Ledger.Compactible qualified as Ledger
+import Cardano.Ledger.EpochBoundary qualified as Shelley
+import Cardano.Ledger.Era qualified as Ledger
+import Cardano.Ledger.Shelley.API qualified as Ledger
+import Cardano.Protocol.TPraos.API qualified as Shelley
+import Cardano.Protocol.TPraos.Rules.Tickn qualified as Shelley
+import Data.Map.Strict qualified as Map
+import Data.VMap qualified as VMap
 import Ouroboros.Consensus.Cardano.Block qualified as O
 import Ouroboros.Consensus.Config qualified as O
+import Ouroboros.Consensus.HeaderValidation qualified as O
 import Ouroboros.Consensus.Ledger.Abstract qualified as O
 import Ouroboros.Consensus.Ledger.Extended qualified as O
-import Ouroboros.Consensus.Node qualified as Consensus
 import Ouroboros.Consensus.Node qualified as O
+import Ouroboros.Consensus.Protocol.Praos qualified as O
+import Ouroboros.Consensus.Protocol.TPraos qualified as O
+import Ouroboros.Consensus.Shelley.Ledger qualified as O
 import Ouroboros.Consensus.Storage.Serialisation qualified as O
 
 import Mafoc.Upstream (NodeConfig(NodeConfig), SlotNoBhh)
@@ -24,10 +36,77 @@ import Mafoc.StateFile qualified as StateFile
 type ExtLedgerState_ = O.ExtLedgerState (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
 type ExtLedgerCfg_ = O.ExtLedgerCfg (O.HardForkBlock (O.CardanoEras O.StandardCrypto))
 
+
+-- * Epoch data
+
+-- | Get stake map from shelley ledger state.
+shelleyStakeMap :: forall proto era . (Ledger.EraCrypto era ~ O.StandardCrypto) => O.LedgerState (O.ShelleyBlock proto era) -> Map.Map C.PoolId C.Lovelace
+shelleyStakeMap st = Map.fromListWith (+) poolStakes
+  where
+    poolStakes :: [(C.PoolId, C.Lovelace)]
+    poolStakes = do
+      (sCred, spkHash) <- VMap.toList delegations
+      case VMap.lookup sCred stakes of
+        Just compactCoin -> [(C.StakePoolKeyHash spkHash, toLovelace compactCoin)]
+        Nothing -> []
+
+    toLovelace :: Ledger.CompactForm Ledger.Coin -> C.Lovelace
+    toLovelace = C.Lovelace . coerce . Ledger.fromCompact
+
+    stakeSnapshot :: Shelley.SnapShot O.StandardCrypto
+    stakeSnapshot = Ledger.ssStakeMark . Ledger.esSnapshots . Ledger.nesEs $ O.shelleyLedgerState st
+
+    stakes :: VMap.VMap VMap.VB VMap.VP (Ledger.Credential 'Ledger.Staking O.StandardCrypto) (Ledger.CompactForm Ledger.Coin)
+    stakes = Ledger.unStake $ Ledger.ssStake stakeSnapshot
+    -- ^ In form of staking credential to lovelace
+
+    delegations :: VMap.VMap VMap.VB VMap.VB (Ledger.Credential 'Ledger.Staking O.StandardCrypto) (Ledger.KeyHash 'Ledger.StakePool O.StandardCrypto)
+    delegations = Ledger.ssDelegations stakeSnapshot
+    -- ^ In form of staking credential to pool key hash
+
+-- | Get epoch number from shelley ledger state.
+shelleyEpochNo :: forall proto era . O.LedgerState (O.ShelleyBlock proto era) -> C.EpochNo
+shelleyEpochNo = Ledger.nesEL . O.shelleyLedgerState
+
+getEpochNo :: O.CardanoLedgerState O.StandardCrypto -> Maybe C.EpochNo
+getEpochNo ledgerState = fst <$> getEpochNoAndStakeMap ledgerState
+
+getEpochNoAndStakeMap :: O.CardanoLedgerState O.StandardCrypto -> Maybe (C.EpochNo, Map.Map C.PoolId C.Lovelace)
+getEpochNoAndStakeMap = \case
+  O.LedgerStateByron  _st -> Nothing
+  O.LedgerStateShelley st -> mkPair st
+  O.LedgerStateAllegra st -> mkPair st
+  O.LedgerStateMary    st -> mkPair st
+  O.LedgerStateAlonzo  st -> mkPair st
+  O.LedgerStateBabbage st -> mkPair st
+  O.LedgerStateConway  st -> mkPair st
+  where
+    mkPair st = Just (shelleyEpochNo st, shelleyStakeMap st)
+
+-- ** Nonce
+
+getEpochNonce :: ExtLedgerState_ -> Ledger.Nonce
+getEpochNonce extLedgerState = case O.headerStateChainDep (O.headerState extLedgerState) of
+  O.ChainDepStateByron _ -> Ledger.NeutralNonce
+  O.ChainDepStateShelley st -> tpraosNonce st
+  O.ChainDepStateAllegra st -> tpraosNonce st
+  O.ChainDepStateMary st -> tpraosNonce st
+  O.ChainDepStateAlonzo st -> tpraosNonce st
+  O.ChainDepStateBabbage st -> praosNonce st
+  O.ChainDepStateConway st -> praosNonce st
+
+-- | Get epoch nonce from TPraos ledger state (Shelley, Allegra, Mary, Alonzo).
+tpraosNonce :: O.TPraosState c -> Ledger.Nonce
+tpraosNonce = Shelley.ticknStateEpochNonce . Shelley.csTickn . O.tpraosStateChainDepState
+
+-- | Get epoch nonce from Praos ledger state (Babbage, Conway).
+praosNonce :: O.PraosState c -> Ledger.Nonce
+praosNonce = O.praosStateEpochNonce
+
 -- * Ledger state at genesis
 
 genesisExtLedgerState :: C.GenesisConfig -> ExtLedgerState_
-genesisExtLedgerState genesisConfig = Consensus.pInfoInitLedger $ fst $ C.mkProtocolInfoCardano genesisConfig
+genesisExtLedgerState genesisConfig = O.pInfoInitLedger $ fst $ C.mkProtocolInfoCardano genesisConfig
 
 genesisExtLedgerCfg :: C.GenesisConfig -> ExtLedgerCfg_
 genesisExtLedgerCfg genesisConfig = O.ExtLedgerCfg $ O.pInfoConfig $ fst $ C.mkProtocolInfoCardano genesisConfig

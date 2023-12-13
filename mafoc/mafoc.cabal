@@ -110,6 +110,8 @@ library
     , cardano-ledger-babbage
     , cardano-ledger-conway
     , ouroboros-network-protocols
+    , vector-map
+    , cardano-protocol-tpraos
 
     , serialise
 

@@ -1,9 +1,11 @@
 module Mafoc.Indexers.EpochNonce where
 
-import Cardano.Api qualified as C
-import Cardano.Ledger.Shelley.API qualified as Ledger
 import Control.Exception qualified as E
 import Database.SQLite.Simple qualified as SQL
+
+import Cardano.Api qualified as C
+import Cardano.Ledger.Shelley.API qualified as Ledger
+import Ouroboros.Consensus.Ledger.Extended qualified as O
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
@@ -49,7 +51,8 @@ instance Indexer EpochNonce where
   toEvents (Runtime{ledgerCfg}) state blockInMode = (State newExtLedgerState maybeEpochNo, coerce maybeEvent)
     where
     newExtLedgerState = LedgerState.applyBlock ledgerCfg (extLedgerState state) blockInMode
-    maybeEpochNo = LedgerState.getEpochNo newExtLedgerState
+    newLedgerState = O.ledgerState newExtLedgerState
+    maybeEpochNo = LedgerState.getEpochNo newLedgerState
     epochNonce = LedgerState.getEpochNonce newExtLedgerState
     maybeEvent :: [Event EpochNonce]
     maybeEvent = case EpochResolution.resolve (maybePreviousEpochNo state) maybeEpochNo of
@@ -69,7 +72,7 @@ instance Indexer EpochNonce where
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
     chainsyncRuntime'' <- ensureStartFromCheckpoint chainsyncRuntime' stateChainPoint
 
-    return ( State extLedgerState (LedgerState.getEpochNo extLedgerState)
+    return ( State extLedgerState (LedgerState.getEpochNo $ O.ledgerState extLedgerState)
            , chainsyncRuntime''
            , Runtime sqlCon tableName ledgerConfig)
 
