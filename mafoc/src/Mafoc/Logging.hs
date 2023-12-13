@@ -8,12 +8,12 @@ import System.Environment qualified as IO
 import System.Process qualified as IO
 import Data.ByteString.Lazy qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as BS8
+import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>), Doc)
 
 import Cardano.Api qualified as C
 import Cardano.BM.Trace qualified as CM
 import Data.Text qualified as TS
 import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
-import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, (<+>), Doc)
 import GHC.Stats qualified as Stats
 import System.Posix.Process qualified as Posix
 import Data.Aeson qualified as A
@@ -27,6 +27,7 @@ import Text.Printf (printf)
 import Cardano.Streaming (ChainSyncEvent (RollBackward, RollForward))
 
 import Mafoc.Upstream (foldYield)
+import Mafoc.Upstream.Orphans ()
 import Mafoc.Signal qualified as Signal
 import Mafoc.Exceptions qualified as E
 

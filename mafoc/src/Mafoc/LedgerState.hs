@@ -1,11 +1,4 @@
-module Mafoc.LedgerState
-  ( module Mafoc.LedgerState
-
-  -- * Re-exports
-  , Marconi.getEpochNo
-  , Marconi.getEpochNonce
-  , Marconi.getStakeMap
-  ) where
+module Mafoc.LedgerState where
 
 import Control.Monad.Trans.Except (runExceptT, withExceptT)
 import Data.ByteString.Lazy qualified as BS
@@ -22,7 +15,6 @@ import Ouroboros.Consensus.Ledger.Extended qualified as O
 import Ouroboros.Consensus.Node qualified as Consensus
 import Ouroboros.Consensus.Node qualified as O
 import Ouroboros.Consensus.Storage.Serialisation qualified as O
-import Marconi.ChainIndex.Indexers.EpochState qualified as Marconi
 
 import Mafoc.Upstream (NodeConfig(NodeConfig), SlotNoBhh)
 import Mafoc.Exceptions qualified as E

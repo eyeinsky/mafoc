@@ -86,8 +86,6 @@ library
   --------------------
   build-depends:
     , cardano-streaming
-    , marconi-chain-index
-    , marconi-core
 
   --------------------------
   -- Other IOG dependencies
@@ -113,6 +111,8 @@ library
     , cardano-ledger-babbage
     , cardano-ledger-conway
     , ouroboros-network-protocols
+
+    , serialise
 
   ------------------------
   -- Non-IOG dependencies

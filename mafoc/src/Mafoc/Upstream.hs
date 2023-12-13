@@ -2,13 +2,7 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE PatternSynonyms         #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
-module Mafoc.Upstream
-  ( module Mafoc.Upstream
-  , module ReExports
-  ) where
-
-import Mafoc.Upstream.Orphans qualified as ReExports ()
-import Marconi.ChainIndex.Types as ReExports (SecurityParam(SecurityParam), CurrentEra, pattern CurrentEra)
+module Mafoc.Upstream where
 
 import System.FilePath ((</>))
 import GHC.OverloadedLabels (IsLabel (fromLabel))
@@ -27,7 +21,6 @@ import Cardano.Streaming qualified as CS
 import Cardano.Streaming.Helpers qualified as CS
 import Cardano.Streaming.Callbacks qualified as CS
 import Ouroboros.Network.Protocol.ChainSync.Client qualified as CS
-import Marconi.ChainIndex.Utils qualified as Marconi
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as O
 import Mafoc.Exceptions qualified as E
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
@@ -111,7 +104,7 @@ querySecurityParamEra localNodeConnectInfo shelleyBasedEra = do
   where
     queryInMode :: C.QueryInMode C.CardanoMode (Either O.EraMismatch C.GenesisParameters)
     queryInMode =
-      C.QueryInEra (Marconi.toShelleyEraInCardanoMode shelleyBasedEra) $
+      C.QueryInEra (toShelleyEraInCardanoMode shelleyBasedEra) $
         C.QueryInShelleyBasedEra shelleyBasedEra C.QueryGenesisParameters
 
     getSecurityParam :: C.GenesisParameters -> SecurityParam
@@ -120,7 +113,7 @@ querySecurityParamEra localNodeConnectInfo shelleyBasedEra = do
 querySecurityParam :: C.LocalNodeConnectInfo C.CardanoMode -> IO SecurityParam
 querySecurityParam localNodeConnectInfo = do
   C.AnyCardanoEra era <- queryCurrentEra localNodeConnectInfo
-  case Marconi.shelleyBasedToCardanoEra era of
+  case shelleyBasedToCardanoEra era of
     Nothing -> throwIO $ UnspecifiedException "The security parameter can only be queried in shelley based era."
     Just shelleyBasedEra -> querySecurityParamEra localNodeConnectInfo shelleyBasedEra
 
@@ -465,3 +458,39 @@ maybeDatum (C.TxOut (C.AddressInEra _ _) _ dat _) = case dat of
   C.TxOutDatumInTx _ d -> Just $ Right (C.hashScriptDataBytes d, C.getScriptData d)
   C.TxOutDatumInline _ d -> Just $ Right (C.hashScriptDataBytes d, C.getScriptData d)
   C.TxOutDatumNone -> Nothing
+
+-- * SecurityParam
+
+newtype SecurityParam = SecurityParam Word64
+  deriving newtype (Eq, Ord, Bounded, Enum, Real, Num, Read, Integral, Show, SQL.ToField, SQL.FromField)
+
+-- * CurrentEra
+
+type CurrentEra = C.BabbageEra
+pattern CurrentEra :: C.CardanoEra CurrentEra
+pattern CurrentEra = C.BabbageEra
+pattern AsCurrentEra :: C.AsType CurrentEra
+pattern AsCurrentEra = C.AsBabbageEra
+
+-- TODO This should be moved to `cardano-api`.
+toShelleyEraInCardanoMode :: C.ShelleyBasedEra era -> C.EraInMode era C.CardanoMode
+toShelleyEraInCardanoMode = \case
+  C.ShelleyBasedEraShelley -> C.ShelleyEraInCardanoMode
+  C.ShelleyBasedEraAllegra -> C.AllegraEraInCardanoMode
+  C.ShelleyBasedEraMary -> C.MaryEraInCardanoMode
+  C.ShelleyBasedEraAlonzo -> C.AlonzoEraInCardanoMode
+  C.ShelleyBasedEraBabbage -> C.BabbageEraInCardanoMode
+  C.ShelleyBasedEraConway -> C.ConwayEraInCardanoMode
+
+{- | Converts a 'CardanoEra' to the more specific 'ShelleyBasedEra'.
+ TODO This should be moved to `cardano-api`.
+-}
+shelleyBasedToCardanoEra :: C.CardanoEra era -> Maybe (C.ShelleyBasedEra era)
+shelleyBasedToCardanoEra = \case
+  C.ByronEra -> Nothing
+  C.ShelleyEra -> Just C.ShelleyBasedEraShelley
+  C.AllegraEra -> Just C.ShelleyBasedEraAllegra
+  C.MaryEra -> Just C.ShelleyBasedEraMary
+  C.AlonzoEra -> Just C.ShelleyBasedEraAlonzo
+  C.BabbageEra -> Just C.ShelleyBasedEraBabbage
+  C.ConwayEra -> Just C.ShelleyBasedEraConway
