@@ -415,11 +415,8 @@ parserToParserInfo progDescr header cli = O.info (O.helper <*> cli) $ O.fullDesc
 boundedEnum :: forall a . (Bounded a, Enum a, Show a) => String -> (String -> Either String a, String)
 boundedEnum textDescr = (doLookup, listAsText)
   where
-    values :: [a]
-    values = [minBound .. maxBound]
-
     mapping :: [(String, a)]
-    mapping = map (\s -> (map toLower $ show s, s)) values
+    mapping = boundedEnumMapping
 
     doLookup :: String -> Either String a
     doLookup str = case L.lookup str mapping of
@@ -428,3 +425,9 @@ boundedEnum textDescr = (doLookup, listAsText)
 
     listAsText :: String
     listAsText = L.intercalate ", " (map fst mapping)
+
+boundedEnumMapping :: (Bounded a, Enum a, Show a) => [(String, a)]
+boundedEnumMapping = map (\s -> (map toLower $ show s, s)) boundedEnumAll
+  where
+    boundedEnumAll :: (Bounded a, Enum a) => [a]
+    boundedEnumAll = [minBound .. maxBound]

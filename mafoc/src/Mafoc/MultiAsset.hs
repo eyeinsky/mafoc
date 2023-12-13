@@ -83,6 +83,12 @@ restrict a b = guard (a == b)
 pass :: Alternative f => a -> f ()
 pass = const $ pure ()
 
+blockMints :: C.BlockInMode mode -> [(TxIndexInBlock, [(LM.PolicyID OEra.StandardCrypto, Map.Map LM.AssetName Integer)])]
+blockMints (C.BlockInMode (C.Block _ txs) _) = do
+  (bx, _tx@(C.Tx (txb :: C.TxBody era) _)) <- zip [0 ..] txs
+  let mints = fromMaybe [] $ txMintList txb
+  return (bx, mints)
+
 txRedeemers :: C.TxBody era -> Maybe (Map.Map LA.RdmrPtr (C.ScriptData, C.Hash C.ScriptData))
 txRedeemers txb = case txb of
   C.ShelleyTxBody era _shelleyTx _ txScriptData _ _ -> case era of
@@ -113,7 +119,6 @@ scriptDataRedeemers txScriptData = case txScriptData of
 
 txMintList :: C.TxBody era -> Maybe [(LM.PolicyID OEra.StandardCrypto, Map.Map LM.AssetName Integer)]
 txMintList txb = Map.toList . coerce <$> txMultiAsset txb
-
 
 txMultiAsset :: C.TxBody era -> Maybe (LM.MultiAsset OEra.StandardCrypto)
 txMultiAsset = \case
