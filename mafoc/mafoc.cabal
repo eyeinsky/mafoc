@@ -70,7 +70,6 @@ library
     Mafoc.Logging
     Mafoc.RingBuffer
     Mafoc.RollbackRingBuffer
-    Mafoc.Speed
     Mafoc.Upstream
     Mafoc.Upstream.Formats
     Mafoc.Upstream.Orphans
