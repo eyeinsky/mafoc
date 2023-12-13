@@ -54,3 +54,9 @@ deriving via C.UsingRawBytes C.AddressAny instance C.FromCBOR C.AddressAny
 deriving via C.UsingRawBytes (C.Hash C.ScriptData) instance C.ToCBOR (C.Hash C.ScriptData)
 
 deriving via C.UsingRawBytes (C.Hash C.ScriptData) instance C.FromCBOR (C.Hash C.ScriptData)
+
+-- | SlotNo
+
+deriving newtype instance Real C.SlotNo
+
+deriving newtype instance Integral C.SlotNo

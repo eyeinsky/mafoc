@@ -1,4 +1,7 @@
-module Mafoc.CLI where
+module Mafoc.CLI
+  ( module Mafoc.CLI
+  , parseSlotNo_
+  ) where
 
 import Data.Time (NominalDiffTime)
 import Data.List qualified as L
@@ -14,7 +17,7 @@ import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (Db
                    LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
                    NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
                    UpTo (CurrentTip, Infinity, SlotNo), CheckpointInterval(Every, Never),
-                   SecurityParam)
+                   SecurityParam, ParallelismConfig(ParallelismConfig, intervalLength, maybeMaxThreads), IntervalLength(Slots, Percent), defaultParallelism)
 import Mafoc.Upstream (LedgerEra, lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
@@ -166,12 +169,17 @@ commonInterval = O.option (O.eitherReader parseIntervalEither)
       _ -> leftError "Can't read slot interval end" str
 
 commonIntervalInfo :: O.Parser (Interval, Maybe DbPathAndTableName)
-commonIntervalInfo = (,) <$> commonInterval <*> commonHeaderDb
+commonIntervalInfo = (,) <$> commonInterval <*> commonMaybeHeaderDb
 
-commonHeaderDb :: O.Parser (Maybe DbPathAndTableName)
-commonHeaderDb = O.option
+commonMaybeHeaderDb :: O.Parser (Maybe DbPathAndTableName)
+commonMaybeHeaderDb = O.option
   (O.eitherReader $ fmap Just . parseDbPathAndTableName)
   (O.value Nothing <> longOpt "header-db" "Optional path to sqlite database for block headers.")
+
+commonHeaderDb :: O.Parser DbPathAndTableName
+commonHeaderDb = O.option
+  (O.eitherReader parseDbPathAndTableName)
+  (longOpt "header-db" "Optional path to sqlite database for block headers.")
 
 commonLogging :: O.Parser Bool
 commonLogging = O.option O.auto (opt 'q' "quiet" "Don't do any logging" <> O.value True)
@@ -316,6 +324,17 @@ commonIgnoreMissingUtxos = O.switch (longOpt "ignore-missing-utxos" desc <> O.in
       \for benchmarking and debugging, when chain is traversed from the middle and earlier \
       \transaction outputs are not known."
 
+commonParallelismConfig :: O.Parser ParallelismConfig
+commonParallelismConfig = ParallelismConfig <$> intervalLength' <*> maybeMaxThreads'
+  where
+    intervalLength' = O.option (O.eitherReader parseIntervalLength)
+      $ longOpt "interval-length" "How many slots should an interval processed in parallel be"
+      <> O.metavar "SLOT-NO"
+      <> O.value (intervalLength defaultParallelism)
+    maybeMaxThreads' = O.option (O.eitherReader $ fmap Just . readEither @Natural)
+      $ longOpt "max-threads" "How many threads should be running at once"
+      <> O.value (maybeMaxThreads defaultParallelism)
+
 testParserArgs :: O.Parser a -> [String] -> IO a
 testParserArgs cli args = O.execParserPure O.defaultPrefs pinfo args & O.handleParseResult
   where
@@ -325,6 +344,14 @@ testParser :: O.Parser a -> String -> IO a
 testParser cli str = testParserArgs cli $ words str
 
 -- * String parsers
+
+parseIntervalLength :: String -> Either String IntervalLength
+parseIntervalLength str = (Percent <$> parsePercent str) <|> (Slots <$> readEither str)
+
+parsePercent :: String -> Either String Scientific
+parsePercent str = case reverse str of
+  '%' : nat -> readEither $ reverse nat
+  _ -> Left "Percent value should have \"%\" at the end"
 
 -- ** NominalDiffTime
 
@@ -397,7 +424,7 @@ some_ p = O.liftA2 (NE.:|) p (O.many p)
 simpleCmd :: String -> a -> O.Mod O.CommandFields a
 simpleCmd str a = O.command str $ O.info (pure a) mempty
 
-opt :: Char -> String -> String -> O.Mod O.OptionFields a
+opt :: O.HasName f => Char -> String -> String -> O.Mod f a
 opt short long help = O.long long <> O.short short <> O.help help
 
 longOpt :: O.HasName f => String -> String -> O.Mod f a

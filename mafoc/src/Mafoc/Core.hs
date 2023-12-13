@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes    #-}
+{-# LANGUAGE DerivingVia    #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module Mafoc.Core
@@ -12,10 +13,12 @@ module Mafoc.Core
   ) where
 
 import Control.Concurrent qualified as IO
+import Control.Concurrent.Async qualified as IO
 import Control.Concurrent.STM qualified as STM
 import Control.Concurrent.STM.TChan qualified as TChan
 import Control.Exception qualified as E
 import Data.Set qualified as Set
+import Data.List qualified as L
 import Data.Text qualified as TS
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
 import Database.SQLite.Simple qualified as SQL
@@ -44,6 +47,7 @@ import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh,
                       , txAddressDatums, txDatums, plutusDatums, allDatums, maybeDatum, txPlutusDatums
                       , LedgerEra, slotEra
                       , SecurityParam(SecurityParam), CurrentEra
+                      , queryNodeTip
                       )
 import Mafoc.Upstream.Formats (SlotNoBhhString(SlotNoBhhString), AssetIdString(AssetIdString))
 import Mafoc.Signal qualified as Signal
@@ -124,25 +128,25 @@ runIndexer
   -> CommonConfig
   -> Maybe (RunHttpApi a)
   -> IO ()
-runIndexer cli CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = stderrTrace severity $ \trace -> do
-  initialNotice cli batchSize severity checkpointInterval trace
+runIndexer cli commonConfig@CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval} maybeApiServer = stderrTrace severity $ \trace -> do
+  initialNotice cli commonConfig Nothing trace
   (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
-  let (fromChainPoint, upTo) = interval lcr
+  let (fromChainPoint, _upTo) = interval lcr
   initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
 
   let
     persistStep' :: BatchStepper a
-    persistStep' = persistStep trace indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
+    persistStep' = persistStep indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval) trace
 
   persistStep'' <- case maybeApiServer of
     Nothing -> return persistStep'
     Just runServer -> hookHttpApi indexerRuntime indexerInitialState initialBatchState runServer persistStep'
 
   traceNotice trace $ "Starting local chainsync mini-protocol at: " <> pretty fromChainPoint
-  indexSection statsSignal stopSignal indexerInitialState persistStep'' initialBatchState indexerRuntime trace lcr
+  runIndexerStream statsSignal stopSignal indexerInitialState persistStep'' initialBatchState indexerRuntime trace lcr
   traceInfo trace "Done."
 
-indexSection
+runIndexerStream
   :: Indexer a
   => Signal.ChainsyncStats
   -> Signal.Stop
@@ -153,7 +157,7 @@ indexSection
   -> Trace.Trace IO TS.Text
   -> LocalChainsyncRuntime
   -> IO ()
-indexSection statsSignal stopSignal indexerInitialState persistStep_ initialBatchState indexerRuntime trace lcr = let
+runIndexerStream statsSignal stopSignal indexerInitialState persistStep_ initialBatchState indexerRuntime trace lcr = let
   (fromChainPoint, upTo) = interval lcr
   (profilerStep_, profilerEnd_) = case profiling lcr of
     Just profilerRuntime -> (Logging.profileStep profilerRuntime, Logging.profilerEnd profilerRuntime)
@@ -196,6 +200,216 @@ type StatelessIndexer a = (Indexer a, Coercible (State a) ())
 stateless :: (State a ~ s, Coercible s ()) => s
 stateless = coerce ()
 
+
+data IntervalLength
+  = Slots Natural
+  | Percent Scientific
+  deriving (Show)
+
+percentToSlots :: C.SlotNo -> C.SlotNo -> Scientific -> Natural
+percentToSlots start end percent = truncate result
+  where
+    result = (fromIntegral (end - start) * percent) / 100 :: Scientific
+
+data ParallelismConfig = ParallelismConfig
+  { intervalLength :: IntervalLength
+  , maybeMaxThreads :: Maybe Natural
+  } deriving (Show)
+
+defaultParallelism :: ParallelismConfig
+defaultParallelism = ParallelismConfig
+  { intervalLength = Slots 3_000_000 -- 10 seconds worth of work with 15k blocks/second
+  , maybeMaxThreads = Nothing        -- Pick as many threads as there are capabilities
+  }
+
+-- | Run stateless indexer in parallel
+runIndexerParallel
+  :: forall a . (StatelessIndexer a, Show a)
+  => a
+  -> CommonConfig
+  -> ParallelismConfig
+  -> IO ()
+runIndexerParallel
+  cli
+  commonConfig@CommonConfig{severity, checkpointInterval, batchSize, checkpointSignal, statsSignal, stopSignal}
+  parallelismConfig@ParallelismConfig{intervalLength, maybeMaxThreads}
+  = stderrTrace severity $ \trace0 -> do
+  let trace = Trace.appendName "parallel" trace0
+
+  (_state, lcrInitial, indexerRuntime) <- initialize cli trace
+
+  -- Full chain interval to be indexed
+  (start, end) <- do
+    nodeTip <- queryNodeTip (localNodeConnection lcrInitial)
+    let (start, upTo') = interval lcrInitial
+    return (start, getUpperBound nodeTip upTo')
+
+  headerDb <- ensureHeaderDb $ maybeHeaderDb lcrInitial
+
+  let persistStep_ :: Trace.Trace IO TS.Text -> BatchStepper a
+      persistStep_ = persistStep indexerRuntime checkpointSignal batchSize (checkpointIntervalPredicate checkpointInterval)
+
+  let intervalLengthSlots = case intervalLength of
+        Slots intervalLengthSlots' -> intervalLengthSlots'
+        Percent percent -> percentToSlots (#slotNo start) end percent
+
+  numCapabilities <- IO.getNumCapabilities
+  let maxThreads = maybe numCapabilities fromIntegral maybeMaxThreads
+  initialNotice cli commonConfig (Just (parallelismConfig, intervalLengthSlots, maxThreads, numCapabilities)) trace
+
+  -- get chain point for full interval end
+  maybeEndCp <- chainPointNearSlotNo headerDb "<=" "DESC" end
+  endCp <- maybe (E.throwIO $ E.SlotNo_not_found end) return maybeEndCp
+  let fullInterval' = (start, endCp)
+
+  threadLimit <- IO.newQSem maxThreads
+  let loop inProgress asyncs = do
+        IO.waitQSem threadLimit
+        maybeInterval <- nextInterval headerDb (fromIntegral intervalLengthSlots) fullInterval' inProgress
+        case maybeInterval of
+          Just interval'@(sectionStart, sectionEnd) -> do
+            async <- IO.async $ do
+              let sectionTrace = mkSectionTrace interval' trace
+                  lcr = lcrInitial { interval = (sectionStart, SlotNo $ #slotNo sectionEnd) }
+              initialBatchState <- NoProgress sectionStart <$> getCurrentTime
+              traceInfo sectionTrace "Section indexer started."
+              runIndexerStream statsSignal stopSignal stateless (persistStep_ sectionTrace) initialBatchState indexerRuntime sectionTrace lcr
+              traceInfo sectionTrace "Section indexer done."
+              IO.signalQSem threadLimit
+            loop (interval' : inProgress) (async : asyncs)
+          Nothing -> return asyncs
+
+  mapM_ IO.wait =<< loop [] []
+
+nextIntervalStart :: HeaderDb -> C.ChainPoint -> [(C.ChainPoint, C.ChainPoint)] -> IO C.ChainPoint
+nextIntervalStart headerDb start inProgress = case map snd inProgress of
+  x : xs -> return $ L.foldl' max x xs
+  [] -> case start of
+    C.ChainPointAtGenesis -> return C.ChainPointAtGenesis
+    C.ChainPoint{} -> let
+      startSlotNo = #slotNo start
+      in chainPointNearSlotNo headerDb "<" "DESC" startSlotNo >>= \case
+        Just less -> return less
+        Nothing -> E.throwIO $ E.Can't_find_previous_ChainPoint_to_slot startSlotNo
+
+nextIntervalEnd :: HeaderDb -> C.ChainPoint -> C.ChainPoint -> C.SlotNo -> IO C.ChainPoint
+nextIntervalEnd headerDb intervalStart cliEnd maxSize =
+  let preliminaryEnd = #slotNo intervalStart + maxSize
+  in if #slotNo cliEnd <= preliminaryEnd
+    then return cliEnd
+    else do
+      maybeEnd <- chainPointNearSlotNo headerDb "<=" "DESC" preliminaryEnd
+      maybe (E.throwIO $ E.SlotNo_not_found preliminaryEnd) return maybeEnd
+
+nextInterval :: HeaderDb -> C.SlotNo -> (C.ChainPoint, C.ChainPoint) -> [(C.ChainPoint, C.ChainPoint)] -> IO (Maybe (C.ChainPoint, C.ChainPoint))
+nextInterval headerDb maxSize (start, end) inProgress = do
+  intervalStart :: C.ChainPoint <- nextIntervalStart headerDb start inProgress
+  if intervalStart >= end
+    then return Nothing
+    else do
+      intervalEnd :: C.ChainPoint <- nextIntervalEnd headerDb intervalStart end maxSize
+      return $ Just (intervalStart, intervalEnd)
+
+mkSectionTrace :: (C.ChainPoint, C.ChainPoint) -> Trace.Trace IO TS.Text -> Trace.Trace IO TS.Text
+mkSectionTrace (start, end) trace = Trace.appendName sectionName trace
+  where sectionName = "section(" <> slotText start <> ", " <> slotText end <> "]"
+
+traceChainIntervals :: (Doc () -> IO ()) -> [(C.ChainPoint, C.ChainPoint)] -> IO ()
+traceChainIntervals tracer chainIntervals = do
+  tracer $ "Intervals" <+> "(" <> pretty (length chainIntervals) <> "):"
+  forM_ chainIntervals $ \(intervalStart, intervalEnd) -> do
+    let start' = #slotNo intervalStart :: C.SlotNo
+        end' = #slotNo intervalEnd :: C.SlotNo
+    tracer $ "(" <> pretty start' <> ", " <> pretty end' <> "]"
+
+-- | For parallel indexing, ensure that a header database was received
+-- from the CLI. IO is required for precise exceptions.
+ensureHeaderDb :: Maybe HeaderDb -> IO HeaderDb
+ensureHeaderDb = \case
+  Just headerDb -> return headerDb
+  Nothing -> E.throwIO $ E.No_headerDb_specified "Parallel indexing requires a block header database"
+
+-- ** Chain intervals
+
+getUpperBound :: C.ChainTip -> UpTo -> C.SlotNo
+getUpperBound tip upTo = case upTo of
+  SlotNo requested -> min safeTipSlot requested
+  Infinity -> safeTipSlot
+  CurrentTip -> safeTipSlot
+  where
+    safetyMargin = 129600 -- See https://github.com/CardanoSolutions/kupo/discussions/136#discussioncomment-7141135
+    safeTipSlot = #slotNo tip - safetyMargin :: C.SlotNo
+
+getChainIntervals :: (C.ChainPoint, C.SlotNo) -> Natural -> HeaderDb -> IO ([(C.ChainPoint, C.ChainPoint)], (SQL.Connection, String))
+getChainIntervals (startCp, end) intervalLength (headerDbSqlConnection, headerDbTable) = do
+  firstLowerBound :: C.ChainPoint <- case startCp of
+    C.ChainPointAtGenesis -> return C.ChainPointAtGenesis
+    C.ChainPoint startSlotNo' _ -> do
+      maybeCp <- previousChainPointForSlotNo headerDbSqlConnection headerDbTable startSlotNo'
+      maybe (E.throwIO $ E.Previous_ChainPoint_for_slot_not_found startSlotNo') return maybeCp
+
+  lowerBounds' <- getSqliteIntervalBounds headerDbSqlConnection headerDbTable intervalLength (#slotNo startCp) end Nothing
+  let chainBounds = firstLowerBound : map #chainPoint lowerBounds'
+  return
+    ( zip chainBounds $ tail chainBounds -- (start, end]
+    , (headerDbSqlConnection, headerDbTable)
+    )
+
+
+-- | With help of header db, get the @ChainPoint@s which divide the chain into equal intervals.
+getSqliteIntervalBounds :: SQL.Connection -> String -> Natural -> C.SlotNo -> C.SlotNo -> Maybe Natural -> IO [SlotNoBhh]
+getSqliteIntervalBounds headerDbSqlConnection headerDbTable intervalLength start end maybeLimit = SQL.query_ headerDbSqlConnection query
+  where
+    showViaNat a = fromShow (fromIntegral a :: Natural)
+
+    limit :: SQL.Query
+    limit = maybe "" (\limit' -> "LIMIT " <> fromShow limit') maybeLimit
+
+    query :: SQL.Query
+    query = " SELECT slot_no, block_header_hash \
+            \   FROM " <> fromString headerDbTable <> " headers \
+            \   JOIN ("<> upperBounds <>") interval ON headers.slot_no = interval.max_slot_no \
+            \  WHERE headers.slot_no <= " <> showViaNat end <> " \
+            \ " <> limit
+
+    upperBounds :: SQL.Query
+    upperBounds =
+      " SELECT MAX(slot_no) AS max_slot_no, ((slot_no - " <> showViaNat start <> ") / " <> fromShow intervalLength <> ") AS x \
+      \   FROM blockbasics \
+      \  WHERE x >= -1 \
+      \  GROUP BY x "
+
+
+printChainIntervals :: (StatelessIndexer a, Show a) => a -> CommonConfig -> ParallelismConfig -> IO ()
+printChainIntervals cli commonConfig@CommonConfig{severity} parallelismConfig@ParallelismConfig{intervalLength, maybeMaxThreads} = stderrTrace severity $ \trace -> do
+
+  (_state, lcrInitial, _indexerRuntime) <- initialize cli trace
+  nodeTip <- queryNodeTip (localNodeConnection lcrInitial)
+  let (start, upTo) = interval lcrInitial
+      end = getUpperBound nodeTip upTo
+  let intervalLengthSlots = case intervalLength of
+        Slots intervalLengthSlots' -> intervalLengthSlots'
+        Percent percent -> percentToSlots (#slotNo start) end percent
+
+  numCapabilities <- IO.getNumCapabilities
+  let maxThreads = maybe numCapabilities fromIntegral maybeMaxThreads
+  initialNotice cli commonConfig (Just (parallelismConfig, intervalLengthSlots, maxThreads, numCapabilities)) trace
+
+  headerDb <- ensureHeaderDb $ maybeHeaderDb lcrInitial
+  (chainIntervals, (sqlCon, tableName)) <- getChainIntervals (start, end) intervalLengthSlots headerDb
+
+  putStrLn "--- start ---"
+  labelPrint "start" (#slotNo start :: C.SlotNo)
+  labelPrint "upTo" upTo
+  labelPrint "intervalLengthSlots" intervalLengthSlots
+  putStrLn "Tips:"
+  labelPrint " - node tip" (#slotNo nodeTip :: C.SlotNo)
+  labelPrint " - header db tip" . map SQL.fromOnly =<< SQL.query_ @(SQL.Only C.SlotNo) sqlCon ("select MAX(slot_no) from " <> fromString tableName)
+  putStrLn "Intervals"
+  traceChainIntervals print chainIntervals
+  putStrLn "--- end ---"
+
+
 -- * Buffered output
 
 data BatchState a
@@ -227,10 +441,16 @@ type BatchStepper a = BatchState a -> (SlotNoBhh, [Event a], State a) -> IO (Bat
 
 persistStep
   :: forall a . Indexer a
-  => Trace.Trace IO TS.Text -> Runtime a -> Signal.Checkpoint -> BatchSize -> CheckpointPredicateInterval
+  => Runtime a -> Signal.Checkpoint -> BatchSize -> CheckpointPredicateInterval -> Trace.Trace IO TS.Text
   -> BatchStepper a
-persistStep trace indexerRuntime checkpointSignal batchSize isCheckpointTimeP batchState (slotNoBhh, newEvents, indexerState) = do
+persistStep
+  indexerRuntime checkpointSignal batchSize isCheckpointTimeP trace0
+  batchState (slotNoBhh, newEvents, indexerState)
+
+  = do
+
   let lastCheckpointTime' = lastCheckpointTime batchState
+      trace = Trace.appendName "checkpoint" trace0
 
   now :: UTCTime <- getCurrentTime
   checkpointRequested :: Bool <- Signal.resetGet checkpointSignal
@@ -282,16 +502,18 @@ persistStepFinal indexerRuntime batchState trace = case batchState of
     let cp = #chainPoint slotNoBhh :: C.ChainPoint
     persistMany indexerRuntime (concat bufferedEvents)
     checkpoint indexerRuntime indexerState slotNoBhh
-    traceNotice trace $ "Exiting at " <+> pretty cp <+> ", persisted and checkpointed."
+    traceNotice trace $ "Exiting at" <+> prettySlot cp <> ", persisted and checkpointed."
     return $ Just cp
   BatchEmpty{slotNoBhh, indexerState} -> do
     let cp = #chainPoint slotNoBhh :: C.ChainPoint
     checkpoint indexerRuntime indexerState slotNoBhh
-    traceNotice trace $ "Exiting at " <+> pretty cp <+> ", checkpointed."
+    traceNotice trace $ "Exiting at" <+> prettySlot cp <> ", checkpointed."
     return $ Just cp
   NoProgress{} -> do
     traceNotice trace "No progress made, exiting."
     return Nothing
+  where
+    prettySlot cp = pretty (#slotNo cp :: C.SlotNo)
 
 newtype BatchSize = BatchSize Natural
   deriving newtype (Eq, Show, Read, Num, Enum, Ord)
@@ -344,12 +566,22 @@ stderrTrace severity f = do
   c <- defaultConfigStderrSeverity severity
   Trace.withTrace c "mafoc" f
 
-initialNotice :: Show a => a -> BatchSize -> CM.Severity -> CheckpointInterval -> Trace.Trace IO TS.Text -> IO ()
-initialNotice cli batchSize severity checkpointInterval trace = traceNotice trace
-  $ "Indexer started\n  Configuration: \n    " <> pretty (show cli)
-                <> "\n  Batch size: " <> pretty (show batchSize)
-                <> "\n  Logging severity: " <> pretty (show severity)
-                <> "\n  Checkpoint interval: " <> pretty (show checkpointInterval)
+initialNotice :: Show a => a -> CommonConfig -> Maybe (ParallelismConfig, Natural, Int, Int) -> Trace.Trace IO TS.Text -> IO ()
+initialNotice cli CommonConfig{batchSize, severity, checkpointInterval} maybeParallelism trace = do
+  traceNotice trace
+    $ "Indexer started\n  Configuration: "
+    <> "\n    " <> pretty (show cli)
+    <> "\n  Batch size" <+> pretty (show batchSize)
+    <> "\n  Logging severity" <+> pretty (show severity)
+    <> "\n  Checkpoint interval" <+> pretty (show checkpointInterval)
+    <> case maybeParallelism of
+         Just (ParallelismConfig{intervalLength}, intervalLengthSlots, maxThreads, numCapabilities) -> let
+           text = case intervalLength of
+                    Slots slots -> pretty (show slots {- same as `intervalLengthSlots` -}) <+> "slot batches per thread"
+                    Percent percent -> pretty (show percent) <+> "% of interval, i.e" <+> pretty (show intervalLengthSlots) <+> "slot batches per thread"
+           in "\n  Parallelism: processing" <+> text
+           <> "\n  # of threads used:" <+> pretty maxThreads <+> ("(" <> pretty numCapabilities <> " reported by operating system)")
+         Nothing -> "\n  No parallelism"
 
 -- * Local chainsync: config and runtime
 
@@ -411,16 +643,18 @@ data LocalChainsyncRuntime = LocalChainsyncRuntime
 
   -- * Internal
   , concurrencyPrimitive :: ConcurrencyPrimitive
+  , maybeHeaderDb        :: Maybe HeaderDb
   }
 
 ensureStartFromCheckpoint :: LocalChainsyncRuntime -> C.ChainPoint -> IO LocalChainsyncRuntime
-ensureStartFromCheckpoint lcr@LocalChainsyncRuntime{interval = (cp, upTo)} stateCp = if cp <= stateCp
+ensureStartFromCheckpoint lcr@LocalChainsyncRuntime{interval = (requestedStartingPoint, upTo)} stateCp = if requestedStartingPoint <= stateCp
   then return $ lcr { interval = (stateCp, upTo) }
   else E.throwIO $ E.No_state_for_requested_starting_point
-       { E.requested = cp
+       { E.requested = requestedStartingPoint
        , E.fromState = stateCp
        }
 
+-- | Use either the existing chain point provided in the runtime, or the argument if it's later.
 useLaterStartingPoint :: LocalChainsyncRuntime -> C.ChainPoint -> LocalChainsyncRuntime
 useLaterStartingPoint lcr cp = lcr { interval = (max oldCp cp, upTo) }
   where (oldCp, upTo) = interval lcr
@@ -433,8 +667,9 @@ initializeLocalChainsync localChainsyncConfig networkId trace cliShow = do
 
   -- Resolve any bare SlotNo to ChainPoint
   let (Interval from upTo, maybeDbPathAndTableName) = intervalInfo localChainsyncConfig
-  cliChainPoint <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
+  (cliChainPoint, maybeHeaderDb) <- intervalStartToChainSyncStart trace maybeDbPathAndTableName from
 
+  -- Init profiling
   maybeProfiling :: Maybe Logging.ProfilingRuntime <- traverse (Logging.profilerInit trace cliShow) (profiling_ localChainsyncConfig)
 
   return $ LocalChainsyncRuntime
@@ -445,6 +680,7 @@ initializeLocalChainsync localChainsyncConfig networkId trace cliShow = do
     maybeProfiling
     (pipelineSize_ localChainsyncConfig)
     (concurrencyPrimitive_ localChainsyncConfig)
+    maybeHeaderDb
 
 -- | Resolve @LocalChainsyncConfig@ that came from e.g command line
 -- arguments into an "actionable" @LocalChainsyncRuntime@ runtime
@@ -542,7 +778,7 @@ takeUpTo trace upTo' stopSignal source = case upTo' of
 
     -- | Take while either a stop signal is received or when the predicate becomes false.
     takeWhile' :: (a -> Bool) -> S.Stream (S.Of a) IO r -> S.Stream (S.Of a) IO ()
-    takeWhile' p = S.takeWhile p . Signal.takeWhileStopSignal stopSignal
+    takeWhile' predicate = S.takeWhile predicate . Signal.takeWhileStopSignal stopSignal
 
 -- * Ledger state checkpoint
 
@@ -560,6 +796,9 @@ loadLatestTrace prefix init_ load trace = do
 query1 :: (SQL.ToField q, SQL.FromRow r) => SQL.Connection -> SQL.Query -> q -> IO [r]
 query1 con query param = SQL.query con query $ SQL.Only param
 
+fromShow :: (Show a, IsString b) => a -> b
+fromShow = fromString . show
+
 -- ** Optional conditions
 
 mkParam :: SQL.ToField v => SQL.Query -> TS.Text -> v -> (SQL.NamedParam, SQL.Query)
@@ -576,8 +815,23 @@ andFilters = \case
 data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
   deriving (Show)
 
+instance Pretty DbPathAndTableName where
+  pretty (DbPathAndTableName maybeDbFilePath maybeTable) = pretty $ db <> ":" <> table
+    where
+      db = fromMaybe "default.db" maybeDbFilePath
+      table = fromMaybe "default" maybeTable
+
 defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
 defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
+
+-- ** Header DB
+
+type HeaderDb = (SQL.Connection, String)
+
+openHeaderDb :: DbPathAndTableName -> IO HeaderDb
+openHeaderDb dbPathAndTableName = let
+  (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
+  in SQL.open dbPath <&> (, tableName)
 
 -- ** Checkpoint
 
@@ -644,55 +898,68 @@ eventsToSingleChainpoint = \case
   _                    -> Nothing
 
 -- | Resolve @SlotNo@ to @ChainPoint@ by finding block header hash from an Sqlite table
-chainPointForSlotNo :: SQL.Connection -> String -> C.SlotNo -> IO (Maybe C.ChainPoint)
-chainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
+chainPointForSlotNo :: HeaderDb -> C.SlotNo -> IO (Maybe C.ChainPoint)
+chainPointForSlotNo (sqlCon, tableName) slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
   where
     query :: SQL.Query
     query = "SELECT slot_no, block_header_hash     \
             \  FROM " <> fromString tableName <> " \
             \ WHERE slot_no = ?                    "
 
+chainPointNearSlotNo :: HeaderDb -> SQL.Query -> SQL.Query -> C.SlotNo -> IO (Maybe C.ChainPoint)
+chainPointNearSlotNo (sqlCon, tableName) op order slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon (mkChainPointSlotNoQuery tableName op order) $ SQL.Only slotNo
+
+mkChainPointSlotNoQuery :: String -> SQL.Query -> SQL.Query -> SQL.Query
+mkChainPointSlotNoQuery tableName op order =
+  "SELECT slot_no, block_header_hash     \
+  \  FROM " <> fromString tableName <> " \
+  \ WHERE slot_no " <> op <> " ?         \
+  \ ORDER BY slot_no " <> order <> "     \
+  \ LIMIT 1                              "
+
 previousChainPointForSlotNo :: SQL.Connection -> String -> C.SlotNo -> IO (Maybe C.ChainPoint)
-previousChainPointForSlotNo sqlCon tableName slotNo = fmap eventsToSingleChainpoint $ SQL.query sqlCon query $ SQL.Only slotNo
+previousChainPointForSlotNo sqlCon tableName slotNo = getSecond <$> query1 sqlCon query slotNo
   where
     query :: SQL.Query
     query = "SELECT slot_no, block_header_hash     \
             \  FROM " <> fromString tableName <> " \
-            \ WHERE slot_no < ?                    \
+            \ WHERE slot_no <= ?                   \
             \ ORDER BY slot_no DESC                \
-            \ LIMIT 1                              "
+            \ LIMIT 2                              "
+
+    getSecond = \case
+      [_, x] -> Just x
+      _ -> Nothing
 
 -- | Convert starting point from CLI to chainpoint, possibly with the help of header DB.
 intervalStartToChainSyncStart
   :: Trace.Trace IO TS.Text
   -> Maybe DbPathAndTableName
   -> (Bool, Either C.SlotNo C.ChainPoint)
-  -> IO C.ChainPoint
+  -> IO (C.ChainPoint, Maybe HeaderDb)
 intervalStartToChainSyncStart trace maybeDbPathAndTableName (include, eitherSlotOrCp)
   -- If a direct ChainPoint is given, return that:
-  | Right cp <- eitherSlotOrCp = pure cp
+  | Right cp <- eitherSlotOrCp = (cp,) <$> traverse openHeaderDb maybeDbPathAndTableName
   -- If only the SlotNo is given, resolve it to ChainPoint by help of a database
-  | Just dbPathAndTableName <- maybeDbPathAndTableName, Left slotNo <- eitherSlotOrCp =
-    let (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
-    in do
-      sqlCon <- SQL.open dbPath
-      if include
-        then let
-          in case slotNo of
-               0 -> pure C.ChainPointAtGenesis
-               _slotNo -> do
-                 maybeChainPoint <- previousChainPointForSlotNo sqlCon tableName slotNo
-                 case maybeChainPoint of
-                   Just cp -> pure cp
-                   Nothing -> E.throwIO $ E.Can't_find_previous_ChainPoint_to_slot slotNo
+  | Just dbPathAndTableName <- maybeDbPathAndTableName, Left slotNo <- eitherSlotOrCp = do
+    headerDb@(sqlCon, tableName) <- openHeaderDb dbPathAndTableName
+    if include
+      then let
+        in case slotNo of
+             0 -> pure (C.ChainPointAtGenesis, Just headerDb)
+             _slotNo -> do
+               maybeChainPoint <- previousChainPointForSlotNo sqlCon tableName slotNo
+               case maybeChainPoint of
+                 Just cp -> pure (cp, Just headerDb)
+                 Nothing -> E.throwIO $ E.Can't_find_previous_ChainPoint_to_slot slotNo
 
-        else chainPointForSlotNo sqlCon tableName slotNo >>= \case
-          Nothing -> E.throwIO $ E.SlotNo_not_found slotNo
-          Just cp -> do
-            traceInfo trace $ pretty slotNo <> " resolved to " <> pretty cp
-            pure cp
+      else chainPointForSlotNo (sqlCon, tableName) slotNo >>= \case
+        Nothing -> E.throwIO $ E.SlotNo_not_found slotNo
+        Just cp -> do
+          traceInfo trace $ pretty slotNo <> " resolved to " <> pretty cp
+          pure (cp, Just headerDb)
 
-  | otherwise = E.throwIO E.No_headerDb_specified
+  | otherwise = E.throwIO $ E.No_headerDb_specified "Interval start was specified as slot number, to resolve this to block header hash a block header database is needed."
 
 -- * Address filter
 
@@ -700,3 +967,8 @@ mkMaybeAddressFilter :: [C.Address C.ShelleyAddr] -> Maybe (C.Address C.ShelleyA
 mkMaybeAddressFilter addresses = case addresses of
   [] -> Nothing
   _ -> Just $ \address -> address `elem` Set.fromList addresses
+
+-- * Generic
+
+slotText :: C.ChainPoint -> TS.Text
+slotText cp = TS.pack $ show (coerce (#slotNo cp :: C.SlotNo) :: Word64)

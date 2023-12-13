@@ -216,10 +216,11 @@ logging
   -> Signal.ChainsyncStats
   -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
   -> S.Stream (S.Of (ChainSyncEvent (C.BlockInMode C.CardanoMode))) IO r
-logging tracer statsSignal source = do
+logging trace0 statsSignal source = do
   now <- lift getCurrentTime
   foldYield step (mkEmptyStats now) source
   where
+    trace = CM.appendName "chainsync" trace0
     step syncStats0 ev = do
       now <- getCurrentTime
       statsRequested <- Signal.resetGet statsSignal
@@ -228,8 +229,8 @@ logging tracer statsSignal source = do
           minSecondsBetweenMsg = 10 :: NominalDiffTime
           logMsg = mkMessage syncStats1 timeSinceLastMsg cp ct
 
-      if | statsRequested -> traceAlert tracer logMsg $> (mkEmptyStats now, ev)
-         | timeSinceLastMsg > minSecondsBetweenMsg -> traceInfo tracer logMsg $> (mkEmptyStats now, ev)
+      if | statsRequested -> traceAlert trace logMsg $> (mkEmptyStats now, ev)
+         | timeSinceLastMsg > minSecondsBetweenMsg -> traceInfo trace logMsg $> (mkEmptyStats now, ev)
          | otherwise -> return (syncStats1, ev)
 
 syncStatsStep :: SyncStats -> ChainSyncEvent (C.BlockInMode C.CardanoMode) -> (C.ChainPoint, C.ChainTip, SyncStats)

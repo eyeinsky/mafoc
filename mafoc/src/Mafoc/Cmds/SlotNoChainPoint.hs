@@ -8,7 +8,7 @@ import Mafoc.Core (renderPretty, chainPointForSlotNo)
 run :: FilePath -> C.SlotNo -> IO ()
 run dbPath slotNo = do
   sqlCon <- SQL.open dbPath
-  maybeChainPoint <- chainPointForSlotNo sqlCon "blockbasics" slotNo
+  maybeChainPoint <- chainPointForSlotNo (sqlCon, "blockbasics") slotNo
   case maybeChainPoint of
     Just cp -> TS.putStrLn $ renderPretty cp
     Nothing -> return ()

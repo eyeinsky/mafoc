@@ -145,13 +145,12 @@ library
     , unix
     , vector
 
-executable mafoc
+common mafoc-exe
   import:         lang
   hs-source-dirs: app
-  main-is:        Main.hs
-  ghc-options:
-    "-with-rtsopts=-T"
+  ghc-options:    -with-rtsopts=-T
 
+  -- Use local Prelude:
   mixins:         base (Prelude as BasePrelude), base hiding (Prelude)
 
   --------------------
@@ -177,6 +176,18 @@ executable mafoc
     , servant-server
     , text
     , warp
+
+executable mafoc
+  import:  mafoc-exe
+  main-is: Main.hs
+
+executable mafoc-threaded
+  import:  mafoc-exe
+  ghc-options: -threaded -feager-blackholing -rtsopts "-with-rtsopts=-N -T"
+  -- `-feager-blackholing` is recommended for -threaded runtime:
+  -- https://ghc.gitlab.haskell.org/ghc/doc/users_guide/using-concurrent.html
+  main-is: Main.hs
+
 
 test-suite mafoc-test
   import:         lang

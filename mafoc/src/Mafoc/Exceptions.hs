@@ -36,7 +36,7 @@ data MafocIOException
   | The_impossible_happened { whatItWas :: TS.Text }
   -- | Header-DB
   | SlotNo_not_found C.SlotNo
-  | No_headerDb_specified
+  | No_headerDb_specified { whyIsItNeeded :: TS.Text }
   | Can't_find_previous_ChainPoint_to_slot C.SlotNo
   -- | ChainPoints from multiple state sources
   | ChainPoints_don't_match [(String, Maybe C.ChainPoint)]
@@ -60,6 +60,10 @@ data MafocIOException
   -- genesis. Thus, starting from the middle is not possible
   -- because we don't have a state for that point.
   | Stateful_indexer_can't_be_run_with_parallelilsm
+
+  -- | Every chain point later than slot zero must have a previous chain point.
+  | Previous_ChainPoint_for_slot_not_found C.SlotNo
+
   -- | An escape-hatch exception: an exception where we don't bother
   -- with structure, but just explain in text. Perhaps we'll find a
   -- category later.

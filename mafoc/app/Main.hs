@@ -6,7 +6,6 @@ import Data.Text qualified as TS
 import Network.Wai.Handler.Warp qualified as Warp
 import Servant.Server qualified as Servant
 
-
 import Cardano.Api qualified as C
 import Cardano.Streaming.Callbacks qualified as CS
 import Cardano.BM.Data.Severity qualified as CM
@@ -14,7 +13,7 @@ import Cardano.BM.Data.Severity qualified as CM
 import Mafoc.CLI qualified as Opt
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
-import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval, DbPathAndTableName)
+import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval, runIndexerParallel, printChainIntervals, StatelessIndexer, ParallelismConfig)
 import Mafoc.Exceptions qualified as E
 import Mafoc.Indexers.AddressAppears qualified as AddressAppears
 import Mafoc.Indexers.AddressBalance qualified as AddressBalance
@@ -47,34 +46,53 @@ main = do
         Speed.CallbackPipelined socketPath nodeConfig start end n -> Speed.mkCallback (CS.blocksCallbackPipelined n) socketPath nodeConfig start end
         Speed.RewindableIndex socketPath start end networkId -> Speed.rewindableIndex socketPath start end networkId
 
-      IndexerCommand indexerCommand' batchSize severity maybePort checkpointInterval _parallelism -> let
+      IndexerCommand indexerCommand' batchSize severity maybePort checkpointInterval parallelism -> let
+
+        commonConfig :: CommonConfig
         commonConfig = CommonConfig{batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval}
-        runIndexerNoApi :: (Indexer a, Show a) => a -> IO ()
-        runIndexerNoApi configFromCli = case maybePort of
-          Just _port -> E.throwIO E.Indexer_has_no_HTTP_API
-          Nothing -> runIndexer configFromCli commonConfig Nothing
+
+        assertNoApi :: IO ()
+        assertNoApi = case maybePort of
+          Just{} -> E.throwIO E.Indexer_has_no_HTTP_API
+          Nothing -> return ()
+
+        runIndexerStateful :: (Show a, Indexer a) => a -> IO ()
+        runIndexerStateful cli = assertNoApi >> case parallelism of
+          DefaultParallelism -> runIndexer cli commonConfig Nothing
+          NoParallelism      -> runIndexer cli commonConfig Nothing
+          YesParallelism{}   -> E.throwIO E.Stateful_indexer_can't_be_run_with_parallelilsm
+
+        runIndexerStateless :: (Show a, StatelessIndexer a) => a -> IO ()
+        runIndexerStateless cli = assertNoApi >> case parallelism of
+          DefaultParallelism -> runIndexer cli commonConfig Nothing
+          YesParallelism{parallelismConfig, debugIntervals} -> if debugIntervals
+            then printChainIntervals cli commonConfig parallelismConfig
+            else runIndexerParallel cli commonConfig parallelismConfig
+          NoParallelism -> runIndexer cli commonConfig Nothing
+
         in case indexerCommand' of
-          BlockBasics        configFromCli -> runIndexerNoApi configFromCli
-          MintBurn           configFromCli -> runIndexerNoApi configFromCli
-          NoOp               configFromCli -> runIndexerNoApi configFromCli
-          EpochStakepoolSize configFromCli -> runIndexerNoApi configFromCli
-          EpochNonce         configFromCli -> runIndexerNoApi configFromCli
-          Fingerprint        configFromCli -> runIndexerNoApi configFromCli
-          ScriptTx           configFromCli -> runIndexerNoApi configFromCli
-          Deposit            configFromCli -> runIndexerNoApi configFromCli
-          AddressDatum       configFromCli -> runIndexerNoApi configFromCli
-          Utxo               configFromCli -> runIndexerNoApi configFromCli
-          AddressBalance     configFromCli -> runIndexerNoApi configFromCli
-          Datum              configFromCli -> runIndexerNoApi configFromCli
-          IntraBlockSpends   configFromCli -> runIndexerNoApi configFromCli
-          AddressAppears     configFromCli -> runIndexerNoApi configFromCli
-          Mamba              configFromCli -> runIndexer configFromCli commonConfig $ case maybePort of
+          BlockBasics        cli -> runIndexerStateless cli
+          MintBurn           cli -> runIndexerStateless cli
+          NoOp               cli -> runIndexerStateless cli
+          EpochStakepoolSize cli -> runIndexerStateful  cli
+          EpochNonce         cli -> runIndexerStateful  cli
+          Fingerprint        cli -> runIndexerStateless cli
+          ScriptTx           cli -> runIndexerStateless cli
+          Deposit            cli -> runIndexerStateless cli
+          AddressDatum       cli -> runIndexerStateless cli
+          Utxo               cli -> runIndexerStateful  cli
+          AddressBalance     cli -> runIndexerStateful  cli
+          Datum              cli -> runIndexerStateless cli
+          IntraBlockSpends   cli -> runIndexerStateful  cli
+          AddressAppears     cli -> runIndexerStateless cli
+          -- Mamba has a HTTP API defined, so we use it:
+          Mamba              cli -> runIndexer cli commonConfig $ case maybePort of
             Just port -> Just $ \runtime mvar -> do
               let app = Servant.serve (Proxy @(API Mamba.Mamba)) $ server runtime mvar
               Warp.run port app
             Nothing -> Nothing
 
-      FoldLedgerState configFromCli -> FoldLedgerState.run configFromCli stopSignal statsSignal
+      FoldLedgerState cli -> FoldLedgerState.run cli stopSignal statsSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
 
 printRollbackException :: IO () -> IO ()
@@ -116,10 +134,8 @@ data IndexerCommand
 
 data Parallelism
   = NoParallelism
-  | RunParallel
-    { headerDb :: DbPathAndTableName
-    , maxWorkers :: Natural
-    }
+  | YesParallelism { parallelismConfig :: ParallelismConfig, debugIntervals :: Bool }
+  | DefaultParallelism
   deriving Show
 
 cmdParserInfo :: Opt.ParserInfo Command
@@ -164,9 +180,21 @@ indexerCommand name f = Opt.command name $ Opt.parserToParserInfo descr (name <>
   <*> Opt.commonLogSeverity
   <*> Opt.commonRunHttpApi
   <*> Opt.commonCheckpointInterval
-  <*> pure NoParallelism
+  <*> (pure DefaultParallelism <|> yesParallelism <|> noParallelism)
   where
     descr = TS.unpack (description @a)
+
+    noParallelism = let
+      noThreadingDescr = "Explicitly request for no parallelism"
+      opt1 = Opt.longOpt "no-parallelism" noThreadingDescr
+      opt2 = Opt.longOpt "no-threading" noThreadingDescr
+      in Opt.switch (opt1 <> opt2) $> NoParallelism
+
+    yesParallelism =
+      Opt.switch (Opt.longOpt "parallel" "Run in parallel") *> parallelismOpts
+    parallelismOpts = YesParallelism
+      <$> Opt.commonParallelismConfig
+      <*> Opt.switch (Opt.longOpt "only-print-intervals" "Just print chain intervals, don't index.")
 
 speedParserInfo :: Opt.ParserInfo Command
 speedParserInfo = Opt.info parser help
