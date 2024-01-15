@@ -83,8 +83,7 @@ instance Indexer MintBurn where
     , assetName :: C.AssetName
     , quantity :: C.Quantity
     , redeemer :: Maybe (C.ScriptData, C.Hash C.ScriptData)
-    }
-    deriving Show
+    } deriving (Eq, Ord, Show, Generic)
 
   newtype State MintBurn = Stateless ()
 
@@ -171,14 +170,25 @@ instance SQL.ToRow (Event MintBurn) where
       , SQL.toField $ snd <$> redeemer
       ]
 
+instance SQL.FromRow (Event MintBurn) where
+  fromRow = Event <$> SQL.field <*> SQL.field <*> SQL.field <*> SQL.field <*> SQL.field <*> SQL.field <*> SQL.field <*> SQL.field <*> redeemer
+    where
+      redeemer = parseRedeemer <$> SQL.field <*> SQL.field
+
+parseRedeemer :: Maybe a -> Maybe b -> Maybe (a, b)
+parseRedeemer mrd mrh = if
+  | Just rd <- mrd, Just rh <- mrh -> Just (rd, rh)
+  | Nothing <- mrd, Nothing <- mrh -> Nothing
+  | otherwise -> fail "Either redeemer data and hash are present or they are not. One can't be present and the other one not!"
+
 defaultTable :: String
 defaultTable = "mintburn"
 
-queryAtSlot :: C.SlotNo -> SqliteTable -> IO [ResultRow]
+queryAtSlot :: C.SlotNo -> SqliteTable -> IO [Event MintBurn]
 queryAtSlot slotNo (con, table) = query1 con query' slotNo
   where
     query' =
-      "SELECT slot_no, block_header_hash, block_no, tx_index_in_block, tx_id \
+      "SELECT slot_no, block_header_hash, block_no, tx_id, tx_index_in_block \
       \     , policy_id, asset_name, quantity, redeemer, redeemer_hash \
       \  FROM " <> fromString table <>
       " WHERE slot_no = ?"
