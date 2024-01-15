@@ -493,7 +493,7 @@ persistStep
          in if | isCheckpointTime         ->
                  persistAndCheckpoint' bufferedAndNewEvents "it's checkpoint time"
                | bufferFill' >= batchSize ->
-                 persistAndCheckpoint' bufferedAndNewEvents "buffer is full"
+                 persistAndCheckpoint' bufferedAndNewEvents $ "buffer is full (" <> pretty (show bufferFill') <> "/" <> pretty (show batchSize) <> ")"
                | otherwise                -> return BatchState
                    { lastCheckpointTime = lastCheckpointTime'
                    , indexerState
