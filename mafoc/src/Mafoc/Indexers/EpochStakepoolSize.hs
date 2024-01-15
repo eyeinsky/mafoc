@@ -13,7 +13,7 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, ensureStartFromCheckpoint,
-                   loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync)
+                   loadLatestTrace, sqliteOpen, defaultTableName, initializeLocalChainsync, SqliteTable, query1)
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
 import Mafoc.Exceptions qualified as E
@@ -67,7 +67,7 @@ instance Indexer EpochStakepoolSize where
     let nodeConfig = #nodeConfig chainsyncConfig
     networkId <- #getNetworkId nodeConfig
     chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace $ show cli
-    let (dbPath, tableName) = defaultTableName "stakepool_delegation" dbPathAndTableName
+    let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
     ((ledgerConfig, extLedgerState), stateChainPoint) <- loadLatestTrace "ledgerState" (LedgerState.init_ nodeConfig) (LedgerState.load nodeConfig) trace
@@ -97,3 +97,16 @@ sqliteInsert c tableName events = SQL.executeMany c
   where
    toRows :: Event EpochStakepoolSize -> [(C.EpochNo, C.PoolId, C.Lovelace)]
    toRows (Event epochNo m) = map (\(keyHash, lovelace) -> (epochNo, keyHash, lovelace)) $ M.toList m
+
+defaultTable :: String
+defaultTable = "stakepool_delegation"
+
+queryEpochStakepoolSize :: C.EpochNo -> SqliteTable -> IO [(C.PoolId, C.Lovelace)]
+queryEpochStakepoolSize epochNo (con, table) = query1 con query' epochNo
+  where
+    query' = "SELECT pool_id, lovelace FROM " <> fromString table <> " WHERE epoch_no = ?"
+
+queryEpochStakepoolSizes :: SqliteTable -> IO [(C.EpochNo, C.PoolId, C.Lovelace)]
+queryEpochStakepoolSizes (con, table) = SQL.query_ con query'
+  where
+    query' = "SELECT epoch_no, pool_id, lovelace FROM " <> fromString table

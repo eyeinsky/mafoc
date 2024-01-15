@@ -826,6 +826,8 @@ query1 con query param = SQL.query con query $ SQL.Only param
 fromShow :: (Show a, IsString b) => a -> b
 fromShow = fromString . show
 
+type SqliteTable = (SQL.Connection, String)
+
 -- ** Optional conditions
 
 mkParam :: SQL.ToField v => SQL.Query -> TS.Text -> v -> (SQL.NamedParam, SQL.Query)

@@ -40,6 +40,8 @@ import Mafoc.Core (
   setCheckpointSqlite,
   TxIndexInBlock,
   stateless,
+  SqliteTable,
+  query1
  )
 
 {- | Configuration data type which does double-duty as the tag for the
@@ -90,7 +92,7 @@ instance Indexer MintBurn where
 
   initialize cli@MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
-    let (dbPath, tableName) = defaultTableName "mintburn" dbPathAndTableName
+    let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName
     let assetFilter = case maybePolicyIdAndAssetName of
@@ -168,6 +170,22 @@ instance SQL.ToRow (Event MintBurn) where
       , SQL.toField $ fst <$> redeemer
       , SQL.toField $ snd <$> redeemer
       ]
+
+defaultTable :: String
+defaultTable = "mintburn"
+
+queryAtSlot :: C.SlotNo -> SqliteTable -> IO [ResultRow]
+queryAtSlot slotNo (con, table) = query1 con query' slotNo
+  where
+    query' =
+      "SELECT slot_no, block_header_hash, block_no, tx_index_in_block, tx_id \
+      \     , policy_id, asset_name, quantity, redeemer, redeemer_hash \
+      \  FROM " <> fromString table <>
+      " WHERE slot_no = ?"
+
+type ResultRow =
+  ( C.SlotNo, C.Hash C.BlockHeader, C.BlockNo, TxIndexInBlock, C.TxId
+  , C.PolicyId, C.AssetName, C.Quantity, Maybe C.ScriptData, Maybe (C.Hash C.ScriptData))
 
 -- * Get policy data
 

@@ -11,10 +11,11 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig, NodeConfig, sqliteOpen, defaultTableName, initializeLocalChainsync,
-                   loadLatestTrace, ensureStartFromCheckpoint
+                   loadLatestTrace, ensureStartFromCheckpoint, SqliteTable, query1
                   )
 import Mafoc.EpochResolution qualified as EpochResolution
 import Mafoc.LedgerState qualified as LedgerState
+import Mafoc.Upstream.Orphans () -- FromRow Ledger.Nonce
 
 data EpochNonce = EpochNonce
   { chainsyncConfig    :: LocalChainsyncConfig NodeConfig
@@ -65,7 +66,7 @@ instance Indexer EpochNonce where
     networkId <- #getNetworkId nodeConfig
     chainsyncRuntime' <- initializeLocalChainsync chainsyncConfig networkId trace $ show cli
 
-    let (dbPath, tableName) = defaultTableName "epoch_nonce" dbPathAndTableName
+    let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     sqlCon <- sqliteOpen dbPath
     sqliteInit sqlCon tableName
 
@@ -96,3 +97,17 @@ sqliteInsert c tableName events = SQL.executeMany c template $ map toRow events
   where
     template = "INSERT INTO " <> fromString tableName <>" VALUES (?, ?, ?, ?, ?)"
     toRow Event{epochNo, epochNonce, blockNo, blockHeaderHash, slotNo} = (epochNo, epochNonce, blockNo, blockHeaderHash, slotNo)
+
+defaultTable :: String
+defaultTable = "epoch_nonce"
+
+queryEpochNonce :: C.EpochNo -> SqliteTable -> IO (Maybe Ledger.Nonce)
+queryEpochNonce epochNo (con, table) = query1 con query' epochNo >>= \case
+  [SQL.Only res] -> return $ Just res
+  [] -> return Nothing
+  _ : _ : _ -> error "there shouldn't be more than one result"
+  where
+    query' = "SELECT nonce FROM " <> fromString table <> " WHERE epoch_no = ?"
+
+queryEpochNonces :: SqliteTable -> IO [(C.EpochNo, Ledger.Nonce)]
+queryEpochNonces (con, table) = SQL.query_ con $ "SELECT epoch_no, nonce FROM " <> fromString table
