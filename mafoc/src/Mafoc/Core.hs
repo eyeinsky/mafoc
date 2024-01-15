@@ -2,6 +2,8 @@
 {-# LANGUAGE DerivingVia    #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Mafoc.Core
   ( module Mafoc.Core
   , module Mafoc.Upstream
@@ -132,7 +134,13 @@ runIndexer cli commonConfig@CommonConfig{batchSize, stopSignal, checkpointSignal
   initialNotice cli commonConfig Nothing trace
   (indexerInitialState, lcr, indexerRuntime) <- initialize cli trace
   let (fromChainPoint, _upTo) = interval lcr
-  initialBatchState <- NoProgress fromChainPoint <$> getCurrentTime
+  lastCheckpointTime <- getCurrentTime
+  let initialBatchState = NoProgress
+        { chainPointAtStart = fromChainPoint
+        , chainPointCurrent = fromChainPoint
+        , indexerState = indexerInitialState
+        , lastCheckpointTime
+        }
 
   let
     persistStep' :: BatchStepper a
@@ -271,7 +279,13 @@ runIndexerParallel
             async <- IO.async $ do
               let sectionTrace = mkSectionTrace interval' trace
                   lcr = lcrInitial { interval = (sectionStart, SlotNo $ #slotNo sectionEnd) }
-              initialBatchState <- NoProgress sectionStart <$> getCurrentTime
+              lastCheckpointTime <- getCurrentTime
+              let initialBatchState = NoProgress
+                    { chainPointAtStart = sectionStart
+                    , lastCheckpointTime
+                    , chainPointCurrent = sectionStart
+                    , indexerState = stateless
+                    }
               traceInfo sectionTrace "Section indexer started."
               runIndexerStream statsSignal stopSignal stateless (persistStep_ sectionTrace) initialBatchState indexerRuntime sectionTrace lcr
               traceInfo sectionTrace "Section indexer done."
@@ -414,17 +428,19 @@ printChainIntervals cli commonConfig@CommonConfig{severity} parallelismConfig@Pa
 
 data BatchState a
   = BatchState { lastCheckpointTime :: UTCTime
-               , slotNoBhh          :: SlotNoBhh
                , indexerState       :: State a
+               , slotNoBhh          :: SlotNoBhh
                , batchFill          :: BatchSize
                , bufferedEvents     :: [[Event a]]
                }
   | BatchEmpty { lastCheckpointTime :: UTCTime
-               , slotNoBhh          :: SlotNoBhh
                , indexerState       :: State a
+               , slotNoBhh          :: SlotNoBhh
                }
-  | NoProgress { chainPointAtStart  :: C.ChainPoint
-               , lastCheckpointTime :: UTCTime
+  | NoProgress { lastCheckpointTime :: UTCTime
+               , indexerState       :: State a
+               , chainPointAtStart  :: C.ChainPoint
+               , chainPointCurrent  :: C.ChainPoint
                }
 
 getBatchFill :: BatchState a -> BatchSize
@@ -460,7 +476,7 @@ persistStep
         traceInfo trace $ "Persisting and checkpointing at " <+> pretty (C.ChainPoint slotNo bhh) <+> " because " <+> msg
         persistMany indexerRuntime (concat $ reverse bufferedEvents')
         checkpoint indexerRuntime indexerState slotNoBhh
-        return $ BatchEmpty now slotNoBhh indexerState
+        return $ freshBatchState now
 
       isCheckpointTime :: Bool
       isCheckpointTime = isCheckpointTimeP lastCheckpointTime' now
@@ -478,23 +494,28 @@ persistStep
                  persistAndCheckpoint' bufferedAndNewEvents "it's checkpoint time"
                | bufferFill' >= batchSize ->
                  persistAndCheckpoint' bufferedAndNewEvents "buffer is full"
-               | otherwise                -> let
-                   batchState' = BatchState lastCheckpointTime' slotNoBhh indexerState bufferFill' bufferedAndNewEvents
-                   in return batchState'
+               | otherwise                -> return BatchState
+                   { lastCheckpointTime = lastCheckpointTime'
+                   , indexerState
+                   , slotNoBhh
+                   , batchFill = bufferFill'
+                   , bufferedEvents = bufferedAndNewEvents
+                   }
+
      -- There are no new events
      | otherwise -> if
          -- .. but it's checkpoint time so we persist events and checkpoint
          | isCheckpointTime
-         , (_ : _) <- bufferedEvents
-           -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
+         , (_ : _) <- bufferedEvents -> persistAndCheckpoint' bufferedEvents "it's checkpoint time, but buffer is not full"
          -- Nothing to do, continue with original state
-         | isCheckpointTime
-           -> do
-             checkpoint indexerRuntime indexerState slotNoBhh
-             return $ BatchEmpty now slotNoBhh indexerState
+         | isCheckpointTime -> checkpoint indexerRuntime indexerState slotNoBhh $> freshBatchState now
          -- Nothing to do, continue with original state
-         | otherwise
-           -> return batchState
+         | otherwise -> return $ case batchState { indexerState } of
+             BatchState{..} -> BatchState{slotNoBhh, .. }
+             BatchEmpty{..} -> BatchEmpty{slotNoBhh, .. }
+             NoProgress{..} -> NoProgress{chainPointCurrent = #chainPoint slotNoBhh, .. }
+  where
+    freshBatchState now = BatchEmpty { lastCheckpointTime = now, indexerState, slotNoBhh }
 
 persistStepFinal :: Indexer a => Runtime a -> BatchState a -> Trace.Trace IO TS.Text -> IO (Maybe C.ChainPoint)
 persistStepFinal indexerRuntime batchState trace = case batchState of
@@ -509,9 +530,15 @@ persistStepFinal indexerRuntime batchState trace = case batchState of
     checkpoint indexerRuntime indexerState slotNoBhh
     traceNotice trace $ "Exiting at" <+> prettySlot cp <> ", checkpointed."
     return $ Just cp
-  NoProgress{} -> do
-    traceNotice trace "No progress made, exiting."
-    return Nothing
+  NoProgress{indexerState, chainPointCurrent} -> do
+    case chainPointCurrent of
+      C.ChainPoint slotNo bhh -> do
+        checkpoint indexerRuntime indexerState (slotNo, bhh)
+        traceNotice trace "No events found. Checkpointed and exiting."
+        return $ Just chainPointCurrent
+      C.ChainPointAtGenesis -> do
+        traceNotice trace "No progress made, exiting."
+        return Nothing
   where
     prettySlot cp = pretty (#slotNo cp :: C.SlotNo)
 
