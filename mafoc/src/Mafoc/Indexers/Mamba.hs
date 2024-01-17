@@ -113,7 +113,7 @@ instance Indexer Mamba where
       (utxoState', utxoEvents) = Utxo.toEventsPrim utxoState Utxo.onUtxoDefault blockInMode
       datumEvents = Datum.toEventsPrim (#slotNo blockInMode) txs
 
-      mintBurnEvents = MintBurn.toEventsPrim (\_ _ -> True) blockInMode :: [Event MintBurn.MintBurn]
+      mintBurnEvents = MintBurn.getAllEvents blockInMode :: [Event MintBurn.MintBurn]
 
       newEpochEvent = case EpochResolution.resolve maybeEpochNo maybeEpochNo' of
         EpochResolution.New epochNo -> let

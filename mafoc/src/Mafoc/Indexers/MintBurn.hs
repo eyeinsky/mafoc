@@ -67,7 +67,7 @@ instance Indexer MintBurn where
   data Runtime MintBurn = Runtime
     { sqlConnection :: SQL.Connection
     , tableName :: String
-    , assetFilter :: C.PolicyId -> C.AssetName -> Bool
+    , toEvents_ :: C.BlockInMode C.CardanoMode -> [Event MintBurn]
     }
 
   data Event MintBurn = Event
@@ -87,43 +87,57 @@ instance Indexer MintBurn where
 
   newtype State MintBurn = Stateless ()
 
-  toEvents Runtime{assetFilter} _state blockInMode = (stateless, toEventsPrim assetFilter blockInMode)
+  toEvents Runtime{toEvents_} _state blockInMode = (stateless, toEvents_ blockInMode)
 
   initialize cli@MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
     chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
     let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName
-    let assetFilter = case maybePolicyIdAndAssetName of
-          Just (policyId, Just assetName) -> \policyId' assetName' -> policyId' == policyId && assetName' == assetName
-          Just (policyId, Nothing)        -> \policyId' _          -> policyId' == policyId
-          Nothing                         -> \_         _          -> True
-    return (stateless, chainsyncRuntime', Runtime sqlCon tableName assetFilter)
+    let toEvents_ = mkToEvents maybePolicyIdAndAssetName
+    return (stateless, chainsyncRuntime', Runtime sqlCon tableName toEvents_)
 
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
 
--- | Separate from class for reuse: this way we don't need to add
--- dummy runtime and state when we want to call create MintBurn events
--- outside of this indexer.
-toEventsPrim :: (C.PolicyId -> C.AssetName -> Bool) -> C.BlockInMode C.CardanoMode -> [Event MintBurn]
-toEventsPrim assetFilter blockInMode@(C.BlockInMode (C.Block _ txs) _) = do
+-- * Event
+
+mkToEvents :: Maybe (C.PolicyId, Maybe C.AssetName) -> C.BlockInMode C.CardanoMode -> [Event MintBurn]
+mkToEvents maybeFilter = case maybeFilter of
+  Just filterData -> let
+    assetFilter = case filterData of
+      (policyId, Just assetName) -> \policyId' assetName' -> policyId' == policyId && assetName' == assetName
+      (policyId, Nothing)        -> \policyId' _          -> policyId' == policyId
+    in \blockInMode@(C.BlockInMode (C.Block _ txs) _) -> do
+        (bx, C.Tx txb _) <- zip [0 ..] txs
+        (policyId, assetName, quantity, maybeRedeemer) <- customAssets txb
+        guard $ assetFilter policyId assetName
+        pure $ Event
+          (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
+          (#calculateTxId txb) bx
+          policyId assetName quantity maybeRedeemer
+  Nothing -> getAllEvents
+
+getAllEvents :: C.BlockInMode mode -> [Event MintBurn]
+getAllEvents blockInMode@(C.BlockInMode (C.Block _ txs) _) = do
   (bx, C.Tx txb _) <- zip [0 ..] txs
-  (policyId, assetName, quantity, maybeRedeemer) <- case txb of
-    C.ShelleyTxBody era shelleyTx _ _ _ _ -> case era of
-      C.ShelleyBasedEraShelley -> []
-      C.ShelleyBasedEraAllegra -> []
-      C.ShelleyBasedEraMary -> []
-      C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
-      C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
-      C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
-    _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
-  guard $ assetFilter policyId assetName -- TODO optimize away
+  (policyId, assetName, quantity, maybeRedeemer) <- customAssets txb
   pure $ Event
     (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
     (#calculateTxId txb) bx
     policyId assetName quantity maybeRedeemer
+
+customAssets :: C.TxBody era -> [(C.PolicyId, C.AssetName, C.Quantity, Maybe (C.ScriptData, C.Hash C.ScriptData))]
+customAssets txb = case txb of
+  C.ShelleyTxBody era shelleyTx _ _ _ _ -> case era of
+    C.ShelleyBasedEraShelley -> []
+    C.ShelleyBasedEraAllegra -> []
+    C.ShelleyBasedEraMary -> []
+    C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
+    C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
+    C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
+  _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
 
 
 -- * SQLite
