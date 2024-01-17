@@ -40,9 +40,11 @@ import Mafoc.Core (
   setCheckpointSqlite,
   TxIndexInBlock,
   stateless,
+  startSmartFromEra,
   SqliteTable,
   query1
  )
+import Mafoc.Upstream (chainsyncStartFor, LedgerEra(Alonzo))
 
 {- | Configuration data type which does double-duty as the tag for the
  indexer.
@@ -90,7 +92,8 @@ instance Indexer MintBurn where
   toEvents Runtime{toEvents_} _state blockInMode = (stateless, toEvents_ blockInMode)
 
   initialize cli@MintBurn{chainsync, dbPathAndTableName, maybePolicyIdAndAssetName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
+    chainsync' <- startSmartFromEra Alonzo chainsync trace
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync' trace $ show cli
     let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName
@@ -100,6 +103,9 @@ instance Indexer MintBurn where
   persistMany Runtime{sqlConnection, tableName} events = persistManySqlite sqlConnection tableName events
 
   checkpoint Runtime{sqlConnection, tableName} _state slotNoBhh = setCheckpointSqlite sqlConnection tableName slotNoBhh
+
+alonzoStart :: C.ChainPoint
+alonzoStart = chainsyncStartFor Alonzo
 
 -- * Event
 

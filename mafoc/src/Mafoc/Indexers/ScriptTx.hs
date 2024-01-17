@@ -13,6 +13,7 @@ import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
                    useSqliteCheckpoint, setCheckpointSqlite, stateless,
+                   LedgerEra(Shelley), startSmartFromEra
                   )
 
 
@@ -49,7 +50,8 @@ instance Indexer ScriptTx where
       doTx tx = event (TxCbor $ C.serialiseToCBOR tx) <$> txScriptHashes tx
 
   initialize cli@ScriptTx{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
+    chainsync' <- startSmartFromEra Shelley chainsync trace
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync' trace $ show cli
     let (dbPath, tableName) = defaultTableName defaultTable dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     return (stateless, chainsyncRuntime', Runtime sqlCon tableName)

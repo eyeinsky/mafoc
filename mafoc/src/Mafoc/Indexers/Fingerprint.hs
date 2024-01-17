@@ -10,7 +10,7 @@ import Cardano.Api qualified as C
 import Mafoc.Core
   ( Indexer, Event, Runtime, State, TxIndexInBlock, checkpoint, persistMany, toEvents, initialize, parseCli, description
   , stateless
-  , LocalChainsyncConfig_, initializeLocalChainsync_)
+  , LocalChainsyncConfig_, initializeLocalChainsync_, startSmartFromEra, LedgerEra(Mary))
 import Mafoc.MultiAsset (AssetFingerprint, assetFingerprint, pass, restrict, getEvents, getEvents')
 import Mafoc.CLI qualified as O
 
@@ -44,7 +44,8 @@ instance Indexer Fingerprint where
     }
 
   initialize cli@Fingerprint{chainsync, maybeAssetFilter} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
+    chainsync' <- startSmartFromEra Mary chainsync trace
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync' trace $ show cli
 
     let assetFilter = case maybeAssetFilter of
           Nothing -> \blockInMode -> map (mk blockInMode) $ getEvents pass pass blockInMode

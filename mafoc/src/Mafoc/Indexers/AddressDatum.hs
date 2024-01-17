@@ -9,7 +9,9 @@ import Mafoc.CLI qualified as Opt
 import Mafoc.Core (DbPathAndTableName,
                    Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents),
                    LocalChainsyncConfig_, defaultTableName, initializeLocalChainsync_,
-                   useSqliteCheckpoint, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, stateless)
+                   useSqliteCheckpoint, mkMaybeAddressFilter, setCheckpointSqlite, txAddressDatums, stateless,
+                   LedgerEra(Alonzo), startSmartFromEra
+                  )
 import Mafoc.Indexers.Datum qualified as Datum
 
 data AddressDatum = AddressDatum
@@ -56,7 +58,8 @@ instance Indexer AddressDatum where
         }
 
   initialize cli@AddressDatum{chainsync, dbPathAndTableName, addresses} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
+    chainsync' <- startSmartFromEra Alonzo chainsync trace
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync' trace $ show cli
     let (dbPath, tablePrefix) = defaultTableName "address_datums" dbPathAndTableName
         tableAddressDatums = tablePrefix <> "_address_datums"
         tableDatums = tablePrefix <> "_datums"

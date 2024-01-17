@@ -47,7 +47,7 @@ import Mafoc.Upstream ( SlotNoBhh, blockChainPoint, blockSlotNo, blockSlotNoBhh,
                       , foldYield, getNetworkId, getSecurityParamAndNetworkId, querySecurityParam, tipDistance
                       , NodeFolder(NodeFolder), NodeConfig(NodeConfig), SocketPath(SocketPath), TxIndexInBlock
                       , txAddressDatums, txDatums, plutusDatums, allDatums, maybeDatum, txPlutusDatums
-                      , LedgerEra, slotEra
+                      , LedgerEra(Shelley, Alonzo, Mary), slotEra, chainsyncStartFor
                       , SecurityParam(SecurityParam), CurrentEra
                       , queryNodeTip
                       )
@@ -627,6 +627,37 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
 
 type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
 
+-- | If @candidate@ interval start is later than what is present in @LocalChainsyncConfig_@ then use that; otherwise return original.
+localChainsyncConfigStartIfLater :: LocalChainsyncConfig_ -> (Bool, Either C.SlotNo C.ChainPoint) -> Either LocalChainsyncConfig_ LocalChainsyncConfig_
+localChainsyncConfigStartIfLater chainsync candidate@(candidateInclude, candidateSlotOrCp) = if initialSlotNo < candidateSlotNo
+  then Right chainsync { intervalInfo = (Interval candidate upTo, maybeDb) }
+  else Left chainsync
+  where
+    (Interval (initialInclude, slotNoOrChainPoint) upTo, maybeDb) = intervalInfo chainsync
+    initialSlotNo = either id #slotNo slotNoOrChainPoint + if initialInclude then 0 else 1 :: C.SlotNo
+    candidateSlotNo = either id #slotNo candidateSlotOrCp + if candidateInclude then 0 else 1 :: C.SlotNo
+
+
+-- * Start smart
+
+safeAdjustMainnetChainSyncStart :: LocalChainsyncConfig_ -> (Bool, Either C.SlotNo C.ChainPoint) -> IO (Either LocalChainsyncConfig_ LocalChainsyncConfig_)
+safeAdjustMainnetChainSyncStart chainsync start = do
+  networkId :: C.NetworkId <- #getNetworkId chainsync
+  return $ case networkId of
+    C.Mainnet -> localChainsyncConfigStartIfLater chainsync start
+    _ -> Left chainsync
+
+startSmartFromEra :: LedgerEra -> LocalChainsyncConfig_ -> Trace.Trace IO TS.Text -> IO LocalChainsyncConfig_
+startSmartFromEra era chainsync0 trace = safeAdjustMainnetChainSyncStart chainsync0 (False, Right cp) >>= \case
+  Left chainsync -> return chainsync
+  Right chainsync -> traceNotice trace msg $> chainsync
+    where
+  where
+    cp = chainsyncStartFor era
+    msg = "Safely adjusted starting point to"
+      <+> pretty (show era) <+> "(" <+> pretty cp <+> ")"
+      <+> "as there are no events before this point for this indexer."
+
 -- ** Get and derive stuff from LocalChainsyncConfig
 
 instance IsLabel "nodeConfig" (LocalChainsyncConfig NodeConfig -> NodeConfig) where
@@ -646,6 +677,10 @@ instance IsLabel "getNetworkId" (NodeInfo NodeConfig -> IO C.NetworkId) where
   fromLabel (NodeInfo nodeInfo') = case nodeInfo' of
       Left nodeFolder                 -> #getNetworkId (#nodeConfig nodeFolder :: NodeConfig)
       Right (_socketPath, nodeConfig) -> #getNetworkId nodeConfig
+instance IsLabel "getNetworkId" (Either C.NetworkId NodeConfig -> IO C.NetworkId) where
+  fromLabel nodeInfo' = case nodeInfo' of
+      Left networkId   -> return networkId
+      Right nodeConfig -> #getNetworkId nodeConfig
 instance IsLabel "getNetworkId" (LocalChainsyncConfig_ -> IO C.NetworkId) where
   fromLabel lcc = let
     NodeInfo nodeInfo' = nodeInfo lcc
@@ -892,6 +927,8 @@ getCheckpointSqlite sqlCon name = do
 
 -- | Adjust @LocalChainsyncRuntime@ with chekpointed chainpoint if it
 -- is later than what was requested from the CLI.
+--
+-- This function should be used only by stateless indexers.
 useSqliteCheckpoint :: FilePath -> String -> Trace.Trace IO TS.Text -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
 useSqliteCheckpoint dbPath tableName trace chainsyncRuntime = do
   sqlCon <- sqliteOpen dbPath

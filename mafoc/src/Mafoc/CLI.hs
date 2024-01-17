@@ -306,7 +306,7 @@ commonRunHttpApi = O.option (Just <$> O.eitherReader (readEither @Int)) $
 
 commonCheckpointInterval :: O.Parser CheckpointInterval
 commonCheckpointInterval = O.option (O.eitherReader parse) $
-  longOpt "checkpoint-interval" "Checkpoint interval in seconds (default), [m]inutes, [h]ours or [d]ays."
+  longOpt "checkpoint-interval" "Maximum checkpoint interval in seconds (default), [m]inutes, [h]ours or [d]ays."
   <> O.metavar "DECIMAL"
   <> O.value (Every $ 5 * 60) -- every five minutes
   where

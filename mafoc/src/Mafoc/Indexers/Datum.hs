@@ -8,6 +8,7 @@ import Mafoc.Core
   ( Indexer (Event, Runtime, State, checkpoint, description, initialize, parseCli, persistMany, toEvents)
   , DbPathAndTableName, defaultTableName, useSqliteCheckpoint, setCheckpointSqlite
   , LocalChainsyncConfig_, initializeLocalChainsync_, TxIndexInBlock, maybeDatum, txPlutusDatums, stateless
+  , LedgerEra(Alonzo), startSmartFromEra
   )
 import Mafoc.CLI qualified as O
 
@@ -44,7 +45,8 @@ instance Indexer Datum where
   toEvents _runtime _state  blockInMode@(C.BlockInMode (C.Block _ txs) _) = (stateless, toEventsPrim (#slotNo blockInMode) txs)
 
   initialize cli@Datum{chainsync, dbPathAndTableName} trace = do
-    chainsyncRuntime <- initializeLocalChainsync_ chainsync trace $ show cli
+    chainsync' <- startSmartFromEra Alonzo chainsync trace
+    chainsyncRuntime <- initializeLocalChainsync_ chainsync' trace $ show cli
     let (dbPath, tableName) = defaultTableName "datums" dbPathAndTableName
     (sqlCon, chainsyncRuntime') <- useSqliteCheckpoint dbPath tableName trace chainsyncRuntime
     sqliteInit sqlCon tableName

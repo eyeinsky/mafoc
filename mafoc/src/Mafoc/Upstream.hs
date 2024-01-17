@@ -388,6 +388,9 @@ lastChainPointOfPreviousEra era = maybe C.ChainPointAtGenesis (uncurry C.ChainPo
     -- pair always has a last block.
     impossible = error "!!! Last block for previous ledger era always exists"
 
+chainsyncStartFor :: LedgerEra -> C.ChainPoint
+chainsyncStartFor = lastChainPointOfPreviousEra
+
 slotEra :: C.SlotNo -> LedgerEra
 slotEra slotNo = fromMaybe maxBound $ fmap snd $ listToMaybe $ dropWhile ((slotNo >) . fst) list
   where
