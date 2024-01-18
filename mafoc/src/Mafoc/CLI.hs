@@ -13,11 +13,11 @@ import Data.List.NonEmpty qualified as NE
 
 import Cardano.BM.Data.Severity qualified as CM
 import Cardano.Api qualified as C
-import Mafoc.Core (BatchSize, ConcurrencyPrimitive(MVar), DbPathAndTableName (DbPathAndTableName), Interval (Interval),
-                   LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig (NodeConfig),
-                   NodeFolder (NodeFolder), NodeInfo (NodeInfo), SocketPath (SocketPath),
+import Mafoc.Core (BatchSize, ConcurrencyPrimitive, DbPathAndTableName (DbPathAndTableName), Interval (Interval),
+                   LocalChainsyncConfig (LocalChainsyncConfig), LocalChainsyncConfig_, NodeConfig,
+                   NodeFolder, NodeInfo (NodeInfo), SocketPath,
                    UpTo (CurrentTip, Infinity, SlotNo), CheckpointInterval(Every, Never),
-                   SecurityParam, ParallelismConfig(ParallelismConfig, intervalLength, maybeMaxThreads), IntervalLength(Slots, Percent), defaultParallelism)
+                   SecurityParam, ParallelismConfig(ParallelismConfig, intervalLength, maybeMaxThreads), IntervalLength(Slots, Percent), defaultParallelism, defaultBatchSize, defaultSeverity, defaultCheckpointInterval, defaultPipelineSize, defaultConcurrencyPrimitive, NodeInfo_)
 import Mafoc.Upstream (LedgerEra, lastChainPointOfPreviousEra, lastBlockOf)
 import Mafoc.Logging (ProfilingConfig(ProfilingConfig))
 import Mafoc.StateFile (eitherParseHashBlockHeader, leftError, parseSlotNo_)
@@ -25,7 +25,7 @@ import Mafoc.MultiAsset (AssetFingerprint, AsType(AsAssetFingerprint))
 
 -- * Options
 
-commonSocketPath :: O.Parser FilePath
+commonSocketPath :: O.Parser SocketPath
 commonSocketPath = O.strOption (opt 's' "socket-path" "Path to node socket.")
 
 commonDbPath :: O.Parser FilePath
@@ -54,7 +54,7 @@ parseDbPathAndTableName str = let
         _                -> Nothing
       in Right $ DbPathAndTableName dbPath' tableName'
 
-commonNodeConfig :: O.Parser FilePath
+commonNodeConfig :: O.Parser NodeConfig
 commonNodeConfig = O.strOption (opt 'c' "node-config" "Path to node configuration.")
 
 commonUntilSlot :: O.Parser C.SlotNo
@@ -77,7 +77,7 @@ commonMaybeChainPointStart = Just <$> cp <|> pure Nothing
 commonPipelineSize :: O.Parser Word32
 commonPipelineSize = O.option O.auto
   $ opt 'p' "pipeline-size" "Number of parallel requests for chainsync mini-protocol."
-  <> O.value 500
+  <> O.value defaultPipelineSize
 
 commonNetworkId :: O.Parser C.NetworkId
 commonNetworkId = mainnet <|> C.Testnet <$> testnet
@@ -95,22 +95,30 @@ commonSecurityParam :: O.Parser SecurityParam
 commonSecurityParam = O.option O.auto (opt 'k' "security-param" "Security parameter -- number of slots after which they can't be rolled back")
 
 commonSecurityParamEither :: O.Parser (Either C.NetworkId NodeConfig)
-commonSecurityParamEither = Left <$> commonNetworkId <|> Right . coerce <$> commonNodeConfig
+commonSecurityParamEither = Left <$> commonNetworkId <|> Right <$> commonNodeConfig
 
-commonNodeFolder :: O.Mod O.ArgumentFields NodeConfig
-commonNodeFolder =
+modNodeFolder :: O.HasMetavar f => O.Mod f NodeFolder
+modNodeFolder =
      O.metavar "NODE-FOLDER"
   <> O.help "Path to cardano-node's folder. The program will figure out socket path, security parameter, network and node config path from it."
 
 commonNodeConnection :: O.Parser (NodeInfo (Either C.NetworkId NodeConfig))
-commonNodeConnection = coerce
-  <$> (    Left <$> O.strArgument commonNodeFolder
+commonNodeConnection = NodeInfo
+  <$> (    Left <$> O.strArgument modNodeFolder
        <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
       )
 
+commonNodeInfoOption :: O.Parser NodeInfo_
+commonNodeInfoOption = NodeInfo <$> nodeFolderOrSocketAndConfig
+  where
+    nodeFolderOrSocketAndConfig :: O.Parser (Either NodeFolder (SocketPath, Either C.NetworkId NodeConfig))
+    nodeFolderOrSocketAndConfig =
+          Left <$> O.strOption (O.long "node-folder" <> modNodeFolder)
+      <|> Right <$> ((,) <$> commonSocketPath <*> commonSecurityParamEither)
+
 commonNodeConnectionAndConfig :: O.Parser (NodeInfo NodeConfig)
-commonNodeConnectionAndConfig = coerce
-  <$> (   Left <$> O.strArgument commonNodeFolder
+commonNodeConnectionAndConfig = NodeInfo
+  <$> (   Left <$> O.strArgument modNodeFolder
       <|> Right <$> ((,) <$> commonSocketPath <*> commonNodeConfig)
       )
 
@@ -236,7 +244,7 @@ commonProfilingConfig = commonProfileSingleField <|> ensureAtLeastOneField <$> m
 commonBatchSize :: O.Parser BatchSize
 commonBatchSize = O.option O.auto
   $ longOpt "batch-size" "Batche size for persisting events"
-  <> O.value 3000
+  <> O.value defaultBatchSize
 
 commonLocalChainsyncConfig :: O.Parser LocalChainsyncConfig_
 commonLocalChainsyncConfig = mkCommonLocalChainsyncConfig commonNodeConnection
@@ -273,7 +281,7 @@ commonLogSeverity = let
   in O.option (O.eitherReader parseSeverity)
      $  O.long "log-severity"
      <> O.help ("Log messages up until specified severity: " <> listAsText)
-     <> O.value CM.Notice
+     <> O.value defaultSeverity
 
 commonMaybeAssetId :: O.Parser (Maybe (C.PolicyId, Maybe C.AssetName))
 commonMaybeAssetId = O.option
@@ -308,7 +316,7 @@ commonCheckpointInterval :: O.Parser CheckpointInterval
 commonCheckpointInterval = O.option (O.eitherReader parse) $
   longOpt "checkpoint-interval" "Maximum checkpoint interval in seconds (default), [m]inutes, [h]ours or [d]ays."
   <> O.metavar "DECIMAL"
-  <> O.value (Every $ 5 * 60) -- every five minutes
+  <> O.value defaultCheckpointInterval
   where
     parse :: String -> Either String CheckpointInterval
     parse str = case str of
@@ -402,7 +410,7 @@ commonConcurrencyPrimitive = O.option (O.eitherReader $ parse) $
   O.long "concurrency-primitive"
     <> O.help helpText
     <> O.hidden
-    <> O.value MVar
+    <> O.value defaultConcurrencyPrimitive
   where
     helpText :: String
     helpText =

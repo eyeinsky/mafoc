@@ -17,20 +17,20 @@ import Marconi.Core.Storable qualified as RI
 
 data BlockSource
   = Callback
-      { callbackOptionsSocketPath :: String
-      , callbackOptionsNodeConfigPath :: String
+      { callbackOptionsSocketPath :: Mafoc.SocketPath
+      , callbackOptionsNodeConfigPath :: Mafoc.NodeConfig
       , callbackOptionsStart :: Maybe C.ChainPoint
       , callbackOptionsEnd :: Maybe C.SlotNo
       }
   | CallbackPipelined
-      { callbackPipelinedOptionsSocketPath :: String
-      , callbackPipelinedOptionsNodeConfigPath :: String
+      { callbackPipelinedOptionsSocketPath :: Mafoc.SocketPath
+      , callbackPipelinedOptionsNodeConfigPath :: Mafoc.NodeConfig
       , callbackPipelinedOptionsStart :: Maybe C.ChainPoint
       , callbackPipelinedOptionsEnd :: Maybe C.SlotNo
       , callbackPipelinedPipelineSize :: Word32
       }
   | RewindableIndex
-      { rewindableIndexOptionsSocketPath :: String
+      { rewindableIndexOptionsSocketPath :: Mafoc.SocketPath
       , rewindableIndexOptionsStart :: Maybe C.ChainPoint
       , rewindableIndexOptionsEnd :: Maybe C.SlotNo
       , rewindableIndexNetworkId :: C.NetworkId
@@ -39,15 +39,15 @@ data BlockSource
 
 mkCallback
   :: (C.LocalNodeConnectInfo C.CardanoMode -> C.ChainPoint -> (CS.ChainSyncEvent (C.BlockInMode C.CardanoMode) -> IO ()) -> IO b)
-  -> FilePath
-  -> FilePath
+  -> Mafoc.SocketPath
+  -> Mafoc.NodeConfig
   -> Maybe C.ChainPoint
   -> Maybe C.SlotNo
   -> IO b
 mkCallback f socketPath nodeConfig cpFromCli maybeEnd = do
-  (env, _) <- CS.getEnvAndInitialLedgerStateHistory nodeConfig
+  (env, _) <- CS.getEnvAndInitialLedgerStateHistory (coerce nodeConfig)
   let from = fromMaybe C.ChainPointAtGenesis cpFromCli
-      io g = f (CS.mkConnectInfo env socketPath) from $ \case
+      io g = f (CS.mkConnectInfo env $ coerce socketPath) from $ \case
         CS.RollForward bim _ct -> g bim
         CS.RollBackward{} -> pure ()
 
@@ -74,7 +74,7 @@ instance RI.Rewindable NoopHandler where
   rewindStorage _ h = pure h
 type NoopIndexer = RI.State NoopHandler
 
-rewindableIndex :: FilePath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
+rewindableIndex :: Mafoc.SocketPath -> Maybe C.ChainPoint -> Maybe C.SlotNo -> C.NetworkId -> IO ()
 rewindableIndex socketPath cpFromCli maybeEnd networkId = do
   coordinator <- Marconi.initialCoordinator 1 2160
   workerChannel <- atomically . dupTChan $ Marconi._channel coordinator
@@ -98,7 +98,7 @@ rewindableIndex socketPath cpFromCli maybeEnd networkId = do
       void $ IO.withAsync (loop mIndexer) $ \a -> do
         IO.link a
         CS.withChainSyncEventEpochNoStream
-          socketPath
+          (coerce socketPath)
           networkId
           [fromMaybe C.ChainPointAtGenesis cpFromCli]
           (Marconi.mkIndexerStream coordinator)

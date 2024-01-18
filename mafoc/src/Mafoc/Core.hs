@@ -114,6 +114,10 @@ class Indexer a where
   -- runtime. Checkpoints are used for resuming
   checkpoint :: Runtime a -> State a -> (C.SlotNo, C.Hash C.BlockHeader) -> IO ()
 
+-- * Run indexer
+
+-- ** CommonConfig
+
 data CommonConfig = CommonConfig
   { batchSize :: BatchSize
   , stopSignal :: Signal.Stop
@@ -123,7 +127,29 @@ data CommonConfig = CommonConfig
   , checkpointInterval :: CheckpointInterval
   }
 
--- | Run an indexer
+defaultBatchSize :: BatchSize
+defaultBatchSize = 3000
+
+defaultSeverity :: CM.Severity
+defaultSeverity = CM.Notice
+
+defaultCheckpointInterval :: CheckpointInterval
+defaultCheckpointInterval = Every $ 5 * 60  -- every five minutes
+
+defaultCommonConfig :: IO CommonConfig
+defaultCommonConfig = do
+  stopSignal <- Signal.setupCtrlCHandler 3
+  checkpointSignal <- Signal.setupCheckpointSignal
+  statsSignal <- Signal.setupChainsyncStatsSignal
+  return CommonConfig
+    { batchSize = defaultBatchSize
+    , severity = defaultSeverity
+    , checkpointInterval = defaultCheckpointInterval
+    , ..
+    }
+
+-- ** Run indexer, @runIndexer@
+
 runIndexer
   :: forall a . (Indexer a, Show a)
   => a
@@ -201,13 +227,17 @@ runIndexerStream statsSignal stopSignal indexerInitialState persistStep_ initial
 
   return ()
 
--- * Parallel
+runIndexerDefault :: forall a . (Indexer a, Show a) => a -> IO ()
+runIndexerDefault cli = do
+  commonConfig <- defaultCommonConfig
+  runIndexer cli commonConfig Nothing
+
+-- ** Run indexer in parallel, @runIndexerParallel@
 
 type StatelessIndexer a = (Indexer a, Coercible (State a) ())
 
 stateless :: (State a ~ s, Coercible s ()) => s
 stateless = coerce ()
-
 
 data IntervalLength
   = Slots Natural
@@ -624,6 +654,24 @@ data LocalChainsyncConfig a = LocalChainsyncConfig
   , pipelineSize_         :: Word32
   , concurrencyPrimitive_ :: ConcurrencyPrimitive
   } deriving Show
+
+defaultPipelineSize :: Word32
+defaultPipelineSize = 500
+
+defaultConcurrencyPrimitive :: ConcurrencyPrimitive
+defaultConcurrencyPrimitive = MVar
+
+defaultLocalChainsyncConfig :: NodeInfo a -> Interval -> LocalChainsyncConfig a
+defaultLocalChainsyncConfig nodeInfo interval' = LocalChainsyncConfig
+  { nodeInfo
+  , logging_ = True
+  , profiling_ = Nothing
+  , pipelineSize_ = defaultPipelineSize
+  , concurrencyPrimitive_ = defaultConcurrencyPrimitive
+  , intervalInfo = (interval', Nothing)
+  }
+
+type NodeInfo_ = NodeInfo (Either C.NetworkId NodeConfig)
 
 type LocalChainsyncConfig_ = LocalChainsyncConfig (Either C.NetworkId NodeConfig)
 
