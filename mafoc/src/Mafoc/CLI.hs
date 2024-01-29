@@ -48,7 +48,7 @@ assetFingerprint = O.option (O.eitherReader f)
 parseDbPathAndTableName :: String -> Either String DbPathAndTableName
 parseDbPathAndTableName str = let
       (dbPath, tableName) = L.span (/= ':') str
-      dbPath' = if L.null dbPath then Nothing else Just dbPath
+      dbPath' = if L.null dbPath then Nothing else Just $ SqliteDb $ Left dbPath
       tableName' = case tableName of
         ':' : rest@(_:_) -> Just rest
         _                -> Nothing

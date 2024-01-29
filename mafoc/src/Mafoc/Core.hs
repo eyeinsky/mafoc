@@ -909,6 +909,20 @@ query1 con query param = SQL.query con query $ SQL.Only param
 fromShow :: (Show a, IsString b) => a -> b
 fromShow = fromString . show
 
+newtype SqliteDb = SqliteDb (Either FilePath SQL.Connection)
+
+instance IsString SqliteDb where
+  fromString str = SqliteDb (Left str)
+
+instance Show SqliteDb where
+  show (SqliteDb e) = "SqliteDb " <> either show (const "<connection>") e
+
+sqliteOpen :: SqliteDb -> IO SQL.Connection
+sqliteOpen (SqliteDb dbPathOrConnection) = do
+  sqlCon <- either SQL.open return dbPathOrConnection
+  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
+  return sqlCon
+
 type SqliteTable = (SQL.Connection, String)
 
 -- ** Optional conditions
@@ -924,17 +938,17 @@ andFilters = \case
 
 -- ** Database path and table name defaulting
 
-data DbPathAndTableName = DbPathAndTableName (Maybe FilePath) (Maybe String)
-  deriving (Show)
+data DbPathAndTableName = DbPathAndTableName (Maybe SqliteDb) (Maybe String)
+  deriving Show
 
 instance Pretty DbPathAndTableName where
-  pretty (DbPathAndTableName maybeDbFilePath maybeTable) = pretty $ db <> ":" <> table
+  pretty (DbPathAndTableName maybeSqliteDb maybeTable) = pretty $ db <> ":" <> table
     where
-      db = fromMaybe "default.db" maybeDbFilePath
+      db = maybe "default.db" (\(SqliteDb either') -> either id (const "<connection>") either') maybeSqliteDb :: String
       table = fromMaybe "default" maybeTable
 
-defaultTableName :: String -> DbPathAndTableName -> (FilePath, String)
-defaultTableName defaultName (DbPathAndTableName maybeDbPath maybeName) = (fromMaybe "default.db" maybeDbPath, fromMaybe defaultName maybeName)
+defaultTableName :: String -> DbPathAndTableName -> (SqliteDb, String)
+defaultTableName defaultName (DbPathAndTableName maybeDb maybeName) = (fromMaybe (SqliteDb $ Left "default.db") maybeDb, fromMaybe defaultName maybeName)
 
 -- ** Header DB
 
@@ -942,8 +956,10 @@ type HeaderDb = (SQL.Connection, String)
 
 openHeaderDb :: DbPathAndTableName -> IO HeaderDb
 openHeaderDb dbPathAndTableName = let
-  (dbPath, tableName) = defaultTableName "blockbasics" dbPathAndTableName
-  in SQL.open dbPath <&> (, tableName)
+  (sqliteDb, tableName) = defaultTableName "blockbasics" dbPathAndTableName
+  in case coerce sqliteDb of
+  Left dbPath -> SQL.open dbPath <&> (, tableName)
+  Right con -> return (con, tableName)
 
 -- ** Checkpoint
 
@@ -977,9 +993,9 @@ getCheckpointSqlite sqlCon name = do
 -- is later than what was requested from the CLI.
 --
 -- This function should be used only by stateless indexers.
-useSqliteCheckpoint :: FilePath -> String -> Trace.Trace IO TS.Text -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
-useSqliteCheckpoint dbPath tableName trace chainsyncRuntime = do
-  sqlCon <- sqliteOpen dbPath
+useSqliteCheckpoint :: SqliteDb -> String -> Trace.Trace IO TS.Text -> LocalChainsyncRuntime -> IO (SQL.Connection, LocalChainsyncRuntime)
+useSqliteCheckpoint sqliteDb tableName trace chainsyncRuntime = do
+  sqlCon <- sqliteOpen sqliteDb
   sqliteInitCheckpoints sqlCon
   chainsyncRuntime' <- getCheckpointSqlite sqlCon tableName >>= \case
     Just existingCheckpoint -> let (requested, upTo) = interval chainsyncRuntime
@@ -997,12 +1013,6 @@ useSqliteCheckpoint dbPath tableName trace chainsyncRuntime = do
       pure $ chainsyncRuntime { interval = (existingCheckpoint, upTo) }
     Nothing -> pure chainsyncRuntime
   return (sqlCon, chainsyncRuntime')
-
-sqliteOpen :: FilePath -> IO SQL.Connection
-sqliteOpen dbPath = do
-  sqlCon <- SQL.open dbPath
-  SQL.execute_ sqlCon "PRAGMA journal_mode=WAL"
-  return sqlCon
 
 -- ** ChainPoint
 
