@@ -44,5 +44,14 @@ timeIO action = do
   t1 <- Time.getCurrentTime
   return (a, Time.diffUTCTime t1 t0)
 
+timePrint :: String -> IO a -> IO a
+timePrint label action = do
+  (a, time) <- timeIO action
+  putStrLn $ label <> " took " <> show time
+  return a
+
+timePrint_ :: IO a -> IO a
+timePrint_ action = timePrint "_" action
+
 todo :: a
 todo = undefined
