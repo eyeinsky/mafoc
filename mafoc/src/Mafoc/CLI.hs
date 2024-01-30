@@ -46,13 +46,24 @@ assetFingerprint = O.option (O.eitherReader f)
     f = either (Left . C.displayError) Right . C.deserialiseFromBech32 AsAssetFingerprint . TS.pack
 
 parseDbPathAndTableName :: String -> Either String DbPathAndTableName
-parseDbPathAndTableName str = let
-      (dbPath, tableName) = L.span (/= ':') str
-      dbPath' = if L.null dbPath then Nothing else Just $ SqliteDb $ Left dbPath
-      tableName' = case tableName of
-        ':' : rest@(_:_) -> Just rest
-        _                -> Nothing
-      in Right $ DbPathAndTableName dbPath' tableName'
+parseDbPathAndTableName str = Right $ DbPathAndTableName dbPath tableName
+  where
+    (notColon, colonAndRest) = L.span (/= ':') $ reverse str
+
+    (tableNameReversed, dbPathReversed) = if null colonAndRest
+      then ("", notColon)
+      else (notColon, colonAndRest)
+
+    tableName0 = reverse tableNameReversed
+    tableName = if L.null tableName0 then Nothing else Just tableName0
+
+    dbPath0 = reverse dbPathReversed
+    dbPath = if L.isPrefixOf ":memory:" dbPath0
+      then Just $ SqliteDb $ Left dbPath0
+      else case dbPathReversed of
+             ':' : rest@(_:_) -> Just $ SqliteDb $ Left $ reverse rest
+             _ : _ -> Just $ SqliteDb $ Left dbPath0
+             [] -> Nothing
 
 commonNodeConfig :: O.Parser NodeConfig
 commonNodeConfig = O.strOption (opt 'c' "node-config" "Path to node configuration.")
