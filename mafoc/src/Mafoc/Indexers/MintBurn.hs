@@ -1,5 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
-
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {- | Indexer for mint and burn events.
 
 The implementation for converting blocks to events and persisting
@@ -9,25 +9,10 @@ This just provides the CLI interface and a streaming runtime.
 -}
 module Mafoc.Indexers.MintBurn where
 
-import Control.Monad (guard)
 import Database.SQLite.Simple qualified as SQL
 import Database.SQLite.Simple.ToField qualified as SQL
-import Data.List qualified as List
-import Data.Map qualified as Map
 
-import Cardano.Ledger.Babbage.Tx qualified as LB
-import Cardano.Ledger.Alonzo.Scripts.Data qualified as LA
-import Cardano.Ledger.Alonzo.Tx qualified as LA
-import Cardano.Ledger.Alonzo.TxWits qualified as LA
-import Cardano.Ledger.Mary.Value qualified as LM
-import Data.ByteString.Short qualified as Short
 import Cardano.Api qualified as C
-import Cardano.Api.Shelley qualified as C
-import Ouroboros.Consensus.Shelley.Eras qualified as OEra
-import Cardano.Ledger.Mary.Value qualified as LA
-import Cardano.Ledger.Api.Scripts.Data qualified as Ledger.Api
-import Cardano.Ledger.Core qualified as Ledger
-import Cardano.Ledger.Conway.TxBody qualified as LC
 
 import Mafoc.CLI qualified as Opt
 import Mafoc.Core (
@@ -45,10 +30,10 @@ import Mafoc.Core (
   query1
  )
 import Mafoc.Upstream (chainsyncStartFor, LedgerEra(Alonzo))
+import Mafoc.MultiAsset (pass, restrict, getEvents)
 
-{- | Configuration data type which does double-duty as the tag for the
- indexer.
--}
+-- | Configuration data type which does double-duty as the tag for the
+-- indexer.
 data MintBurn = MintBurn
   { chainsync :: LocalChainsyncConfig_
   , dbPathAndTableName :: DbPathAndTableName
@@ -110,41 +95,23 @@ alonzoStart = chainsyncStartFor Alonzo
 -- * Event
 
 mkToEvents :: Maybe (C.PolicyId, Maybe C.AssetName) -> C.BlockInMode C.CardanoMode -> [Event MintBurn]
-mkToEvents maybeFilter = case maybeFilter of
-  Just filterData -> let
-    assetFilter = case filterData of
-      (policyId, Just assetName) -> \policyId' assetName' -> policyId' == policyId && assetName' == assetName
-      (policyId, Nothing)        -> \policyId' _          -> policyId' == policyId
-    in \blockInMode@(C.BlockInMode (C.Block _ txs) _) -> do
-        (bx, C.Tx txb _) <- zip [0 ..] txs
-        (policyId, assetName, quantity, maybeRedeemer) <- customAssets txb
-        guard $ assetFilter policyId assetName
-        pure $ Event
-          (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
-          (#calculateTxId txb) bx
-          policyId assetName quantity maybeRedeemer
-  Nothing -> getAllEvents
+mkToEvents = \case
+  Just (policyId, Just assetName) -> \blockInMode ->
+    map (toEventsHelper blockInMode) $ getEvents (restrict policyId) (restrict assetName) blockInMode
+  Just (policyId, Nothing) -> \blockInMode ->
+    map (toEventsHelper blockInMode) $ getEvents (restrict policyId) pass blockInMode
+  Nothing -> \blockInMode -> map (toEventsHelper blockInMode) $ getEvents pass pass blockInMode
+
+toEventsHelper
+  :: C.BlockInMode mode
+  -> (C.TxId, TxIndexInBlock, C.PolicyId, C.AssetName, C.Quantity, Maybe (C.ScriptData, C.Hash C.ScriptData))
+  -> Event MintBurn
+toEventsHelper blockInMode (a, b, c, d, e, f) = Event
+  (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
+  a b c d e f
 
 getAllEvents :: C.BlockInMode mode -> [Event MintBurn]
-getAllEvents blockInMode@(C.BlockInMode (C.Block _ txs) _) = do
-  (bx, C.Tx txb _) <- zip [0 ..] txs
-  (policyId, assetName, quantity, maybeRedeemer) <- customAssets txb
-  pure $ Event
-    (#slotNo blockInMode) (#blockHeaderHash blockInMode) (#blockNo blockInMode)
-    (#calculateTxId txb) bx
-    policyId assetName quantity maybeRedeemer
-
-customAssets :: C.TxBody era -> [(C.PolicyId, C.AssetName, C.Quantity, Maybe (C.ScriptData, C.Hash C.ScriptData))]
-customAssets txb = case txb of
-  C.ShelleyTxBody era shelleyTx _ _ _ _ -> case era of
-    C.ShelleyBasedEraShelley -> []
-    C.ShelleyBasedEraAllegra -> []
-    C.ShelleyBasedEraMary -> []
-    C.ShelleyBasedEraAlonzo -> getPolicyData txb $ LA.atbMint shelleyTx
-    C.ShelleyBasedEraBabbage -> getPolicyData txb $ LB.btbMint shelleyTx
-    C.ShelleyBasedEraConway -> getPolicyData txb $ LC.ctbMint shelleyTx
-  _byronTxBody -> [] -- ByronTxBody is not exported but as it's the only other data constructor then _ matches it.
-
+getAllEvents blockInMode = map (toEventsHelper blockInMode) $ getEvents pass pass blockInMode
 
 -- * SQLite
 
@@ -156,8 +123,8 @@ sqliteInit c tableName = liftIO $ do
     "   ( slot_no           INT  NOT NULL \
     \   , block_header_hash INT  NOT NULL \
     \   , block_no          INT  NOT NULL \
-    \   , tx_index_in_block INT  NOT NULL \
     \   , tx_id             BLOB NOT NULL \
+    \   , tx_index_in_block INT  NOT NULL \
     \   , policy_id         BLOB NOT NULL \
     \   , asset_name        TEXT NOT NULL \
     \   , quantity          INT  NOT NULL \
@@ -170,7 +137,7 @@ persistManySqlite sqlConnection tableName events =
   where
     template = "INSERT INTO " <> fromString tableName
         <> " ( slot_no, block_header_hash, block_no \
-           \ , tx_index_in_block, tx_id             \
+           \ , tx_id, tx_index_in_block             \
            \ , policy_id, asset_name, quantity      \
            \ , redeemer, redeemer_hash              \
            \ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -213,40 +180,16 @@ queryAtSlot slotNo (con, table) = query1 con query' slotNo
       \  FROM " <> fromString table <>
       " WHERE slot_no = ?"
 
+-- slot no and block no are null in dbsync but not null in mafoc
 type ResultRow =
-  ( C.SlotNo, C.Hash C.BlockHeader, C.BlockNo, TxIndexInBlock, C.TxId
-  , C.PolicyId, C.AssetName, C.Quantity, Maybe C.ScriptData, Maybe (C.Hash C.ScriptData))
-
--- * Get policy data
-
-getPolicyData
-  :: forall era
-   . (Ledger.Era (C.ShelleyLedgerEra era), OEra.EraCrypto (C.ShelleyLedgerEra era) ~ OEra.StandardCrypto)
-  => C.TxBody era
-  -> LM.MultiAsset OEra.StandardCrypto
-  -> [(C.PolicyId, C.AssetName, C.Quantity, Maybe (C.ScriptData, C.Hash C.ScriptData))]
-getPolicyData txb m = do
-  let txRedeemers :: C.TxBody era -> [(LA.RdmrPtr, LB.Data (C.ShelleyLedgerEra era))]
-      txRedeemers (C.ShelleyTxBody _ _ _ txScriptData _ _) = case txScriptData of
-        C.TxBodyScriptData _proof _datum (LA.Redeemers redeemers) -> Map.toList $ fmap fst redeemers
-        C.TxBodyNoScriptData -> mempty
-      txRedeemers _ = mempty
-      findRedeemerByIndex ix (LA.RdmrPtr _ w, _) = w == ix
-      findRedeemer ix = snd <$> List.find (findRedeemerByIndex ix) (txRedeemers txb)
-      toAssetRedeemer r = (fromAlonzoData r, C.ScriptDataHash $ Ledger.Api.hashData r)
-  (ix, (policyId', assetName, quantity)) <- zip [0 ..] $ LA.flattenMultiAsset m
-  pure
-    ( fromMaryPolicyID policyId'
-    , fromMaryAssetName assetName
-    , C.Quantity quantity
-    , toAssetRedeemer <$> findRedeemer ix
-    )
-
-  where
-    -- Copy-paste:
-    fromMaryPolicyID :: LM.PolicyID OEra.StandardCrypto -> C.PolicyId
-    fromMaryPolicyID (LM.PolicyID sh) = C.PolicyId (C.fromShelleyScriptHash sh) -- from cardano-api:src/Cardano/Api/Value.hs
-    fromMaryAssetName :: LM.AssetName -> C.AssetName
-    fromMaryAssetName (LM.AssetName n) = C.AssetName $ Short.fromShort n -- from cardano-api:src/Cardano/Api/Value.hs
-    fromAlonzoData :: LA.Data ledgerera -> C.ScriptData
-    fromAlonzoData = C.fromPlutusData . LA.getPlutusData -- from cardano-api:src/Cardano/Api/ScriptData.hs
+  ( Maybe C.SlotNo
+  , C.Hash C.BlockHeader
+  , Maybe C.BlockNo
+  , TxIndexInBlock
+  , C.TxId
+  , C.PolicyId
+  , C.AssetName
+  , C.Quantity
+  , Maybe C.ScriptData
+  , Maybe (C.Hash C.ScriptData)
+  )
