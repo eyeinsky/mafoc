@@ -10,6 +10,7 @@ import Cardano.Api qualified as C
 import Cardano.BM.Data.Severity qualified as CM
 
 import Mafoc.CLI qualified as Opt
+import Mafoc.Cmds.Eras qualified as Eras
 import Mafoc.Cmds.FoldLedgerState qualified as FoldLedgerState
 import Mafoc.Cmds.SlotNoChainPoint qualified as SlotNoChainPoint
 import Mafoc.Core (BatchSize, Indexer (description, parseCli), runIndexer, API, server, CommonConfig(CommonConfig, batchSize, stopSignal, checkpointSignal, statsSignal, severity, checkpointInterval), CheckpointInterval, runIndexerParallel, printChainIntervals, StatelessIndexer, ParallelismConfig)
@@ -85,6 +86,7 @@ main = do
               Warp.run port app
             Nothing -> Nothing
 
+      Eras -> Eras.printEras
       FoldLedgerState cli -> FoldLedgerState.run cli stopSignal statsSignal
       SlotNoChainPoint dbPath slotNo -> SlotNoChainPoint.run dbPath slotNo
 
@@ -104,6 +106,7 @@ data Command
   = IndexerCommand IndexerCommand BatchSize CM.Severity (Maybe Int) CheckpointInterval Parallelism
   | FoldLedgerState FoldLedgerState.FoldLedgerState
   | SlotNoChainPoint FilePath C.SlotNo
+  | Eras
   deriving Show
 
 data IndexerCommand
@@ -144,6 +147,7 @@ cmdParser = Opt.subparser (indexers <> Opt.commandGroup "Indexers:")
     other =
          Opt.command "fold-ledgerstate" (FoldLedgerState <$> FoldLedgerState.parseCli)
       <> Opt.command "slot-chainpoint" (Opt.parserToParserInfo "slot-chainpoint" "slot-chainpoint" $ SlotNoChainPoint <$> Opt.strArgument (Opt.metavar "DB-PATH") <*> Opt.argument (C.SlotNo <$> Opt.auto) (Opt.metavar "SLOT-NO"))
+      <> Opt.command "eras" (Opt.parserToParserInfo "eras" "eras" $ pure Eras)
 
     indexers :: Opt.Mod Opt.CommandFields Command
     indexers =

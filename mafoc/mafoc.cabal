@@ -43,6 +43,7 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Mafoc.CLI
+    Mafoc.Cmds.Eras
     Mafoc.Cmds.FoldLedgerState
     Mafoc.Cmds.SlotNoChainPoint
     Mafoc.Core
